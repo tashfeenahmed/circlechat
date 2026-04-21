@@ -25,11 +25,14 @@ export interface AgentJobPayload {
     | "thread_reply"
     | "channel_post"
     | "assigned"
+    | "task_assigned"
+    | "task_comment"
     | "approval_response"
     | "test"
     | "ambient";
   conversationId?: string | null;
   messageId?: string;
   approvalId?: string;
+  taskId?: string;
   status?: string;
 }

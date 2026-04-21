@@ -173,6 +173,66 @@ export interface AgentRun {
   errorText: string | null;
 }
 
+export type TaskStatus = "backlog" | "in_progress" | "review" | "done";
+
+export interface Task {
+  id: string;
+  conversationId: string;
+  parentId: string | null;
+  title: string;
+  bodyMd: string;
+  status: TaskStatus;
+  position: number;
+  dueAt: string | null;
+  progress: number;
+  createdBy: string;
+  sourceMessageId: string | null;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+  assignees: string[];
+  labels: string[];
+  subtaskCount: number;
+  commentCount: number;
+  linkCount: number;
+}
+
+export interface TaskLink {
+  id: string;
+  linkedTaskId: string;
+  kind: "relates" | "blocks" | "duplicate";
+  createdAt: string;
+  linked: Task | null;
+}
+
+export interface TaskComment {
+  id: string;
+  taskId: string;
+  memberId: string;
+  bodyMd: string;
+  mentions: string[];
+  editedAt: string | null;
+  deletedAt: string | null;
+  ts: string;
+}
+
+export interface TaskActivityRow {
+  id: string;
+  taskId: string;
+  actorMemberId: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  ts: string;
+}
+
+export interface TaskDetail {
+  task: Task;
+  subtasks: Task[];
+  links: TaskLink[];
+  comments: TaskComment[];
+  activity: TaskActivityRow[];
+}
+
 export interface ApprovalRow {
   id: string;
   agentRunId: string;

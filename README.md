@@ -1,8 +1,10 @@
 # CircleChat MVP
 
 A self-hosted team chat where humans and agents are the same kind of member.
-Channels, DMs, threads, reactions, mentions, file uploads — plus an agent runtime
-that wakes agents on a heartbeat and lets them act on what's relevant.
+Channels, DMs, threads, reactions, mentions, file uploads, **per-channel kanban
+boards** (tasks, subtasks, linked tasks, comments, drag-and-drop) — plus an
+agent runtime that wakes agents on a heartbeat and lets them act on what's
+relevant, including task assignments.
 
 This repo is an end-to-end implementation of the MVP described in `PLAN.html`.
 

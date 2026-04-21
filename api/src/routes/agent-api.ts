@@ -17,6 +17,20 @@ import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
 import { checkReplyBody } from "../agents/reply-guard.js";
 import {
+  STATUSES,
+  listTasks,
+  getTaskDetail,
+  createTask,
+  updateTask,
+  deleteTask,
+  addAssignee,
+  removeAssignee,
+  setLabels,
+  addLink,
+  removeLink,
+  addComment,
+} from "../lib/tasks-core.js";
+import {
   extractMentionHandles,
   resolveHandlesToMemberIds,
   fireMentionTriggers,
@@ -475,5 +489,133 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       humans: u.map((x) => ({ memberId: uM.get(x.id), handle: x.handle, name: x.name })),
       agents: a.map((x) => ({ memberId: aM.get(x.id), handle: x.handle, name: x.name })),
     };
+  });
+
+  // ─── Tasks / Boards ─────────────────────────────────────────────────
+  const TASK_ERR: Record<string, number> = {
+    not_a_member: 403,
+    not_found: 404,
+    not_author: 403,
+    comment_not_found: 404,
+    conversation_not_found: 404,
+    dm_board_unsupported: 400,
+    invalid_parent: 400,
+    invalid_assignee: 400,
+    wrong_workspace: 403,
+    cannot_link_to_self: 400,
+    linked_not_found: 400,
+    not_a_member_of_linked: 403,
+  };
+  function taskSend(
+    reply: import("fastify").FastifyReply,
+    result: { error?: string; [k: string]: unknown },
+  ) {
+    if (result.error) return reply.code(TASK_ERR[result.error] ?? 400).send({ error: result.error });
+    return result;
+  }
+  // The agent's own workspace id — for cross-workspace guard on assignee adds.
+  async function agentWorkspaceId(agentId: string): Promise<string | null> {
+    const [a] = await db
+      .select({ workspaceId: agents.workspaceId })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .limit(1);
+    return a?.workspaceId ?? null;
+  }
+
+  app.get("/agent-api/tasks", async (req, reply) => {
+    const convId = (req.query as { conversationId?: string }).conversationId;
+    if (!convId) return reply.code(400).send({ error: "conversationId_required" });
+    return taskSend(reply, await listTasks(convId, req.agentCtx!.memberId));
+  });
+  app.get("/agent-api/tasks/:id", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    return taskSend(reply, await getTaskDetail(taskId, req.agentCtx!.memberId));
+  });
+  app.post("/agent-api/tasks", async (req, reply) => {
+    const body = z
+      .object({
+        conversationId: z.string().min(1),
+        title: z.string().min(1).max(200),
+        bodyMd: z.string().max(20000).optional(),
+        status: z.enum(STATUSES).optional(),
+        parentId: z.string().optional(),
+        sourceMessageId: z.string().optional(),
+        assignees: z.array(z.string()).optional(),
+        labels: z.array(z.string().max(40)).optional(),
+        dueAt: z.string().datetime().nullable().optional(),
+        position: z.number().optional(),
+      })
+      .parse(req.body);
+    const ws = await agentWorkspaceId(req.agentCtx!.agentId);
+    if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
+    return taskSend(reply, await createTask(body, req.agentCtx!.memberId, ws));
+  });
+  app.patch("/agent-api/tasks/:id", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const body = z
+      .object({
+        title: z.string().min(1).max(200).optional(),
+        bodyMd: z.string().max(20000).optional(),
+        status: z.enum(STATUSES).optional(),
+        position: z.number().optional(),
+        dueAt: z.string().datetime().nullable().optional(),
+        progress: z.number().int().min(0).max(100).optional(),
+        archived: z.boolean().optional(),
+      })
+      .parse(req.body);
+    return taskSend(reply, await updateTask(taskId, body, req.agentCtx!.memberId));
+  });
+  app.delete("/agent-api/tasks/:id", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    return taskSend(reply, await deleteTask(taskId, req.agentCtx!.memberId));
+  });
+  app.post("/agent-api/tasks/:id/assignees", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const body = z.object({ memberId: z.string().min(1) }).parse(req.body);
+    const ws = await agentWorkspaceId(req.agentCtx!.agentId);
+    if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
+    return taskSend(reply, await addAssignee(taskId, body.memberId, req.agentCtx!.memberId, ws));
+  });
+  app.delete("/agent-api/tasks/:id/assignees/:memberId", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const target = (req.params as { memberId: string }).memberId;
+    return taskSend(reply, await removeAssignee(taskId, target, req.agentCtx!.memberId));
+  });
+  app.put("/agent-api/tasks/:id/labels", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const body = z.object({ labels: z.array(z.string().max(40)) }).parse(req.body);
+    return taskSend(reply, await setLabels(taskId, body.labels, req.agentCtx!.memberId));
+  });
+  app.post("/agent-api/tasks/:id/links", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const body = z
+      .object({
+        linkedTaskId: z.string().min(1),
+        kind: z.enum(["relates", "blocks", "duplicate"]).optional(),
+      })
+      .parse(req.body);
+    return taskSend(
+      reply,
+      await addLink(taskId, body.linkedTaskId, body.kind ?? "relates", req.agentCtx!.memberId),
+    );
+  });
+  app.delete("/agent-api/tasks/:id/links/:linkId", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const linkId = (req.params as { linkId: string }).linkId;
+    return taskSend(reply, await removeLink(taskId, linkId, req.agentCtx!.memberId));
+  });
+  app.post("/agent-api/tasks/:id/comments", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const body = z
+      .object({
+        bodyMd: z.string().min(1).max(20000),
+        mentions: z.array(z.string()).optional(),
+      })
+      .parse(req.body);
+    return taskSend(
+      reply,
+      await addComment(taskId, body.bodyMd, body.mentions ?? [], req.agentCtx!.memberId),
+    );
   });
 }

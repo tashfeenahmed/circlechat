@@ -9,7 +9,14 @@ type Trigger = AgentJobPayload["trigger"];
 
 export async function enqueueAgentEvent(
   agentId: string,
-  ev: { trigger: Trigger; conversationId?: string | null; messageId?: string; approvalId?: string; status?: string },
+  ev: {
+    trigger: Trigger;
+    conversationId?: string | null;
+    messageId?: string;
+    approvalId?: string;
+    taskId?: string;
+    status?: string;
+  },
 ): Promise<string> {
   const runId = id("run");
   await db.insert(agentRuns).values({
@@ -53,6 +60,7 @@ export async function enqueueAgentEvent(
       conversationId: ev.conversationId ?? null,
       messageId: ev.messageId,
       approvalId: ev.approvalId,
+      taskId: ev.taskId,
       status: ev.status,
     } satisfies AgentJobPayload,
     { jobId: runId },

@@ -11,7 +11,14 @@ export type Event =
   | { type: "agent.run.tool_call"; conversationId?: string | null; agentId: string; runId: string; tool: string; args: unknown }
   | { type: "agent.run.finished"; conversationId?: string | null; agentId: string; runId: string; status: string }
   | { type: "approval.new"; approvalId: string; agentId: string; scope: string; action: string; conversationId?: string | null }
-  | { type: "approval.decided"; approvalId: string; status: string };
+  | { type: "approval.decided"; approvalId: string; status: string }
+  | { type: "task.new"; conversationId: string; task: unknown }
+  | { type: "task.updated"; conversationId: string; taskId: string; task: unknown }
+  | { type: "task.deleted"; conversationId: string; taskId: string }
+  | { type: "task.assigned"; conversationId: string; taskId: string; memberId: string; assignedBy: string }
+  | { type: "task.unassigned"; conversationId: string; taskId: string; memberId: string }
+  | { type: "task.comment.new"; conversationId: string; taskId: string; comment: unknown }
+  | { type: "task.comment.deleted"; conversationId: string; taskId: string; commentId: string };
 
 const CONV_CHANNEL = (conversationId: string): string => `cc:conv:${conversationId}`;
 const USER_CHANNEL = (memberId: string): string => `cc:member:${memberId}`;

@@ -1,6 +1,18 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type Me, type Conversation, type Message, type AgentRow, type AgentRun, type DirMember, type ApprovalRow } from "../api/client";
+import {
+  api,
+  type Me,
+  type Conversation,
+  type Message,
+  type AgentRow,
+  type AgentRun,
+  type DirMember,
+  type ApprovalRow,
+  type Task,
+  type TaskDetail,
+  type TaskComment,
+} from "../api/client";
 import { bus } from "../ws/client";
 import { useBus } from "../state/store";
 
@@ -301,6 +313,81 @@ export function usePresenceBus() {
       }
     });
   }, []);
+}
+
+// ─────────────────── Tasks / Boards ───────────────────
+
+export function useTasks(convId: string | undefined) {
+  const qc = useQueryClient();
+  const key = ["tasks", convId] as const;
+  const q = useQuery<{ tasks: Task[] }>({
+    queryKey: key,
+    queryFn: () => api.get(`/conversations/${convId}/tasks`),
+    enabled: !!convId,
+    staleTime: 15_000,
+  });
+  useEffect(() => {
+    if (!convId) return;
+    return bus.on((ev) => {
+      if (typeof ev.type !== "string") return;
+      if (!String(ev.type).startsWith("task.")) return;
+      if (ev.conversationId !== convId) return;
+      if (ev.type === "task.new") {
+        const t = ev.task as Task;
+        qc.setQueryData<{ tasks: Task[] }>(key, (old) => {
+          if (!old) return { tasks: [t] };
+          if (old.tasks.some((x) => x.id === t.id)) return old;
+          return { tasks: [...old.tasks, t] };
+        });
+      } else if (ev.type === "task.updated") {
+        const t = ev.task as Task;
+        qc.setQueryData<{ tasks: Task[] }>(key, (old) => {
+          if (!old) return old;
+          return { tasks: old.tasks.map((x) => (x.id === t.id ? t : x)) };
+        });
+      } else if (ev.type === "task.deleted") {
+        qc.setQueryData<{ tasks: Task[] }>(key, (old) =>
+          old ? { tasks: old.tasks.filter((x) => x.id !== ev.taskId) } : old,
+        );
+      }
+      // task.assigned / task.unassigned always arrive paired with task.updated
+      // so the hydrated row already reflects the state change.
+    });
+  }, [convId, qc, key]);
+  return q;
+}
+
+export function useTaskDetail(taskId: string | undefined) {
+  const qc = useQueryClient();
+  const key = ["task", taskId] as const;
+  const q = useQuery<TaskDetail>({
+    queryKey: key,
+    queryFn: () => api.get(`/tasks/${taskId}`),
+    enabled: !!taskId,
+    staleTime: 10_000,
+  });
+  useEffect(() => {
+    if (!taskId) return;
+    return bus.on((ev) => {
+      if (typeof ev.type !== "string" || !String(ev.type).startsWith("task.")) return;
+      const t = ev as unknown as { taskId?: string; comment?: TaskComment; commentId?: string; task?: Task };
+      if (ev.type === "task.comment.new" && t.taskId === taskId) {
+        qc.setQueryData<TaskDetail>(key, (old) =>
+          old && t.comment ? { ...old, comments: [...old.comments, t.comment] } : old,
+        );
+      } else if (ev.type === "task.comment.deleted" && t.taskId === taskId) {
+        qc.setQueryData<TaskDetail>(key, (old) =>
+          old ? { ...old, comments: old.comments.filter((c) => c.id !== t.commentId) } : old,
+        );
+      } else if (
+        (ev.type === "task.updated" || ev.type === "task.assigned" || ev.type === "task.unassigned") &&
+        t.taskId === taskId
+      ) {
+        qc.invalidateQueries({ queryKey: key });
+      }
+    });
+  }, [taskId, qc, key]);
+  return q;
 }
 
 export function useIsClient() {

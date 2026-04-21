@@ -10,6 +10,10 @@ import {
   memoryKv,
   reactions,
   users,
+  tasks,
+  taskAssignees,
+  taskLabels,
+  taskComments,
 } from "../db/schema.js";
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
 
@@ -86,6 +90,23 @@ export interface ContextPacket {
   }>;
   memory: Record<string, unknown>;
   reporting: ReportingBundle;
+  task?: {
+    id: string;
+    conversationId: string;
+    conversationName: string | null;
+    title: string;
+    bodyMd: string;
+    status: string;
+    progress: number;
+    dueAt: string | null;
+    labels: string[];
+    assignees: string[];
+    assigneeHandles: string[];
+    parentId: string | null;
+    createdBy: string;
+    subtasks: Array<{ id: string; title: string; status: string; assignees: string[] }>;
+    recentComments: Array<{ id: string; memberId: string; memberHandle: string; bodyMd: string; ts: string }>;
+  };
 }
 
 export async function buildContext(opts: {
@@ -95,6 +116,7 @@ export async function buildContext(opts: {
   untilTs: Date;
   conversationId?: string | null;
   messageId?: string;
+  taskId?: string;
 }): Promise<ContextPacket> {
   const [a] = await db.select().from(agents).where(eq(agents.id, opts.agentId)).limit(1);
   if (!a) throw new Error("agent_not_found");
@@ -358,6 +380,105 @@ export async function buildContext(opts: {
 
   const reporting = await loadReportingFor(a.workspaceId, agentMemberId);
 
+  let taskCtx: ContextPacket["task"];
+  if (opts.taskId) {
+    const [t] = await db.select().from(tasks).where(eq(tasks.id, opts.taskId)).limit(1);
+    if (t) {
+      const [conv] = await db
+        .select({ name: conversations.name })
+        .from(conversations)
+        .where(eq(conversations.id, t.conversationId))
+        .limit(1);
+      const as = await db
+        .select({ memberId: taskAssignees.memberId })
+        .from(taskAssignees)
+        .where(eq(taskAssignees.taskId, opts.taskId));
+      const assigneeIds = as.map((r) => r.memberId);
+      // Ensure assignee members are in the directory (for handle rendering).
+      const missingAssignees = assigneeIds.filter((mid) => !memberDirectory[mid]);
+      if (missingAssignees.length) {
+        const extra = await db.select().from(members).where(inArray(members.id, missingAssignees));
+        const uRefs = extra.filter((m) => m.kind === "user").map((m) => m.refId);
+        const aRefs = extra.filter((m) => m.kind === "agent").map((m) => m.refId);
+        const uX = uRefs.length ? await db.select().from(users).where(inArray(users.id, uRefs)) : [];
+        const aX = aRefs.length ? await db.select().from(agents).where(inArray(agents.id, aRefs)) : [];
+        const uXM = new Map(uX.map((u) => [u.id, u]));
+        const aXM = new Map(aX.map((ag) => [ag.id, ag]));
+        for (const m of extra) {
+          if (m.kind === "user") {
+            const u = uXM.get(m.refId);
+            if (u) memberDirectory[m.id] = { memberId: m.id, kind: "user", name: u.name, handle: u.handle };
+          } else {
+            const ag = aXM.get(m.refId);
+            if (ag)
+              memberDirectory[m.id] = {
+                memberId: m.id,
+                kind: "agent",
+                name: ag.name,
+                handle: ag.handle,
+                isMe: m.id === agentMemberId,
+              };
+          }
+        }
+      }
+      const labels = (
+        await db.select({ label: taskLabels.label }).from(taskLabels).where(eq(taskLabels.taskId, opts.taskId))
+      ).map((r) => r.label);
+      const subs = await db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.parentId, opts.taskId))
+        .orderBy(asc(tasks.position));
+      const subIds = subs.map((s) => s.id);
+      const subAssignRows = subIds.length
+        ? await db.select().from(taskAssignees).where(inArray(taskAssignees.taskId, subIds))
+        : [];
+      const subAssignMap = new Map<string, string[]>();
+      for (const r of subAssignRows) {
+        const arr = subAssignMap.get(r.taskId) ?? [];
+        arr.push(r.memberId);
+        subAssignMap.set(r.taskId, arr);
+      }
+      const recentComments = await db
+        .select()
+        .from(taskComments)
+        .where(and(eq(taskComments.taskId, opts.taskId)))
+        .orderBy(desc(taskComments.ts))
+        .limit(10);
+      taskCtx = {
+        id: t.id,
+        conversationId: t.conversationId,
+        conversationName: conv?.name ?? null,
+        title: t.title,
+        bodyMd: t.bodyMd,
+        status: t.status,
+        progress: t.progress,
+        dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+        labels,
+        assignees: assigneeIds,
+        assigneeHandles: assigneeIds.map((mid) => memberDirectory[mid]?.handle ?? "unknown"),
+        parentId: t.parentId,
+        createdBy: t.createdBy,
+        subtasks: subs.map((s) => ({
+          id: s.id,
+          title: s.title,
+          status: s.status,
+          assignees: subAssignMap.get(s.id) ?? [],
+        })),
+        recentComments: recentComments
+          .slice()
+          .reverse()
+          .map((c) => ({
+            id: c.id,
+            memberId: c.memberId,
+            memberHandle: memberDirectory[c.memberId]?.handle ?? "unknown",
+            bodyMd: c.bodyMd,
+            ts: c.ts.toISOString(),
+          })),
+      };
+    }
+  }
+
   return {
     agent: {
       id: a.id,
@@ -383,5 +504,6 @@ export async function buildContext(opts: {
     })),
     memory,
     reporting,
+    task: taskCtx,
   };
 }

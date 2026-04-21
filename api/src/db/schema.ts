@@ -269,3 +269,102 @@ export const presence = pgTable("presence", {
   status: varchar("status", { length: 20 }).notNull().default("offline"), // online | idle | working | offline
   lastSeen: timestamp("last_seen", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// ───────────────── tasks (channel-scoped kanban boards) ─────────────────
+export const tasks = pgTable(
+  "tasks",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    conversationId: varchar("conversation_id", { length: 32 }).notNull(),
+    parentId: varchar("parent_id", { length: 32 }),
+    title: varchar("title", { length: 200 }).notNull(),
+    bodyMd: text("body_md").notNull().default(""),
+    status: varchar("status", { length: 20 }).notNull().default("backlog"), // backlog | in_progress | review | done
+    position: real("position").notNull().default(0),
+    dueAt: timestamp("due_at", { withTimezone: true }),
+    progress: integer("progress").notNull().default(0),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    sourceMessageId: varchar("source_message_id", { length: 32 }),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    convIdx: index("tasks_conv_idx").on(t.conversationId, t.archived),
+    parentIdx: index("tasks_parent_idx").on(t.parentId),
+    statusPosIdx: index("tasks_status_pos_idx").on(t.conversationId, t.status, t.position),
+  }),
+);
+
+export const taskAssignees = pgTable(
+  "task_assignees",
+  {
+    taskId: varchar("task_id", { length: 32 }).notNull(),
+    memberId: varchar("member_id", { length: 32 }).notNull(),
+    assignedBy: varchar("assigned_by", { length: 32 }).notNull(),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.memberId] }),
+    memberIdx: index("task_assignees_member_idx").on(t.memberId),
+  }),
+);
+
+export const taskLabels = pgTable(
+  "task_labels",
+  {
+    taskId: varchar("task_id", { length: 32 }).notNull(),
+    label: varchar("label", { length: 40 }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.label] }),
+  }),
+);
+
+export const taskLinks = pgTable(
+  "task_links",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    taskId: varchar("task_id", { length: 32 }).notNull(),
+    linkedTaskId: varchar("linked_task_id", { length: 32 }).notNull(),
+    kind: varchar("kind", { length: 20 }).notNull().default("relates"), // relates | blocks | duplicate
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("task_links_unique").on(t.taskId, t.linkedTaskId, t.kind),
+    linkedIdx: index("task_links_linked_idx").on(t.linkedTaskId),
+  }),
+);
+
+export const taskComments = pgTable(
+  "task_comments",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    taskId: varchar("task_id", { length: 32 }).notNull(),
+    memberId: varchar("member_id", { length: 32 }).notNull(),
+    bodyMd: text("body_md").notNull(),
+    mentions: jsonb("mentions").$type<string[]>().notNull().default([]),
+    editedAt: timestamp("edited_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    taskTsIdx: index("task_comments_task_ts_idx").on(t.taskId, t.ts),
+  }),
+);
+
+export const taskActivity = pgTable(
+  "task_activity",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    taskId: varchar("task_id", { length: 32 }).notNull(),
+    actorMemberId: varchar("actor_member_id", { length: 32 }).notNull(),
+    kind: varchar("kind", { length: 30 }).notNull(), // created | status_changed | assigned | unassigned | moved | comment | renamed | due_changed | progress_changed | labels_changed | link_added | link_removed | archived
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    taskTsIdx: index("task_activity_task_ts_idx").on(t.taskId, t.ts),
+  }),
+);

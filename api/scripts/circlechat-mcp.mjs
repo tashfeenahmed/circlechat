@@ -36,6 +36,19 @@ async function apiPost(path, body) {
   if (!r.ok) throw new Error(`POST ${path} → ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return r.json();
 }
+async function apiReq(method, path, body) {
+  const init = {
+    method,
+    headers: { authorization: `Bearer ${TOKEN}` },
+  };
+  if (body !== undefined) {
+    init.headers["content-type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+  const r = await fetch(`${BASE}${path}`, init);
+  if (!r.ok) throw new Error(`${method} ${path} → ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return r.json();
+}
 async function apiUploadFile(filePath) {
   // Use native FormData + a Blob stream to stay dep-free.
   const buf = await readFile(filePath);
@@ -194,6 +207,157 @@ const TOOLS = [
       additionalProperties: false,
     },
     run: ({ path }) => apiUploadFile(path),
+  },
+
+  // ─── Tasks / Boards ─────────────────────────────────────────────────
+  {
+    name: "list_tasks",
+    description:
+      "List tasks on a channel's board. Every channel has a board — pass that channel's conversationId.",
+    inputSchema: {
+      type: "object",
+      properties: { conversationId: { type: "string" } },
+      required: ["conversationId"],
+      additionalProperties: false,
+    },
+    run: ({ conversationId }) =>
+      apiGet(`/agent-api/tasks?conversationId=${encodeURIComponent(conversationId)}`),
+  },
+  {
+    name: "get_task",
+    description: "Fetch one task with subtasks, links, comments, and recent activity.",
+    inputSchema: {
+      type: "object",
+      properties: { taskId: { type: "string" } },
+      required: ["taskId"],
+      additionalProperties: false,
+    },
+    run: ({ taskId }) => apiGet(`/agent-api/tasks/${encodeURIComponent(taskId)}`),
+  },
+  {
+    name: "create_task",
+    description:
+      "Create a new task on a channel's board. Pass parentId to make it a subtask. Assignees are memberIds (use list_members to resolve). Status defaults to backlog.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversationId: { type: "string" },
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        bodyMd: { type: "string" },
+        status: { type: "string", enum: ["backlog", "in_progress", "review", "done"] },
+        parentId: { type: "string" },
+        assignees: { type: "array", items: { type: "string" } },
+        labels: { type: "array", items: { type: "string" } },
+        dueAt: { type: "string", description: "ISO 8601 timestamp" },
+      },
+      required: ["conversationId", "title"],
+      additionalProperties: false,
+    },
+    run: (a) => apiPost("/agent-api/tasks", a),
+  },
+  {
+    name: "update_task",
+    description:
+      "Update a task's status, title, body, progress (0-100), or due date. Use this to move a card from backlog → in_progress → review → done.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        title: { type: "string" },
+        bodyMd: { type: "string" },
+        status: { type: "string", enum: ["backlog", "in_progress", "review", "done"] },
+        progress: { type: "number", minimum: 0, maximum: 100 },
+        dueAt: { type: ["string", "null"] },
+        archived: { type: "boolean" },
+      },
+      required: ["taskId"],
+      additionalProperties: false,
+    },
+    run: ({ taskId, ...patch }) =>
+      apiReq("PATCH", `/agent-api/tasks/${encodeURIComponent(taskId)}`, patch),
+  },
+  {
+    name: "assign_task",
+    description:
+      "Add an assignee to a task. The member is woken with a task_assigned trigger if they're an agent.",
+    inputSchema: {
+      type: "object",
+      properties: { taskId: { type: "string" }, memberId: { type: "string" } },
+      required: ["taskId", "memberId"],
+      additionalProperties: false,
+    },
+    run: ({ taskId, memberId }) =>
+      apiPost(`/agent-api/tasks/${encodeURIComponent(taskId)}/assignees`, { memberId }),
+  },
+  {
+    name: "unassign_task",
+    description: "Remove an assignee from a task (e.g. if it's not in your lane).",
+    inputSchema: {
+      type: "object",
+      properties: { taskId: { type: "string" }, memberId: { type: "string" } },
+      required: ["taskId", "memberId"],
+      additionalProperties: false,
+    },
+    run: ({ taskId, memberId }) =>
+      apiReq(
+        "DELETE",
+        `/agent-api/tasks/${encodeURIComponent(taskId)}/assignees/${encodeURIComponent(memberId)}`,
+      ),
+  },
+  {
+    name: "set_task_labels",
+    description: "Replace the full set of labels on a task.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        labels: { type: "array", items: { type: "string" } },
+      },
+      required: ["taskId", "labels"],
+      additionalProperties: false,
+    },
+    run: ({ taskId, labels }) =>
+      apiReq("PUT", `/agent-api/tasks/${encodeURIComponent(taskId)}/labels`, { labels }),
+  },
+  {
+    name: "link_tasks",
+    description:
+      "Link two tasks together. kind: relates | blocks | duplicate. Use when work on one task depends on, duplicates, or relates to another.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        linkedTaskId: { type: "string" },
+        kind: { type: "string", enum: ["relates", "blocks", "duplicate"] },
+      },
+      required: ["taskId", "linkedTaskId"],
+      additionalProperties: false,
+    },
+    run: ({ taskId, linkedTaskId, kind }) =>
+      apiPost(`/agent-api/tasks/${encodeURIComponent(taskId)}/links`, {
+        linkedTaskId,
+        kind: kind ?? "relates",
+      }),
+  },
+  {
+    name: "comment_on_task",
+    description:
+      "Add a comment to a task. Prefer this over posting in the channel when the discussion is about the task. Mentions (array of memberIds) will wake those members.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        bodyMd: { type: "string", minLength: 1 },
+        mentions: { type: "array", items: { type: "string" } },
+      },
+      required: ["taskId", "bodyMd"],
+      additionalProperties: false,
+    },
+    run: ({ taskId, bodyMd, mentions }) =>
+      apiPost(`/agent-api/tasks/${encodeURIComponent(taskId)}/comments`, {
+        bodyMd,
+        mentions: mentions ?? [],
+      }),
   },
 ];
 

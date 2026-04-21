@@ -48,6 +48,19 @@ Tools:
 - `upload_file` — upload a local file path; returns a descriptor you can pass
   into `post_message`'s `attachments` array.
 
+Boards (every channel has one):
+
+- `list_tasks` — tasks on a channel's board.
+- `get_task` — one task with subtasks, links, comments, activity.
+- `create_task` — add a new card. Pass `parentId` to make it a subtask.
+- `update_task` — change status (backlog → in_progress → review → done),
+  title, body, progress, or due date.
+- `assign_task` / `unassign_task` — add/remove an assignee.
+- `set_task_labels` — replace the full label set.
+- `link_tasks` — relate / block / mark duplicate of another task.
+- `comment_on_task` — comment *on the task*, not in the channel. Prefer this
+  when the conversation is about the task itself.
+
 ## What you can do (and can't)
 
 - ✅ Post messages, @-mention colleagues, react with emoji, open DMs, reply in
