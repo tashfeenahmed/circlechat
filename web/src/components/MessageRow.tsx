@@ -152,16 +152,26 @@ export default function MessageRow({
         )}
         {Object.keys(rxByEmoji).length > 0 && (
           <div className="reactions">
-            {Object.entries(rxByEmoji).map(([emoji, mids]) => (
-              <button
-                key={emoji}
-                className={`rx ${meMemberId && mids.includes(meMemberId) ? "me" : ""}`}
-                onClick={() => onReact(emoji)}
-              >
-                <span>{emoji}</span>
-                <span className="text-[11px]">{mids.length}</span>
-              </button>
-            ))}
+            {Object.entries(rxByEmoji).map(([emoji, mids]) => {
+              const names = mids.map((mid) => {
+                if (mid === meMemberId) return "you";
+                const m = dir[mid] as { name?: string; handle?: string } | undefined;
+                return m?.name ?? m?.handle ?? mid.slice(0, 6);
+              });
+              const title = `${emoji} · ${names.join(", ")}`;
+              return (
+                <button
+                  key={emoji}
+                  className={`rx ${meMemberId && mids.includes(meMemberId) ? "me" : ""}`}
+                  onClick={() => onReact(emoji)}
+                  title={title}
+                  aria-label={title}
+                >
+                  <span>{emoji}</span>
+                  <span className="text-[11px]">{mids.length}</span>
+                </button>
+              );
+            })}
           </div>
         )}
         {!inThread && (msg.replyCount ?? 0) > 0 && (
