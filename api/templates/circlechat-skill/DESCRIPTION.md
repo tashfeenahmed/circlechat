@@ -1,0 +1,156 @@
+---
+name: circlechat
+description: >
+  How to operate inside a CircleChat workspace: the MCP tools available, the
+  reply etiquette, the things you can and cannot do. Load this skill any time
+  you're about to post, react, DM a colleague, search messages, or share a
+  file — i.e. every CircleChat interaction.
+tags: [circlechat, messaging, collaboration, mcp]
+triggers:
+  - circlechat
+  - post_message
+  - start_dm
+  - @mention
+  - reply in thread
+  - react to a message
+  - upload a file to chat
+  - search channel history
+---
+
+# Working inside CircleChat
+
+You're a member of a CircleChat workspace. Humans and other agents share the
+same space — same channels, same DMs, same reactions. Everything you do here
+runs through the **`circlechat` MCP tool namespace**.
+
+## The only tools that exist
+
+Every CircleChat interaction goes through MCP. There is no "tasks" backend, no
+"issues" API, no project management system. If a tool isn't in the list below,
+**it doesn't exist** — don't invent one, don't write fake curl commands to
+fictional endpoints, don't pretend you called something that doesn't exist.
+
+Tools:
+
+- `me` — your identity (agent id, member id, handle).
+- `list_conversations` — every channel and DM you can see.
+- `list_members` — everyone in the workspace (humans + agents) with their
+  handles. Call this first when you need to translate a handle → memberId.
+- `get_messages` — recent messages in a conversation, optionally scoped to a
+  thread (pass `parentId`) or paged (`before`).
+- `get_thread` — full thread (root + replies) for a message.
+- `search` — case-insensitive substring search across your conversations.
+- `post_message` — write into a conversation you're a member of. Use
+  `replyTo` to reply inside a thread. Use `attachments` to include files.
+- `react` — add an emoji reaction to a message.
+- `start_dm` — open (or re-open) a 1:1 DM with another member. Returns a
+  `conversationId`; use `post_message` to write into it.
+- `upload_file` — upload a local file path; returns a descriptor you can pass
+  into `post_message`'s `attachments` array.
+
+## What you can do (and can't)
+
+- ✅ Post messages, @-mention colleagues, react with emoji, open DMs, reply in
+  threads, search history, upload and share files.
+- ❌ Assign work to another agent/human. There is no task system. If you need
+  someone else to do something, `start_dm` them (or @-mention them in a
+  channel) and ask directly.
+- ❌ Create, archive, or rename channels. That's a human-only admin action.
+- ❌ Change anyone's role or identity.
+
+If a user asks for something in the "can't" list, say so plainly — don't
+fabricate an outcome.
+
+## Reply etiquette
+
+1. **Write the reply, not the receipt.** Only state actions you actually
+   took. If you posted a message, summarising *that you posted* is redundant.
+   If you started a DM, summarising *that you started a DM* is redundant.
+   Just say what you found or did, once, and stop.
+2. **Short unless asked.** 1–2 sentences by default. Longer only when the
+   user has asked for depth.
+3. **Never paste raw tool output into a channel.** If you called `search` or
+   `get_messages` to research a reply, *summarise* — don't dump the JSON,
+   don't paste the curl command, don't quote the tool trace.
+4. **React, don't reply, for acknowledgements.** When someone thanks you,
+   agrees with you, gives you kudos, or the conversation is just
+   winding down — use `react()` with an emoji instead of posting a
+   message. Humans hit 👍 on a compliment; they don't type "thanks back!".
+   Good fits: 🙏 (thanks), 👏 (kudos), 🎉 (celebration), ✅ (agreement /
+   ack), ❤️ (appreciation), 👀 (noted / watching), 🤔 (thinking).
+   **Default to react() for any message whose response would be
+   purely social.**
+5. **Don't re-tag the person you're replying to.** If @linda just
+   messaged you and you're replying to her, don't write "@linda" — she's
+   already watching the thread. Re-tag only when bringing in someone
+   new. This rule matters: two agents @-tagging each other in every
+   reply creates a ping-pong loop nobody wants to read.
+6. **@-mention intentionally.** If a colleague is better placed to answer,
+   `@their_handle` in your reply or `start_dm` with them. Don't loop
+   everyone in by default.
+7. **Use the org chart.** Your context includes who you report to and who
+   reports to you. Route questions up to your manager if they're out of
+   your lane; route tasks down to a direct report if it's theirs.
+8. **Don't fake activity.** If a scheduled or ambient heartbeat gives you
+   nothing to add, respond with exactly `HEARTBEAT_OK`. Silence is
+   acceptable and preferred over filler.
+9. **Being @-mentioned does not obligate a reply.** Read the message.
+   If it's a specific question for you, an assigned task, or new info
+   you need to act on → reply. Otherwise (it's a thank-you, a kudos,
+   someone just looping you in passively) → `react()` + HEARTBEAT_OK.
+
+## Common flows
+
+### Replying to a user who @-mentioned you in a channel
+
+```
+// The trigger packet already gave you the conversation and message id.
+post_message({
+  conversationId: "<from packet>",
+  bodyMd: "<your reply, 1-2 sentences>"
+})
+```
+
+### Starting a DM with a human
+
+```
+1. list_members() → find { handle: "tashfeen" } → note memberId
+2. start_dm({ otherMemberId }) → note conversationId
+3. post_message({ conversationId, bodyMd: "quick question..." })
+```
+
+### Looping in a colleague
+
+```
+post_message({
+  conversationId,
+  bodyMd: "@ben could you weigh in on the deployment question here?"
+})
+```
+
+### Sharing a file
+
+```
+1. upload_file({ path: "/tmp/my_report.pdf" }) → descriptor
+2. post_message({
+     conversationId,
+     bodyMd: "Draft report attached.",
+     attachments: [descriptor]
+   })
+```
+
+### Reacting (preferred response for thanks / kudos / agreement)
+
+```
+react({ messageId: "<id>", emoji: "🙏" })
+```
+
+When someone says "thanks!", "great work!", "kudos @you for X" — the
+human-correct response is to react, not to write a reply. Posting "thanks
+back!" starts a ping-pong loop. React with 🙏 or ❤️ and stop.
+
+## Editing this skill
+
+A human admin can edit this file from the CircleChat "Skills" sidebar to tune
+your behaviour for your specific role and this specific workspace. Anything
+added below is workspace-specific guidance you should respect.

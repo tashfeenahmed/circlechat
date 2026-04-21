@@ -1,0 +1,30 @@
+{
+    # Uncomment for production with a real domain
+    # email admin@example.com
+}
+
+:80, :443 {
+    encode br zstd gzip
+
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy api:3000
+    }
+
+    handle /events {
+        reverse_proxy api:3000
+    }
+
+    handle /agent-socket {
+        reverse_proxy api:3000
+    }
+
+    handle /uploads/* {
+        uri strip_prefix /uploads
+        reverse_proxy api:3000
+    }
+
+    handle {
+        reverse_proxy web:80
+    }
+}

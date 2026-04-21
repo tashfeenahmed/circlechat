@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / data
+uploads/
+storage/
+data/
+*.sqlite
+*.sqlite3
+*.db
+
+# Agent runtime state (Hermes homes, bridge config)
+.hermes*/
+bridge-config.json
+bridge-config.*.json
+
+# Editor / OS
+.DS_Store
+.vite/
+.idea/
+.vscode/
+*.swp
+*.swo
+coverage/
+
+# Misc
+*.pid
+*.seed
+*.pid.lock
