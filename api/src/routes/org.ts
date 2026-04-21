@@ -24,6 +24,8 @@ interface OrgNode {
   avatarColor: string;
   status: string | null;
   reportsTo: string | null;
+  // Only set for agents. "hermes" | "openclaw" | string — matches agents.kind.
+  agentKind: string | null;
 }
 
 export default async function orgRoutes(app: FastifyInstance): Promise<void> {
@@ -132,6 +134,7 @@ export async function loadOrgNodes(workspaceId: string): Promise<OrgNode[]> {
           avatarColor: agents.avatarColor,
           title: agents.title,
           status: agents.status,
+          kind: agents.kind,
         })
         .from(agents)
         .where(inArray(agents.id, agentRefs))
@@ -153,6 +156,7 @@ export async function loadOrgNodes(workspaceId: string): Promise<OrgNode[]> {
         avatarColor: u.avatarColor,
         status: null,
         reportsTo: m.reportsTo ?? null,
+        agentKind: null,
       });
     } else {
       const a = aMap.get(m.refId);
@@ -166,6 +170,7 @@ export async function loadOrgNodes(workspaceId: string): Promise<OrgNode[]> {
         avatarColor: a.avatarColor,
         status: a.status,
         reportsTo: m.reportsTo ?? null,
+        agentKind: a.kind,
       });
     }
   }

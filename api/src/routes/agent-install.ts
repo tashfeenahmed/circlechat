@@ -57,6 +57,9 @@ const InstallOpenClawBody = z.object({
   model: z.string().max(120).optional(),
   heartbeatIntervalSec: z.number().int().min(15).max(3600).optional(),
   channelIds: z.array(z.string()).optional(),
+  // Optional member id the new agent should report to in the org chart —
+  // wired by the "+ Add report" PLUS block on /org.
+  reportsTo: z.string().max(32).nullable().optional(),
 });
 
 const InstallHermesBody = z.object({
@@ -79,6 +82,7 @@ const InstallHermesBody = z.object({
   model: z.string().max(120).optional(),
   heartbeatIntervalSec: z.number().int().min(15).max(3600).optional(),
   channelIds: z.array(z.string()).optional(),
+  reportsTo: z.string().max(32).nullable().optional(),
 });
 
 export default async function agentInstallRoutes(app: FastifyInstance): Promise<void> {
@@ -247,6 +251,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       workspaceId: workspaceId!,
       kind: "agent",
       refId: agentId,
+      reportsTo: body.reportsTo ?? null,
     });
 
     if (body.channelIds?.length) {
@@ -432,6 +437,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       workspaceId: workspaceId!,
       kind: "agent",
       refId: agentId,
+      reportsTo: body.reportsTo ?? null,
     });
 
     if (body.channelIds?.length) {

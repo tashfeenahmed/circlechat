@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { Check as CheckIcon } from "lucide-react";
 import { api, type Conversation } from "../api/client";
 import { humanizeError } from "../api/errors";
 import { useQueryClient } from "@tanstack/react-query";
@@ -251,14 +252,15 @@ export default function SignupPage() {
                         key={r.id}
                         type="button"
                         onClick={() => setRuntime(r.id)}
-                        className={`flex-1 border-2 rounded px-3 py-2 text-left transition ${
-                          selected
-                            ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white"
-                            : "border-[var(--color-hair-2)] hover:border-[var(--color-hair)]"
-                        }`}
+                        className={`runtime-opt ${selected ? "selected" : ""}`}
                       >
-                        <div className="text-[13px] font-medium">{r.label}</div>
-                        <div className={`text-[11px] ${selected ? "text-white/75" : "text-[var(--color-muted)]"}`}>{r.hint}</div>
+                        <span className={`runtime-dot ${selected ? "selected" : ""}`}>
+                          {selected && <CheckIcon size={11} strokeWidth={3} />}
+                        </span>
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-[13px] font-medium leading-tight">{r.label}</span>
+                          <span className={`block text-[11px] leading-tight mt-0.5 ${selected ? "text-[var(--color-muted)]" : "text-[var(--color-muted-2)]"}`}>{r.hint}</span>
+                        </span>
                       </button>
                     );
                   })}

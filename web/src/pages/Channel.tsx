@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Trash2, Pencil, Archive, X, UserMinus } from "lucide-react";
+import { Trash2, Pencil, Archive, X, UserMinus, UserPlus, Bot } from "lucide-react";
 import MessageList from "../components/MessageList";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
@@ -294,6 +294,8 @@ function ChannelMembersModal({
   const [working, setWorking] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  const memberSet = useMemo(() => new Set(memberIds), [memberIds]);
+
   const all = useMemo(() => {
     const idx = new Map<string, { name: string; handle: string; avatarColor: string; kind: string }>();
     for (const h of dir.data?.humans ?? [])
@@ -304,6 +306,14 @@ function ChannelMembersModal({
       .map((mid) => ({ memberId: mid, ...(idx.get(mid) ?? { name: "unknown", handle: "unknown", avatarColor: "slate", kind: "user" }) }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [dir.data, memberIds]);
+
+  // Agents in the workspace that are NOT already in this channel — rendered
+  // as a "one-click add" list so we don't make the user fish through Members.
+  const availableAgents = useMemo(() => {
+    return (dir.data?.agents ?? [])
+      .filter((a) => !memberSet.has(a.memberId))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [dir.data, memberSet]);
 
   async function remove(targetMemberId: string) {
     if (!confirm(`Remove this member from the channel?`)) return;
@@ -320,13 +330,31 @@ function ChannelMembersModal({
     }
   }
 
+  async function add(targetMemberId: string) {
+    setErr(null);
+    setWorking(targetMemberId);
+    try {
+      await api.post(`/conversations/${conversationId}/members`, {
+        memberIds: [targetMemberId],
+      });
+      await qc.invalidateQueries({ queryKey: ["conversation", conversationId] });
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
+      await qc.invalidateQueries({ queryKey: ["members"] });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setWorking(null);
+    }
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/30 grid place-items-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 overflow-y-auto py-6" onClick={onClose}>
       <div
-        className="bg-white rounded-md border border-[var(--color-hair-2)] shadow-lg w-[440px] max-w-[92vw] max-h-[70vh] flex flex-col"
+        className="bg-white rounded-md border border-[var(--color-hair-2)] shadow-lg w-[460px] max-w-[92vw] flex flex-col"
+        style={{ maxHeight: "calc(100vh - 48px)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)]">
+        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)] shrink-0">
           <div>
             <h2 className="text-[15px] font-semibold">Channel members</h2>
             <p className="text-[12px] text-[var(--color-muted)] mt-0.5">{all.length} in this channel</p>
@@ -334,27 +362,62 @@ function ChannelMembersModal({
           <button onClick={onClose} className="tb-btn" title="Close"><X size={14} strokeWidth={2} /></button>
         </div>
         {err && <div className="px-5 py-2 text-[12px] text-[var(--color-err)]">{err}</div>}
-        <ul className="flex-1 overflow-auto divide-y divide-[var(--color-hair)]">
-          {all.map((m) => (
-            <li key={m.memberId} className="px-5 py-2.5 flex items-center gap-3">
-              <Avatar name={m.name} color={m.avatarColor} agent={m.kind === "agent"} size="sm" />
-              <div className="min-w-0 flex-1">
-                <div className="text-[13.5px] font-medium truncate">{m.name}</div>
-                <div className="text-[11.5px] font-mono text-[var(--color-muted)] truncate">@{m.handle}</div>
+        <div className="flex-1 overflow-auto">
+          <ul className="divide-y divide-[var(--color-hair)]">
+            {all.map((m) => (
+              <li key={m.memberId} className="px-5 py-2.5 flex items-center gap-3">
+                <Avatar name={m.name} color={m.avatarColor} agent={m.kind === "agent"} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13.5px] font-medium truncate">{m.name}</div>
+                  <div className="text-[11.5px] font-mono text-[var(--color-muted)] truncate">@{m.handle}</div>
+                </div>
+                {canRemove && m.memberId !== myMemberId && (
+                  <button
+                    onClick={() => remove(m.memberId)}
+                    disabled={working === m.memberId}
+                    className="btn sm ghost inline-flex items-center gap-1 text-[var(--color-err)]"
+                    title="Remove from channel"
+                  >
+                    <UserMinus size={13} strokeWidth={2} /> Remove
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {availableAgents.length > 0 && (
+            <div className="border-t border-[var(--color-hair)]">
+              <div className="px-5 pt-4 pb-2 flex items-center gap-2">
+                <Bot size={13} strokeWidth={2} className="text-[var(--color-muted)]" />
+                <span className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">
+                  Agents you can add
+                </span>
               </div>
-              {canRemove && m.memberId !== myMemberId && (
-                <button
-                  onClick={() => remove(m.memberId)}
-                  disabled={working === m.memberId}
-                  className="btn sm ghost inline-flex items-center gap-1 text-[var(--color-err)]"
-                  title="Remove from channel"
-                >
-                  <UserMinus size={13} strokeWidth={2} /> Remove
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+              <ul className="divide-y divide-[var(--color-hair)]">
+                {availableAgents.map((a) => (
+                  <li key={a.memberId} className="px-5 py-2.5 flex items-center gap-3">
+                    <Avatar name={a.name} color={a.avatarColor} agent size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13.5px] font-medium truncate">{a.name}</div>
+                      <div className="text-[11.5px] font-mono text-[var(--color-muted)] truncate">
+                        @{a.handle}
+                        {a.kind === "agent" && a.title ? ` · ${a.title}` : ""}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => add(a.memberId)}
+                      disabled={working === a.memberId}
+                      className="btn sm primary inline-flex items-center gap-1"
+                      title="Add to channel"
+                    >
+                      <UserPlus size={13} strokeWidth={2} /> {working === a.memberId ? "Adding…" : "Add"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

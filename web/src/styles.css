@@ -1588,3 +1588,64 @@ input, textarea { font: inherit; color: inherit; }
 .cc-select:focus { border-color: var(--color-ink); }
 .cc-select:disabled { opacity: 0.6; cursor: not-allowed; }
 .cc-select::-ms-expand { display: none; }
+
+/* ─────────── runtime picker (Hermes / OpenClaw radio-style) ─────────── */
+.runtime-opt {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-hair-2);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms, box-shadow 120ms;
+}
+.runtime-opt:hover { border-color: var(--color-hair); }
+.runtime-opt.selected {
+  border-color: var(--color-ink);
+  background: var(--color-hi);
+  box-shadow: inset 0 0 0 1px var(--color-ink);
+}
+.runtime-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-hair-2);
+  background: var(--color-bg);
+  color: transparent;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.runtime-dot.selected {
+  border-color: var(--color-ink);
+  background: var(--color-ink);
+  color: #fff;
+}
+
+/* "+ Add report" placeholder card inside an org row */
+.org-card.org-card-add {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 110px;
+  min-height: 88px;
+  border: 1px dashed var(--color-hair-2);
+  background: transparent;
+  color: var(--color-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 120ms, color 120ms, background 120ms;
+}
+.org-card.org-card-add:hover {
+  border-color: var(--color-ink);
+  color: var(--color-ink);
+  background: var(--color-hi);
+}

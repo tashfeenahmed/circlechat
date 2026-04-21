@@ -270,20 +270,23 @@ function Overlay({
   width?: number;
 }) {
   return (
-    <div className="fixed inset-0 bg-black/30 grid place-items-center z-50" onClick={onClose}>
+    <div
+      className="fixed inset-0 bg-black/30 grid place-items-center z-50 overflow-y-auto py-6"
+      onClick={onClose}
+    >
       <div
-        className="bg-white rounded-md border border-[var(--color-hair-2)] shadow-lg"
-        style={{ width, maxWidth: "92vw" }}
+        className="bg-white rounded-md border border-[var(--color-hair-2)] shadow-lg flex flex-col"
+        style={{ width, maxWidth: "92vw", maxHeight: "calc(100vh - 48px)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)]">
+        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)] shrink-0">
           <div>
             <h2 className="text-[15px] font-semibold">{title}</h2>
             {subtitle && <p className="text-[12.5px] text-[var(--color-muted)] mt-0.5">{subtitle}</p>}
           </div>
           <button onClick={onClose} className="tb-btn" title="Close"><X size={14} strokeWidth={2} /></button>
         </div>
-        <div className="px-5 py-4">{children}</div>
+        <div className="px-5 py-4 overflow-y-auto">{children}</div>
       </div>
     </div>
   );
@@ -623,14 +626,15 @@ function InstallAgent({
                   key={r.id}
                   type="button"
                   onClick={() => setRuntime(r.id)}
-                  className={`flex-1 border-2 rounded px-3 py-2 text-left transition ${
-                    selected
-                      ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white"
-                      : "border-[var(--color-hair-2)] hover:border-[var(--color-hair)]"
-                  }`}
+                  className={`runtime-opt ${selected ? "selected" : ""}`}
                 >
-                  <div className="text-[13px] font-medium">{r.label}</div>
-                  <div className={`text-[11px] ${selected ? "text-white/75" : "text-[var(--color-muted)]"}`}>{r.hint}</div>
+                  <span className={`runtime-dot ${selected ? "selected" : ""}`}>
+                    {selected && <Check size={11} strokeWidth={3} />}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[13px] font-medium leading-tight">{r.label}</span>
+                    <span className={`block text-[11px] leading-tight mt-0.5 ${selected ? "text-[var(--color-muted)]" : "text-[var(--color-muted-2)]"}`}>{r.hint}</span>
+                  </span>
                 </button>
               );
             })}

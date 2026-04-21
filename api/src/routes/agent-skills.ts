@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { db } from "../db/index.js";
 import { agents, workspaceMembers } from "../db/schema.js";
@@ -12,6 +13,19 @@ import {
   addToManifest,
   removeFromManifest,
 } from "../agents/hermes-equip.js";
+
+const HERMES_HOMES_DIR = process.env.HERMES_HOMES_DIR ?? homedir();
+
+// Both runtimes keep their CircleChat-managed skills under `<home>/skills/`
+// with the same `.circlechat-managed.json` manifest. For Hermes, the path is
+// authoritatively resolved from bridge-config.json via resolveHermesHome;
+// for OpenClaw we use the install convention `.openclaw-<handle>`.
+async function resolveAgentSkillsRoot(agent: { id: string; handle: string; kind: string }): Promise<string> {
+  if (agent.kind === "openclaw") {
+    return join(HERMES_HOMES_DIR, `.openclaw-${agent.handle}`, "skills");
+  }
+  return await resolveAgentSkillsRoot(agent);
+}
 
 const SkillBody = z.object({
   markdown: z.string().min(1).max(200_000),
@@ -34,7 +48,7 @@ export default async function agentSkillsRoutes(app: FastifyInstance): Promise<v
   app.get("/agents/:id/skills", async (req, reply) => {
     const agent = await resolveAgent(req, reply);
     if (!agent) return;
-    const root = join(await resolveHermesHome(agent.id, agent.handle), "skills");
+    const root = await resolveAgentSkillsRoot(agent);
 
     let managed = await readManifest(root);
     if (managed.length === 0) {
@@ -60,7 +74,7 @@ export default async function agentSkillsRoutes(app: FastifyInstance): Promise<v
     if (!SkillNameRe.test(name)) return reply.code(400).send({ error: "bad_name" });
     const agent = await resolveAgent(req, reply);
     if (!agent) return;
-    const path = join(await resolveHermesHome(agent.id, agent.handle), "skills", name, "DESCRIPTION.md");
+    const path = join(await resolveAgentSkillsRoot(agent), name, "DESCRIPTION.md");
     const md = await safeReadFile(path);
     if (md === null) return reply.code(404).send({ error: "not_found" });
     return { name, markdown: md };
@@ -75,7 +89,7 @@ export default async function agentSkillsRoutes(app: FastifyInstance): Promise<v
     if (!agent) return;
     const body = SkillBody.parse(req.body);
 
-    const root = join(await resolveHermesHome(agent.id, agent.handle), "skills");
+    const root = await resolveAgentSkillsRoot(agent);
     const dir = join(root, name);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(join(dir, "DESCRIPTION.md"), body.markdown);
@@ -92,7 +106,7 @@ export default async function agentSkillsRoutes(app: FastifyInstance): Promise<v
     if (!(await requireAdmin(req, reply))) return;
     const agent = await resolveAgent(req, reply);
     if (!agent) return;
-    const root = join(await resolveHermesHome(agent.id, agent.handle), "skills");
+    const root = await resolveAgentSkillsRoot(agent);
     await fs.rm(join(root, name), { recursive: true, force: true });
     await removeFromManifest(root, name);
     return { ok: true };
@@ -146,8 +160,8 @@ async function resolveAgent(
     reply.code(404).send({ error: "agent_not_found" });
     return null;
   }
-  if (a.kind !== "hermes") {
-    reply.code(400).send({ error: "only_hermes_skills_supported" });
+  if (a.kind !== "hermes" && a.kind !== "openclaw") {
+    reply.code(400).send({ error: "unsupported_agent_kind" });
     return null;
   }
   return a;
