@@ -60,8 +60,10 @@ function Shell() {
     location.pathname.startsWith("/invite/");
 
   // Invite links stay accessible to logged-in users (second-workspace flow).
-  const redirectAwayFromAuth =
-    location.pathname === "/signup" || location.pathname === "/login";
+  // `/signup` stays accessible too: the signup flow's step-2 agent onboarding
+  // fires the auth POST mid-flow, at which point `me.data` is populated.
+  // Kicking the user off /signup at that moment skips the agent step entirely.
+  const redirectAwayFromAuth = location.pathname === "/login";
 
   if (!me.data && !isStandalone) return <Navigate to="/login" replace />;
   if (me.data && redirectAwayFromAuth) {

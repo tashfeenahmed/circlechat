@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve as pathResolve } from "node:path";
+import { join, resolve as pathResolve, basename } from "node:path";
+import {
+  HERMES_RUNTIME,
+  HERMES_IMAGE,
+  CONTAINER_HERMES_HOME,
+  buildHermesCommand,
+  mcpScriptPathForRegistration,
+} from "./hermes-runtime.js";
 
 const HERMES_HOMES_DIR = process.env.HERMES_HOMES_DIR ?? homedir();
 const BRIDGE_CONFIG_PATH =
@@ -54,58 +61,72 @@ export async function installCircleChatTooling(params: {
   const skillsRoot = join(hermesHome, "skills");
   const skillDest = join(skillsRoot, "circlechat");
   let skillInstalled = false;
-  try {
-    await fs.mkdir(skillDest, { recursive: true });
-    await copyDir(SKILL_TEMPLATE_DIR, skillDest);
-    skillInstalled = true;
-  } catch (e) {
-    notes.push(`skill copy failed: ${(e as Error).message.slice(0, 200)}`);
+  if (HERMES_RUNTIME === "docker") {
+    // The hermes image's entrypoint has already chown'd skills/ to uid=10000.
+    // Do the copy + manifest + quarantine via docker bash so we act as root
+    // inside the container on the mounted volume.
+    try {
+      await runSkillOpsViaDocker(hermesHome);
+      skillInstalled = true;
+    } catch (e) {
+      notes.push(`skill ops (docker) failed: ${(e as Error).message.slice(0, 200)}`);
+    }
+  } else {
+    try {
+      await fs.mkdir(skillDest, { recursive: true });
+      await copyDir(SKILL_TEMPLATE_DIR, skillDest);
+      skillInstalled = true;
+    } catch (e) {
+      notes.push(`skill copy failed: ${(e as Error).message.slice(0, 200)}`);
+    }
+    try {
+      await addToManifest(skillsRoot, "circlechat");
+    } catch (e) {
+      notes.push(`manifest write failed: ${(e as Error).message.slice(0, 200)}`);
+    }
+    try {
+      const quarantined = await quarantineBundledSkills(hermesHome);
+      if (quarantined.length) notes.push(`quarantined ${quarantined.length} bundled skill(s)`);
+    } catch (e) {
+      notes.push(`quarantine failed: ${(e as Error).message.slice(0, 200)}`);
+    }
   }
 
-  // Manifest of CircleChat-managed skills. The Skills UI uses this to filter
-  // out the bundled Hermes skill pack (apple/creative/devops/…) and show only
-  // what we installed + what the user added through the UI.
-  try {
-    await addToManifest(skillsRoot, "circlechat");
-  } catch (e) {
-    notes.push(`manifest write failed: ${(e as Error).message.slice(0, 200)}`);
-  }
-
-  // Quarantine the bundled skill pack (apple/devops/songwriting/…) — the
-  // CC-equipped agent shouldn't reach for them. Only runs against a
-  // CC-provisioned HERMES_HOME (matching `.hermes-<handle>`) so we don't
-  // touch the operator's personal ~/.hermes install.
-  try {
-    const quarantined = await quarantineBundledSkills(hermesHome);
-    if (quarantined.length) notes.push(`quarantined ${quarantined.length} bundled skill(s)`);
-  } catch (e) {
-    notes.push(`quarantine failed: ${(e as Error).message.slice(0, 200)}`);
+  // In docker mode we must stage the MCP stdio script inside HERMES_HOME so
+  // that the containerised hermes process can spawn it — `/opt/cc-scripts/…`
+  // from the CircleChat host isn't visible inside the container.
+  let mcpScriptForRegistration = MCP_SCRIPT;
+  if (HERMES_RUNTIME === "docker") {
+    const stagedPath = join(hermesHome, basename(MCP_SCRIPT));
+    try {
+      await fs.copyFile(MCP_SCRIPT, stagedPath);
+    } catch (e) {
+      notes.push(`mcp script stage failed: ${(e as Error).message.slice(0, 200)}`);
+    }
+    mcpScriptForRegistration = mcpScriptPathForRegistration(hermesHome, MCP_SCRIPT);
   }
 
   let mcpRegistered = false;
   try {
     // Remove any stale registration first — `hermes mcp add` is create-only.
-    await runSilent("hermes", ["mcp", "remove", "circlechat"], hermesHome);
+    const removeCmd = buildHermesCommand(hermesHome, ["mcp", "remove", "circlechat"]);
+    await runSilentRaw(removeCmd.cmd, removeCmd.args, removeCmd.env);
     // Hermes's --args is a single nargs-list flag, not repeatable. Pass every
     // value in one go: `--args <script> <token> <api_base>`. The CLI also
     // prompts interactively to confirm the tool-enablement — pipe `y` to it
     // so this runs headless.
-    await runStrict(
-      "hermes",
-      [
-        "mcp",
-        "add",
-        "circlechat",
-        "--command",
-        "node",
-        "--args",
-        MCP_SCRIPT,
-        botToken,
-        CC_API_BASE,
-      ],
-      hermesHome,
-      "y\n",
-    );
+    const addCmd = buildHermesCommand(hermesHome, [
+      "mcp",
+      "add",
+      "circlechat",
+      "--command",
+      "node",
+      "--args",
+      mcpScriptForRegistration,
+      botToken,
+      CC_API_BASE,
+    ]);
+    await runStrictRaw(addCmd.cmd, addCmd.args, addCmd.env, "y\n");
     mcpRegistered = true;
   } catch (e) {
     notes.push(`mcp add failed: ${(e as Error).message.slice(0, 200)}`);
@@ -224,16 +245,65 @@ async function copyDir(src: string, dest: string): Promise<void> {
   }
 }
 
-function runStrict(
+// Do the skill copy + manifest + quarantine inside a throw-away container so
+// we act as root on the mounted volume — host-side `fs.copyFile` can't write
+// into skills/ after the hermes image's entrypoint has chown'd it to uid=10000.
+async function runSkillOpsViaDocker(hermesHome: string): Promise<void> {
+  // Bind-mount the host skill template read-only into a known container path.
+  const script = [
+    "set -e",
+    `mkdir -p "${CONTAINER_HERMES_HOME}/skills/circlechat"`,
+    `rm -rf "${CONTAINER_HERMES_HOME}/skills/circlechat/"*`,
+    `cp -r /cc-skill-template/. "${CONTAINER_HERMES_HOME}/skills/circlechat/"`,
+    `echo '["circlechat"]' > "${CONTAINER_HERMES_HOME}/skills/.circlechat-managed.json"`,
+    // Quarantine everything except circlechat + dotfiles.
+    `mkdir -p "${CONTAINER_HERMES_HOME}/skills-disabled"`,
+    `for d in "${CONTAINER_HERMES_HOME}"/skills/*/; do`,
+    `  n=$(basename "$d")`,
+    `  case "$n" in circlechat|.*) continue ;; esac`,
+    `  mv "$d" "${CONTAINER_HERMES_HOME}/skills-disabled/$n" 2>/dev/null || true`,
+    `done`,
+  ].join("\n");
+  await new Promise<void>((resolve, reject) => {
+    const args = [
+      "run",
+      "--rm",
+      "-v",
+      `${hermesHome}:${CONTAINER_HERMES_HOME}`,
+      "-v",
+      `${SKILL_TEMPLATE_DIR}:/cc-skill-template:ro`,
+      "--entrypoint",
+      "bash",
+      HERMES_IMAGE,
+      "-c",
+      script,
+    ];
+    const p = spawn("docker", args, { env: process.env, timeout: 60_000 });
+    let err = "";
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", reject);
+    p.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`docker skill-ops exit ${code}: ${err.slice(0, 200)}`));
+    });
+  });
+}
+
+// Raw spawn helpers — env + args are expected to be fully built by the
+// caller (usually via buildHermesCommand so the host/docker runtime switch
+// is centralised).
+function runStrictRaw(
   cmd: string,
   args: string[],
-  hermesHome: string,
+  env: NodeJS.ProcessEnv,
   stdinInput?: string,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, {
-      env: { ...process.env, HERMES_HOME: hermesHome },
-      timeout: 45_000,
+      env,
+      // Docker pulls + image sync can easily exceed 45s the first time an
+      // image runs on a host.
+      timeout: 180_000,
     });
     let err = "";
     p.stderr.on("data", (d) => (err += d));
@@ -250,12 +320,9 @@ function runStrict(
     }
   });
 }
-function runSilent(cmd: string, args: string[], hermesHome: string): Promise<void> {
+function runSilentRaw(cmd: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, {
-      env: { ...process.env, HERMES_HOME: hermesHome },
-      timeout: 10_000,
-    });
+    const p = spawn(cmd, args, { env, timeout: 30_000 });
     p.on("error", () => resolve());
     p.on("close", () => resolve());
   });

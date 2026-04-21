@@ -21,6 +21,9 @@ import {
   quarantineBundledSkills,
   restoreQuarantinedSkills,
 } from "../agents/hermes-equip.js";
+import { HERMES_RUNTIME, buildHermesCommand } from "../agents/hermes-runtime.js";
+import { buildOpenClawCommand } from "../agents/openclaw-runtime.js";
+import { equipOpenClawAgent } from "../agents/openclaw-equip.js";
 
 // Where Hermes per-agent homes live and where the multi-bridge reads its
 // connection list. Both are overridable for dev.
@@ -34,6 +37,27 @@ const BRIDGE_CONFIG_PATH =
 const HERMES_CONFIG_TEMPLATE =
   process.env.HERMES_CONFIG_TEMPLATE ??
   pathResolve(process.cwd(), "templates/hermes-config.yaml");
+
+const InstallOpenClawBody = z.object({
+  name: z.string().min(1).max(100),
+  handle: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(/^[a-z0-9][a-z0-9._-]*$/i),
+  title: z.string().max(160).optional(),
+  brief: z.string().max(2000).optional(),
+  // OpenClaw maps these onto its --auth-choice/--*-api-key flags; see the
+  // install-openclaw handler for the providerMap.
+  provider: z
+    .enum(["anthropic", "openai-codex", "openrouter", "custom:freeapi"])
+    .default("custom:freeapi"),
+  apiKey: z.string().min(10).max(400),
+  apiBaseUrl: z.string().url().max(400).optional(),
+  model: z.string().max(120).optional(),
+  heartbeatIntervalSec: z.number().int().min(15).max(3600).optional(),
+  channelIds: z.array(z.string()).optional(),
+});
 
 const InstallHermesBody = z.object({
   name: z.string().min(1).max(100),
@@ -49,6 +73,9 @@ const InstallHermesBody = z.object({
     .default("nous"),
   apiKey: z.string().min(10).max(400),
   apiKeyLabel: z.string().max(80).optional(),
+  // Required when provider === "custom:freeapi" — user's self-hosted
+  // FreeLLMAPI endpoint, stored in HERMES_HOME/config.yaml:custom_providers.
+  apiBaseUrl: z.string().url().max(400).optional(),
   model: z.string().max(120).optional(),
   heartbeatIntervalSec: z.number().int().min(15).max(3600).optional(),
   channelIds: z.array(z.string()).optional(),
@@ -110,17 +137,45 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
     }
 
     await fs.mkdir(hermesHome, { recursive: true });
+    // Under docker, the container runs with its own `hermes` user (uid 10000)
+    // and the entrypoint needs write access to the mounted HERMES_HOME. Give
+    // the dir open permissions so both root and the hermes user inside the
+    // container can bootstrap it without a chown dance.
+    if (HERMES_RUNTIME === "docker") {
+      try { await fs.chmod(hermesHome, 0o777); } catch { /* ignore */ }
+    }
 
-    const env = { ...process.env, HERMES_HOME: hermesHome };
+    const isFreeApi = body.provider === "custom:freeapi";
+    if (isFreeApi && !body.apiBaseUrl) {
+      return reply
+        .code(400)
+        .send({ error: "freeapi_base_url_required" });
+    }
+
     try {
       // Copy the baked template — hermes setup needs a TTY which we don't
       // have, so we pre-seed config.yaml instead. Subsequent `hermes auth add`
       // and `hermes config set` calls are non-interactive and work fine.
       const tmpl = await fs.readFile(HERMES_CONFIG_TEMPLATE, "utf8");
-      await fs.writeFile(join(hermesHome, "config.yaml"), tmpl);
-      await runCmd(
-        "hermes",
-        [
+      const configPath = join(hermesHome, "config.yaml");
+      if (isFreeApi) {
+        // FreeLLMAPI is an OpenAI-compatible endpoint declared under
+        // `custom_providers` in Hermes config, NOT via `hermes auth add`. Replace
+        // the empty `custom_providers: []` placeholder with the user's entry.
+        const patched = tmpl.replace(
+          /^custom_providers:\s*\[\]\s*$/m,
+          [
+            "custom_providers:",
+            "- name: freeapi",
+            `  base_url: ${JSON.stringify(body.apiBaseUrl)}`,
+            `  api_key: ${JSON.stringify(body.apiKey)}`,
+            "  api_mode: chat_completions",
+          ].join("\n"),
+        );
+        await fs.writeFile(configPath, patched);
+      } else {
+        await fs.writeFile(configPath, tmpl);
+        const authCmd = buildHermesCommand(hermesHome, [
           "auth",
           "add",
           body.provider,
@@ -129,12 +184,32 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
           "--api-key",
           body.apiKey,
           ...(body.apiKeyLabel ? ["--label", body.apiKeyLabel] : []),
-        ],
-        env,
-      );
-      if (body.model) {
-        await runCmd("hermes", ["config", "set", "model.default", body.model], env);
+        ]);
+        await runCmd(authCmd.cmd, authCmd.args, authCmd.env);
       }
+      const setProviderCmd = buildHermesCommand(hermesHome, [
+        "config",
+        "set",
+        "model.provider",
+        body.provider,
+      ]);
+      await runCmd(setProviderCmd.cmd, setProviderCmd.args, setProviderCmd.env);
+      if (body.model) {
+        const setModelCmd = buildHermesCommand(hermesHome, [
+          "config",
+          "set",
+          "model.default",
+          body.model,
+        ]);
+        await runCmd(setModelCmd.cmd, setModelCmd.args, setModelCmd.env);
+      }
+      // Skill + MCP install MUST happen before any other docker command that
+      // might invoke the image's entrypoint, because skills_sync runs as the
+      // container's root user and flips every created subdir to uid=10000.
+      // Once that has happened, node (running as pi) can't copyDir into
+      // skills/. Doing it here — while skills/ was only just pre-seeded by
+      // auth add / config set with the manifest-aware sync — keeps our
+      // circlechat dir writable by the subsequent mcp add path.
     } catch (e) {
       // Clean up the half-created HERMES_HOME on failure so a retry with the
       // same handle can proceed.
@@ -219,6 +294,188 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       hermesHome,
       botToken,
       skillInstalled: equip.skillInstalled,
+      mcpRegistered: equip.mcpRegistered,
+    };
+  });
+
+  // POST /api/agents/install-openclaw — creates a brand-new OpenClaw agent
+  // that runs on this server via the alpine/openclaw Docker image. Mirrors
+  // install-hermes: sanity-check, mint token, `openclaw onboard` in a clean
+  // state dir, drop the CircleChat MCP stdio bridge into the config, add to
+  // bridge-config.json, schedule heartbeat.
+  app.post("/agents/install-openclaw", async (req, reply) => {
+    const body = InstallOpenClawBody.parse(req.body);
+    const { workspaceId, memberId, user } = req.auth!;
+
+    const [wm] = await db
+      .select({ role: workspaceMembers.role })
+      .from(workspaceMembers)
+      .where(
+        and(
+          eq(workspaceMembers.userId, user.id),
+          eq(workspaceMembers.workspaceId, workspaceId!),
+        ),
+      )
+      .limit(1);
+    if (!wm || wm.role !== "admin") return reply.code(403).send({ error: "not_admin" });
+
+    const [existH] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(eq(agents.workspaceId, workspaceId!), eq(agents.handle, body.handle)),
+      )
+      .limit(1);
+    if (existH) return reply.code(409).send({ error: "handle_in_use" });
+
+    const agentId = id("a");
+    const botToken = `cc_${rawToken(32)}`;
+    const openclawHome = join(HERMES_HOMES_DIR, `.openclaw-${body.handle}`);
+
+    try {
+      await fs.stat(openclawHome);
+      return reply.code(409).send({ error: "openclaw_home_exists", path: openclawHome });
+    } catch {
+      /* Expected: not found. */
+    }
+
+    await fs.mkdir(openclawHome, { recursive: true });
+    // Container runs as root (0:0) so it can create files under /root/.openclaw;
+    // open perms so the host-side `fs.copyFile` for the MCP script also works.
+    try { await fs.chmod(openclawHome, 0o777); } catch { /* ignore */ }
+
+    const isFreeApi = body.provider === "custom:freeapi";
+    if (isFreeApi && !body.apiBaseUrl) {
+      return reply.code(400).send({ error: "freeapi_base_url_required" });
+    }
+
+    try {
+      const onboardArgs = [
+        "onboard",
+        "--accept-risk",
+        "--non-interactive",
+        "--flow",
+        "manual",
+        "--skip-channels",
+        "--skip-health",
+        "--skip-search",
+        "--skip-skills",
+        "--skip-daemon",
+        "--skip-ui",
+        "--json",
+      ];
+      if (isFreeApi) {
+        onboardArgs.push(
+          "--auth-choice",
+          "custom-api-key",
+          "--custom-api-key",
+          body.apiKey,
+          "--custom-base-url",
+          body.apiBaseUrl!,
+          "--custom-compatibility",
+          "openai",
+          "--custom-provider-id",
+          "freeapi",
+        );
+        if (body.model) onboardArgs.push("--custom-model-id", body.model);
+      } else {
+        // Map circlechat provider ids → openclaw's auth-choice + per-provider
+        // key flag. openclaw has distinct flags per provider rather than a
+        // single --api-key.
+        const providerMap: Record<string, { choice: string; keyFlag: string }> = {
+          anthropic: { choice: "anthropic-api-key", keyFlag: "--anthropic-api-key" },
+          "openai-codex": { choice: "openai-api-key", keyFlag: "--openai-api-key" },
+          openrouter: { choice: "openrouter-api-key", keyFlag: "--openrouter-api-key" },
+        };
+        const mapped = providerMap[body.provider];
+        if (!mapped) {
+          return reply.code(400).send({
+            error: "unsupported_openclaw_provider",
+            detail: `provider '${body.provider}' has no openclaw mapping`,
+          });
+        }
+        onboardArgs.push("--auth-choice", mapped.choice, mapped.keyFlag, body.apiKey);
+      }
+
+      const onboardCmd = buildOpenClawCommand(openclawHome, onboardArgs);
+      await runCmd(onboardCmd.cmd, onboardCmd.args, onboardCmd.env);
+    } catch (e) {
+      try { await fs.rm(openclawHome, { recursive: true, force: true }); } catch { /* ignore */ }
+      return reply
+        .code(500)
+        .send({ error: "openclaw_setup_failed", detail: (e as Error).message.slice(0, 400) });
+    }
+
+    await db.insert(agents).values({
+      id: agentId,
+      workspaceId: workspaceId!,
+      handle: body.handle,
+      name: body.name,
+      kind: "openclaw",
+      adapter: "socket",
+      configJson: {},
+      model: body.model ?? "",
+      scopes: ["channels.read", "channels.reply"],
+      status: "provisioning",
+      title: body.title ?? "",
+      brief: body.brief ?? "",
+      botToken,
+      heartbeatIntervalSec: body.heartbeatIntervalSec ?? 180,
+      callbackUrl: null,
+      createdBy: memberId!,
+      avatarColor: pickColor(body.handle),
+    });
+
+    const agentMemberId = id("m");
+    await db.insert(members).values({
+      id: agentMemberId,
+      workspaceId: workspaceId!,
+      kind: "agent",
+      refId: agentId,
+    });
+
+    if (body.channelIds?.length) {
+      await db
+        .insert(conversationMembers)
+        .values(
+          body.channelIds.map((cid) => ({
+            conversationId: cid,
+            memberId: agentMemberId,
+            role: "member" as const,
+          })),
+        )
+        .onConflictDoNothing();
+    }
+
+    let cfg: Array<Record<string, unknown>> = [];
+    try {
+      const raw = await fs.readFile(BRIDGE_CONFIG_PATH, "utf8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) cfg = parsed;
+    } catch { /* file may not exist yet */ }
+    cfg = cfg.filter((e) => (e as { handle?: string }).handle !== body.handle);
+    cfg.push({
+      handle: body.handle,
+      name: body.name,
+      title: body.title ?? "",
+      token: botToken,
+      kind: "openclaw",
+      openclawHome,
+      agentId,
+    });
+    await fs.writeFile(BRIDGE_CONFIG_PATH, JSON.stringify(cfg, null, 2));
+
+    await scheduleAgentHeartbeat(agentId, body.heartbeatIntervalSec ?? 180);
+
+    const equip = await equipOpenClawAgent({ openclawHome, botToken });
+    if (equip.notes.length) req.log.warn({ notes: equip.notes }, "openclaw tooling install notes");
+
+    return {
+      id: agentId,
+      memberId: agentMemberId,
+      handle: body.handle,
+      openclawHome,
+      botToken,
       mcpRegistered: equip.mcpRegistered,
     };
   });
@@ -350,12 +607,17 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       }
     } catch { /* ignore */ }
 
-    // Best-effort remove HERMES_HOME — only for agents whose kind is hermes
-    // and whose directory matches the handle we created.
+    // Best-effort remove the per-agent state dir — only for agents whose
+    // runtime we actually provisioned on this host.
     if (a.kind === "hermes") {
       const hermesHome = join(HERMES_HOMES_DIR, `.hermes-${a.handle}`);
       try {
         await fs.rm(hermesHome, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    } else if (a.kind === "openclaw") {
+      const openclawHome = join(HERMES_HOMES_DIR, `.openclaw-${a.handle}`);
+      try {
+        await fs.rm(openclawHome, { recursive: true, force: true });
       } catch { /* ignore */ }
     }
 
@@ -385,7 +647,9 @@ function runCmd(
   env: NodeJS.ProcessEnv,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { env, timeout: 60_000 });
+    // Docker runs can take minutes on first pull; give them room before we
+    // assume the subprocess is stuck.
+    const p = spawn(cmd, args, { env, timeout: 180_000 });
     let out = "";
     let err = "";
     p.stdout.on("data", (d) => (out += d));

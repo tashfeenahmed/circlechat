@@ -7,30 +7,45 @@ import { agents, agentRuns } from "./db/schema.js";
 import { buildContext } from "./agents/context.js";
 import { callAgent } from "./agents/adapters/dispatch.js";
 import { applyActions, type AgentAction } from "./agents/executor.js";
-import { materialiseScheduledRun } from "./agents/scheduler.js";
+import { materialiseScheduledRun, cancelAgentHeartbeat } from "./agents/scheduler.js";
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 
 const worker = new Worker<AgentJobPayload>(
   AGENT_QUEUE,
   async (job) => {
     const payload = job.data;
+
+    // Check the agent exists BEFORE materialising the run or emitting any
+    // WS frames. Otherwise a stale repeatable heartbeat (left in Redis after
+    // the agent row was deleted) would emit a ghost `agent.run.started` pill
+    // on every tick. Self-heal by cancelling the repeat.
+    const [agent] = await db.select().from(agents).where(eq(agents.id, payload.agentId)).limit(1);
+    if (!agent) {
+      if (payload.trigger === "scheduled") {
+        try { await cancelAgentHeartbeat(payload.agentId); } catch { /* ignore */ }
+      }
+      // If the enqueuer already minted a runId (event trigger), close it so
+      // the UI pill clears immediately.
+      if (payload.runId) {
+        await db
+          .update(agentRuns)
+          .set({ status: "failed", errorText: "agent_missing", finishedAt: new Date() })
+          .where(eq(agentRuns.id, payload.runId));
+        await emitFinished(payload.agentId, payload.runId, "failed", payload.conversationId);
+      }
+      return;
+    }
+
     // Scheduled jobs don't carry a runId (repeatable job template) — materialise one.
     let runId = payload.runId;
     if (payload.trigger === "scheduled" && !runId) runId = await materialiseScheduledRun(payload.agentId);
 
-    const [agent] = await db.select().from(agents).where(eq(agents.id, payload.agentId)).limit(1);
-    if (!agent) {
-      await db
-        .update(agentRuns)
-        .set({ status: "failed", errorText: "agent_missing", finishedAt: new Date() })
-        .where(eq(agentRuns.id, runId));
-      return;
-    }
     if (agent.status === "paused") {
       await db
         .update(agentRuns)
         .set({ status: "ok", resultJson: { skipped: "paused" }, finishedAt: new Date() })
         .where(eq(agentRuns.id, runId));
+      await emitFinished(agent.id, runId, "ok", payload.conversationId);
       return;
     }
 

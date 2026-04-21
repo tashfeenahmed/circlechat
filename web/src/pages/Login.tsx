@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { api } from "../api/client";
+import { humanizeError } from "../api/errors";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function LoginPage() {
@@ -18,7 +19,7 @@ export default function LoginPage() {
       await qc.invalidateQueries({ queryKey: ["me"] });
       nav("/", { replace: true });
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(humanizeError(e));
     }
   }
 

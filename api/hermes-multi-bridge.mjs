@@ -15,6 +15,13 @@ const CFG_PATH = process.env.CC_BRIDGE_CONFIG ?? "./bridge-config.json";
 const WSS = process.env.CC_WSS_URL ?? "ws://localhost:3300/agent-socket";
 const API_BASE = process.env.CC_API_BASE ?? "http://localhost:3300/api";
 const HERMES_TIMEOUT = Number(process.env.HERMES_TIMEOUT ?? 180);
+// Match the api process' runtime decision. "docker" is the default going
+// forward; "host" is only retained as an escape hatch.
+const HERMES_RUNTIME = process.env.CC_HERMES_RUNTIME === "host" ? "host" : "docker";
+const HERMES_IMAGE = process.env.CC_HERMES_IMAGE ?? "nousresearch/hermes-agent:latest";
+const CONTAINER_HERMES_HOME = "/opt/data";
+const OPENCLAW_IMAGE = process.env.CC_OPENCLAW_IMAGE ?? "alpine/openclaw:latest";
+const CONTAINER_OPENCLAW_HOME = "/root/.openclaw";
 
 // Per-handle connection registry so reconcile() can add/remove agents on the
 // fly when bridge-config.json changes (e.g. when a new Hermes is installed).
@@ -52,12 +59,34 @@ function reconcile() {
   }
 }
 
-function callHermes(prompt, hermesHome) {
-  return new Promise((resolve, reject) => {
+function buildHermesSpawn(hermesHome, hermesArgs) {
+  if (HERMES_RUNTIME === "host") {
     const env = { ...process.env };
     if (hermesHome) env.HERMES_HOME = hermesHome;
-    const args = ["chat", "-q", prompt, "-Q", "--yolo", "--source", "circlechat"];
-    const p = spawn("hermes", args, { timeout: HERMES_TIMEOUT * 1000, env });
+    return { cmd: "hermes", args: hermesArgs, env };
+  }
+  // docker: bind-mount the per-agent home into the image's /opt/data and
+  // use the default entrypoint so config.yaml / .env / SOUL.md get bootstrapped
+  // the first time. The entrypoint also prints skills_sync progress to stdout
+  // on every invocation, which extractReply() filters out below.
+  const dockerArgs = [
+    "run",
+    "--rm",
+    "-i",
+    "--network=host",
+    "-v",
+    `${hermesHome}:${CONTAINER_HERMES_HOME}`,
+    HERMES_IMAGE,
+    ...hermesArgs,
+  ];
+  return { cmd: "docker", args: dockerArgs, env: process.env };
+}
+
+function callHermes(prompt, hermesHome) {
+  return new Promise((resolve, reject) => {
+    const hermesArgs = ["chat", "-q", prompt, "-Q", "--yolo", "--source", "circlechat"];
+    const spec = buildHermesSpawn(hermesHome, hermesArgs);
+    const p = spawn(spec.cmd, spec.args, { timeout: HERMES_TIMEOUT * 1000, env: spec.env });
     let out = "",
       err = "";
     p.stdout.on("data", (d) => (out += d));
@@ -68,6 +97,104 @@ function callHermes(prompt, hermesHome) {
     });
     p.on("error", reject);
   });
+}
+
+// One-shot openclaw invocation against a container-local agent. Uses
+// `openclaw agent --local --agent main` — the `main` agent is always
+// present in a freshly onboarded state dir.
+function callOpenClaw(prompt, openclawHome) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      "run",
+      "--rm",
+      "-i",
+      "--user",
+      "0:0",
+      "--network=host",
+      "-v",
+      `${openclawHome}:${CONTAINER_OPENCLAW_HOME}`,
+      "--entrypoint",
+      "openclaw",
+      OPENCLAW_IMAGE,
+      "agent",
+      "--local",
+      "--agent",
+      "main",
+      "-m",
+      prompt,
+      "--json",
+    ];
+    const p = spawn("docker", args, { timeout: HERMES_TIMEOUT * 1000, env: process.env });
+    let out = "",
+      err = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.stderr.on("data", (d) => (err += d));
+    p.on("close", (code) => {
+      if (code !== 0 && !out.trim()) return reject(new Error(err.slice(0, 400) || `openclaw exit ${code}`));
+      resolve({ stdout: out, stderr: err });
+    });
+    p.on("error", reject);
+  });
+}
+
+// Parse the `--json` output from `openclaw agent --local` and pull the
+// assistant message text. Shape varies across versions; defensively drill into
+// the expected path and fall back to whatever looks like a string.
+function extractOpenClawReply(stdout) {
+  try {
+    // --json emits the whole run envelope; assistant text is usually under
+    // result.messages[-1].content or result.text. Find a JSON object in the
+    // stream (agent prints progress logs first, then the JSON payload).
+    const firstBrace = stdout.indexOf("{");
+    if (firstBrace === -1) return "";
+    const payload = JSON.parse(stdout.slice(firstBrace));
+    // alpine/openclaw `agent --local --json` shape (2026.4.x):
+    //   { payloads: [{ text: "..." }], meta: { finalAssistantVisibleText: "..." } }
+    const payloadText = Array.isArray(payload?.payloads)
+      ? payload.payloads.map((p) => (typeof p?.text === "string" ? p.text : "")).filter(Boolean).join("\n")
+      : "";
+    const candidates = [
+      payloadText,
+      payload?.meta?.finalAssistantVisibleText,
+      payload?.meta?.finalAssistantRawText,
+      payload?.result?.finalAssistantVisibleText,
+      payload?.text,
+      payload?.reply,
+      payload?.message?.content,
+    ];
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) return c;
+      if (Array.isArray(c)) {
+        const joined = c
+          .map((b) => (typeof b?.text === "string" ? b.text : ""))
+          .filter(Boolean)
+          .join("\n");
+        if (joined) return joined;
+      }
+    }
+    return "";
+  } catch {
+    // JSON parsing failed — try to pull a sensible last non-empty, non-log line.
+    const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    const last = lines[lines.length - 1];
+    if (last && !last.startsWith("[") && !last.startsWith("{")) return last;
+    return "";
+  }
+}
+
+// Lines emitted by the hermes image's entrypoint (skills_sync.py) that must
+// never leak into a reply. The default entrypoint runs on every `docker run
+// hermes-agent <subcmd>` even when we just want a chat reply, so we filter
+// its progress output at the bridge.
+function isEntrypointNoise(line) {
+  const t = line.trim();
+  if (!t) return false;
+  if (/^Syncing bundled skills/i.test(t)) return true;
+  if (/^Done: \d+ new, /.test(t)) return true;
+  if (/^\s*[~+↑!] \S/.test(line)) return true;
+  if (/^Dropping root privileges/i.test(t)) return true;
+  if (/^\s*==+/.test(t)) return true;
+  return false;
 }
 
 function extractReply(raw) {
@@ -93,6 +220,7 @@ function extractReply(raw) {
     .split("\n")
     .filter((l) => !/^session_id:/i.test(l))
     .filter((l) => !/^\s*⚕?\s*Hermes\s*$/.test(l))
+    .filter((l) => !isEntrypointNoise(l))
     .join("\n")
     .trim()
     .slice(0, 2000);
@@ -422,8 +550,13 @@ function connect(entry) {
 
     const prompt = buildPrompt(entry, p);
     try {
-      const { stdout, stderr } = await callHermes(prompt, entry.hermesHome);
-      const rawText = extractReply(stdout) || extractReply(stderr) || "(empty reply)";
+      const isOpenClaw = entry.kind === "openclaw" || typeof entry.openclawHome === "string";
+      const { stdout, stderr } = isOpenClaw
+        ? await callOpenClaw(prompt, entry.openclawHome)
+        : await callHermes(prompt, entry.hermesHome);
+      const rawText = isOpenClaw
+        ? (extractOpenClawReply(stdout) || extractOpenClawReply(stderr) || "(empty reply)")
+        : (extractReply(stdout) || extractReply(stderr) || "(empty reply)");
       if (
         (trigger === "scheduled" || trigger === "thread_reply" || trigger === "ambient") &&
         /^\s*HEARTBEAT_OK\s*$/i.test(rawText)

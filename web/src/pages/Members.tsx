@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useMembersDirectory, useConversations, useMe } from "../lib/hooks";
 import { api } from "../api/client";
+import { humanizeError } from "../api/errors";
 import Avatar from "../components/Avatar";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBus } from "../state/store";
@@ -477,7 +478,7 @@ const PROVIDERS: Array<{
   { id: "openrouter", label: "OpenRouter", hint: "Routes to hundreds of models.", defaultModel: "anthropic/claude-sonnet-4.5" },
   { id: "openai-codex", label: "OpenAI", hint: "API key from platform.openai.com", defaultModel: "gpt-4o" },
   { id: "nous", label: "Nous (hosted Hermes)", hint: "Portal token from nousresearch.com", defaultModel: "" },
-  { id: "custom:freeapi", label: "Custom (freeapi)", hint: "Self-hosted gateway.", defaultModel: "gemini-2.5-pro" },
+  { id: "custom:freeapi", label: "FreeLLMAPI (self-hosted)", hint: "OpenAI-compatible proxy (github.com/tashfeenahmed/freellmapi).", defaultModel: "gemini-2.5-pro" },
 ];
 
 function InstallAgent({
@@ -491,15 +492,17 @@ function InstallAgent({
   onCreated: (id: string) => void;
   onBack: () => void;
 }) {
-  const [name, setName] = useState("Research");
-  const [handle, setHandle] = useState("research");
-  const [title, setTitle] = useState("Lead Research Specialist");
+  const [name, setName] = useState("CEO");
+  const [handle, setHandle] = useState("ceo");
+  const [title, setTitle] = useState("Chief Executive Officer");
   const [brief, setBrief] = useState(
     "Reads the channels I belong to. Replies to @mentions and DMs; on scheduled beats, surfaces relevant updates.",
   );
+  const [runtime, setRuntime] = useState<"hermes" | "openclaw">("hermes");
   const [providerId, setProviderId] = useState<(typeof PROVIDERS)[number]["id"]>("anthropic");
   const provider = PROVIDERS.find((p) => p.id === providerId)!;
   const [apiKey, setApiKey] = useState("");
+  const [apiBaseUrl, setApiBaseUrl] = useState("");
   const [model, setModel] = useState(provider.defaultModel);
   const [interval, setInterval] = useState(180);
   const [selectedChannels, setSelected] = useState<string[]>([]);
@@ -517,21 +520,24 @@ function InstallAgent({
     setErr(null);
     setBusy(true);
     try {
-      const r = await api.post<{ id: string; handle: string }>("/agents/install-hermes", {
+      const endpoint = runtime === "openclaw" ? "/agents/install-openclaw" : "/agents/install-hermes";
+      const payload: Record<string, unknown> = {
         name,
         handle,
         title: title || undefined,
         brief,
         provider: providerId,
         apiKey,
-        apiKeyLabel: `${name} (${providerId})`,
+        apiBaseUrl: providerId === "custom:freeapi" ? apiBaseUrl : undefined,
         model: model || undefined,
         heartbeatIntervalSec: interval,
         channelIds: selectedChannels,
-      });
+      };
+      if (runtime === "hermes") payload.apiKeyLabel = `${name} (${providerId})`;
+      const r = await api.post<{ id: string; handle: string }>(endpoint, payload);
       setInstalled({ id: r.id, handle: r.handle });
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(humanizeError(e));
     } finally {
       setBusy(false);
     }
@@ -605,26 +611,76 @@ function InstallAgent({
           />
         </Field>
 
+        <Field label="Runtime">
+          <div className="flex gap-2">
+            {[
+              { id: "hermes" as const, label: "Hermes", hint: "Nous Research · Docker" },
+              { id: "openclaw" as const, label: "OpenClaw", hint: "alpine/openclaw · Docker" },
+            ].map((r) => {
+              const selected = runtime === r.id;
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setRuntime(r.id)}
+                  className={`flex-1 border-2 rounded px-3 py-2 text-left transition ${
+                    selected
+                      ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white"
+                      : "border-[var(--color-hair-2)] hover:border-[var(--color-hair)]"
+                  }`}
+                >
+                  <div className="text-[13px] font-medium">{r.label}</div>
+                  <div className={`text-[11px] ${selected ? "text-white/75" : "text-[var(--color-muted)]"}`}>{r.hint}</div>
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+
         <Field label="Inference provider">
           <select
             value={providerId}
             onChange={(e) => changeProvider(e.target.value as typeof providerId)}
-            className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[14px] bg-white"
+            className="cc-select"
           >
-            {PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
+            {PROVIDERS
+              .filter((p) => runtime === "hermes" || p.id !== "nous")
+              .map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
           </select>
           <div className="text-[11.5px] text-[var(--color-muted)] mt-1">{provider.hint}</div>
         </Field>
 
-        <Field label="API key">
+        {providerId === "custom:freeapi" && (
+          <Field label="Base URL">
+            <input
+              value={apiBaseUrl}
+              onChange={(e) => setApiBaseUrl(e.target.value)}
+              placeholder="http://your-server:3200/v1"
+              className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[13px] font-mono"
+            />
+            <div className="text-[11.5px] text-[var(--color-muted)] mt-1">
+              No FreeLLMAPI yet?{" "}
+              <a
+                href="https://github.com/tashfeenahmed/freellmapi"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[var(--color-accent-blue)] underline"
+              >
+                github.com/tashfeenahmed/freellmapi
+              </a>
+            </div>
+          </Field>
+        )}
+
+        <Field label={providerId === "custom:freeapi" ? "Unified key" : "API key"}>
           <input
             type="password"
             autoComplete="new-password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={providerId === "anthropic" ? "sk-ant-…" : providerId === "openai-codex" ? "sk-…" : "paste your key"}
+            placeholder={providerId === "anthropic" ? "sk-ant-…" : providerId === "openai-codex" ? "sk-…" : providerId === "custom:freeapi" ? "freellmapi-…" : "paste your key"}
             className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[13px] font-mono"
           />
           <div className="text-[11.5px] text-[var(--color-muted)] mt-1">
@@ -632,15 +688,7 @@ function InstallAgent({
           </div>
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Model">
-            <input
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder={provider.defaultModel || "default"}
-              className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[14px] font-mono"
-            />
-          </Field>
+        {providerId === "custom:freeapi" ? (
           <Field label="Heartbeat (sec)">
             <input
               type="number"
@@ -651,7 +699,28 @@ function InstallAgent({
               className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[14px]"
             />
           </Field>
-        </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Model">
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={provider.defaultModel || "default"}
+                className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[14px] font-mono"
+              />
+            </Field>
+            <Field label="Heartbeat (sec)">
+              <input
+                type="number"
+                min={15}
+                max={3600}
+                value={interval}
+                onChange={(e) => setInterval(Number(e.target.value))}
+                className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[14px]"
+              />
+            </Field>
+          </div>
+        )}
 
         <Field label="Channels to join">
           {channels.length === 0 ? (
@@ -715,8 +784,8 @@ function AttachAgent({
   const [step, setStep] = useState<"runtime" | "details">("runtime");
   const [kind, setKind] = useState<"openclaw" | "hermes" | "custom">("hermes");
   const [adapter, setAdapter] = useState<"webhook" | "socket">("socket");
-  const [name, setName] = useState("Research");
-  const [handle, setHandle] = useState("research");
+  const [name, setName] = useState("CEO");
+  const [handle, setHandle] = useState("ceo");
   const [brief, setBrief] = useState(
     "Reads the channels I belong to. Replies to @mentions and DMs; on scheduled beats, surfaces relevant updates.",
   );

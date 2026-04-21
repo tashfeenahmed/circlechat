@@ -29,8 +29,10 @@
 html, body, #root {
   margin: 0;
   padding: 0;
-  height: 100%;
-  overflow: hidden;
+  /* Don't force document scroll off — signup/login/invite pages can be taller
+     than the viewport and must scroll naturally. AppShell pins its own
+     viewport via .shell { height: 100vh; overflow: hidden; }. */
+  min-height: 100%;
   background: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-sans);
@@ -1562,3 +1564,27 @@ input, textarea { font: inherit; color: inherit; }
 .tm-activity-row {
   display: flex; align-items: center; gap: 6px;
 }
+
+/* ─────────── shared select (matches input-field look) ─────────── */
+.cc-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-color: var(--color-bg);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgb(55,53,47)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px 12px;
+  border: 1px solid var(--color-hair-2);
+  border-radius: 4px;
+  padding: 8px 30px 8px 12px;
+  font-size: 14px;
+  color: var(--color-ink);
+  line-height: 1.25;
+  outline: none;
+  cursor: pointer;
+  width: 100%;
+}
+.cc-select:focus { border-color: var(--color-ink); }
+.cc-select:disabled { opacity: 0.6; cursor: not-allowed; }
+.cc-select::-ms-expand { display: none; }

@@ -120,6 +120,15 @@ export function useMessages(convId: string | undefined, parentId?: string | null
     enabled: !!convId,
   });
 
+  // Conversations created AFTER the websocket connected (e.g. a fresh DM
+  // opened from Members) aren't in the server's initial subscribe list. Nudge
+  // the server to add this conv to the pubsub fan-out so message.new /
+  // agent.run.started frames reach us.
+  useEffect(() => {
+    if (!convId) return;
+    bus.send({ type: "subscribe", conversationId: convId });
+  }, [convId]);
+
   // Keep cache updated as new messages stream in over WS.
   useEffect(() => {
     if (!convId) return;

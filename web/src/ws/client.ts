@@ -15,6 +15,11 @@ class EventBus {
   private closed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private backoff = 500;
+  // Conversations the UI has asked the server to fan events out for. We
+  // remember them so we can replay the subscribe frames whenever the socket
+  // (re)opens — a fresh DM opened after connect, or any reconnect, would
+  // otherwise stop delivering live events.
+  private subscribedConvs = new Set<string>();
 
   connect(): void {
     if (this.ws || this.closed) return;
@@ -24,6 +29,9 @@ class EventBus {
     s.onopen = () => {
       this.connected = true;
       this.backoff = 500;
+      for (const cid of this.subscribedConvs) {
+        try { s.send(JSON.stringify({ type: "subscribe", conversationId: cid })); } catch { /* retry on reconnect */ }
+      }
     };
     s.onmessage = (ev) => {
       try {
@@ -57,6 +65,9 @@ class EventBus {
   }
 
   send(obj: Record<string, unknown>): void {
+    if (obj.type === "subscribe" && typeof obj.conversationId === "string") {
+      this.subscribedConvs.add(obj.conversationId);
+    }
     if (this.connected && this.ws) this.ws.send(JSON.stringify(obj));
   }
 

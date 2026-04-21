@@ -26,6 +26,7 @@ import {
 } from "../auth/session.js";
 import { id, rawToken } from "../lib/ids.js";
 import { config } from "../lib/config.js";
+import { deriveUniqueWorkspaceHandle } from "../lib/workspace-handle.js";
 
 const SignupBody = z.object({
   email: z.string().email(),
@@ -37,11 +38,6 @@ const SignupBody = z.object({
     .max(40)
     .regex(/^[a-z0-9][a-z0-9._-]*$/i),
   workspaceName: z.string().min(1).max(100),
-  workspaceHandle: z
-    .string()
-    .min(2)
-    .max(40)
-    .regex(/^[a-z0-9][a-z0-9._-]*$/i),
 });
 
 const LoginBody = z.object({
@@ -81,12 +77,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       .limit(1);
     if (existHandle) return reply.code(409).send({ error: "handle_in_use" });
 
-    const [existWsHandle] = await db
-      .select({ id: workspaces.id })
-      .from(workspaces)
-      .where(eq(workspaces.handle, body.workspaceHandle))
-      .limit(1);
-    if (existWsHandle) return reply.code(409).send({ error: "workspace_handle_in_use" });
+    const workspaceHandle = await deriveUniqueWorkspaceHandle(body.workspaceName);
 
     const uid = id("u");
     await db.insert(users).values({
@@ -102,7 +93,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     await db.insert(workspaces).values({
       id: wsId,
       name: body.workspaceName,
-      handle: body.workspaceHandle,
+      handle: workspaceHandle,
       createdBy: uid,
     });
     await db
@@ -138,7 +129,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         createdAt: new Date(),
       }),
       memberId,
-      workspace: { id: wsId, name: body.workspaceName, handle: body.workspaceHandle },
+      workspace: { id: wsId, name: body.workspaceName, handle: workspaceHandle },
     });
   });
 

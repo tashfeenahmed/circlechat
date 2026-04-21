@@ -11,14 +11,10 @@ import {
 } from "../db/schema.js";
 import { requireAuth, ensureUserMember, COOKIE_NAME } from "../auth/session.js";
 import { id } from "../lib/ids.js";
+import { deriveUniqueWorkspaceHandle } from "../lib/workspace-handle.js";
 
 const CreateBody = z.object({
   name: z.string().min(1).max(100),
-  handle: z
-    .string()
-    .min(2)
-    .max(40)
-    .regex(/^[a-z0-9][a-z0-9._-]*$/i),
 });
 
 export default async function workspaceRoutes(app: FastifyInstance): Promise<void> {
@@ -47,18 +43,13 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
     const sid = req.cookies[COOKIE_NAME];
     if (!sid) return reply.code(401).send({ error: "unauthenticated" });
 
-    const [existHandle] = await db
-      .select({ id: workspaces.id })
-      .from(workspaces)
-      .where(eq(workspaces.handle, body.handle))
-      .limit(1);
-    if (existHandle) return reply.code(409).send({ error: "workspace_handle_in_use" });
+    const handle = await deriveUniqueWorkspaceHandle(body.name);
 
     const wsId = id("w");
     await db.insert(workspaces).values({
       id: wsId,
       name: body.name,
-      handle: body.handle,
+      handle,
       createdBy: user.id,
     });
     await db
@@ -85,7 +76,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
 
     return {
       ok: true,
-      workspace: { id: wsId, name: body.name, handle: body.handle, role: "admin" },
+      workspace: { id: wsId, name: body.name, handle, role: "admin" },
       memberId,
     };
   });

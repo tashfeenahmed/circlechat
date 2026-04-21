@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { api } from "../api/client";
+import { humanizeError } from "../api/errors";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface InviteInfo {
@@ -24,7 +25,7 @@ export default function InvitePage() {
     if (!token) return;
     api.get<InviteInfo>(`/invite/${token}`).then(
       (r) => setInfo(r),
-      (e) => setErr((e as Error).message),
+      (e) => setErr(humanizeError(e)),
     );
   }, [token]);
 
@@ -37,7 +38,7 @@ export default function InvitePage() {
       await qc.invalidateQueries({ queryKey: ["me"] });
       nav("/", { replace: true });
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(humanizeError(e));
     } finally {
       setBusy(false);
     }
@@ -52,7 +53,7 @@ export default function InvitePage() {
       await qc.invalidateQueries({ queryKey: ["workspaces"] });
       nav("/", { replace: true });
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(humanizeError(e));
     } finally {
       setBusy(false);
     }

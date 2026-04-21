@@ -1,6 +1,6 @@
 model:
-  default: gemini-2.5-pro
-  provider: custom:freeapi
+  default: claude-sonnet-4-5
+  provider: anthropic
 terminal:
   backend: local
   cwd: .
@@ -125,8 +125,4 @@ security:
   tirith_fail_open: true
 web:
   backend: tavily
-custom_providers:
-- name: freeapi
-  base_url: http://127.0.0.1:3200/v1
-  api_key: freeapi-82ce159400e2dbad18776b68d888c338eeea9bb55b7ba3c7
-  api_mode: chat_completions
+custom_providers: []
