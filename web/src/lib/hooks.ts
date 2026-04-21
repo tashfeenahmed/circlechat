@@ -315,45 +315,39 @@ export function usePresenceBus() {
   }, []);
 }
 
-// ─────────────────── Tasks / Boards ───────────────────
+// ─────────────────── Tasks / Board (workspace-scoped) ───────────────────
 
-export function useTasks(convId: string | undefined) {
+export function useTasks() {
   const qc = useQueryClient();
-  const key = ["tasks", convId] as const;
   const q = useQuery<{ tasks: Task[] }>({
-    queryKey: key,
-    queryFn: () => api.get(`/conversations/${convId}/tasks`),
-    enabled: !!convId,
+    queryKey: ["tasks"],
+    queryFn: () => api.get("/tasks"),
     staleTime: 15_000,
   });
   useEffect(() => {
-    if (!convId) return;
     return bus.on((ev) => {
       if (typeof ev.type !== "string") return;
       if (!String(ev.type).startsWith("task.")) return;
-      if (ev.conversationId !== convId) return;
       if (ev.type === "task.new") {
         const t = ev.task as Task;
-        qc.setQueryData<{ tasks: Task[] }>(key, (old) => {
+        qc.setQueryData<{ tasks: Task[] }>(["tasks"], (old) => {
           if (!old) return { tasks: [t] };
           if (old.tasks.some((x) => x.id === t.id)) return old;
           return { tasks: [...old.tasks, t] };
         });
       } else if (ev.type === "task.updated") {
         const t = ev.task as Task;
-        qc.setQueryData<{ tasks: Task[] }>(key, (old) => {
+        qc.setQueryData<{ tasks: Task[] }>(["tasks"], (old) => {
           if (!old) return old;
           return { tasks: old.tasks.map((x) => (x.id === t.id ? t : x)) };
         });
       } else if (ev.type === "task.deleted") {
-        qc.setQueryData<{ tasks: Task[] }>(key, (old) =>
+        qc.setQueryData<{ tasks: Task[] }>(["tasks"], (old) =>
           old ? { tasks: old.tasks.filter((x) => x.id !== ev.taskId) } : old,
         );
       }
-      // task.assigned / task.unassigned always arrive paired with task.updated
-      // so the hydrated row already reflects the state change.
     });
-  }, [convId, qc, key]);
+  }, [qc]);
   return q;
 }
 

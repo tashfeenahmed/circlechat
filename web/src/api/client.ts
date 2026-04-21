@@ -177,7 +177,8 @@ export type TaskStatus = "backlog" | "in_progress" | "review" | "done";
 
 export interface Task {
   id: string;
-  conversationId: string;
+  workspaceId: string;
+  conversationId: string | null;
   parentId: string | null;
   title: string;
   bodyMd: string;

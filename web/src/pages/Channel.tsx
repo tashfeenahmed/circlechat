@@ -7,7 +7,6 @@ import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
 import Menu from "../components/Menu";
 import Avatar from "../components/Avatar";
-import Board from "../components/Board";
 import { useConversation, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
@@ -58,13 +57,6 @@ export default function ChannelPage() {
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
-  const [view, setView] = useState<"chat" | "board">("chat");
-
-  // Reset to Chat tab when switching channels; DMs don't have a board.
-  const isChannel = c?.kind === "channel";
-  useEffect(() => {
-    setView("chat");
-  }, [id]);
 
   async function archiveChannel() {
     if (!c) return;
@@ -115,16 +107,6 @@ export default function ChannelPage() {
             </div>
           )}
           <div className="ch-right">
-            {isChannel && (
-              <div className="seg" style={{ marginRight: 4 }}>
-                <button className={view === "chat" ? "on" : ""} onClick={() => setView("chat")}>
-                  Chat
-                </button>
-                <button className={view === "board" ? "on" : ""} onClick={() => setView("board")}>
-                  Board
-                </button>
-              </div>
-            )}
             <button onClick={() => setMembersOpen(true)} className="ch-btn">
               {memberCount} members
             </button>
@@ -155,44 +137,38 @@ export default function ChannelPage() {
           </div>
         </header>
 
-        {view === "chat" ? (
-          <>
-            <MessageList
-              messages={msgs.data?.messages ?? []}
-              meMemberId={me.data?.memberId ?? undefined}
-              onOpenThread={(mid) => openThread(id, mid)}
-            />
+        <MessageList
+          messages={msgs.data?.messages ?? []}
+          meMemberId={me.data?.memberId ?? undefined}
+          onOpenThread={(mid) => openThread(id, mid)}
+        />
 
-            <AgentActivity conversationId={id} />
+        <AgentActivity conversationId={id} />
 
-            {typingMembers.length > 0 && (
-              <div className="typing">
-                <span className="typing-dots">
-                  <span /><span /><span />
-                </span>
-                {typingMembers
-                  .map((mid) => (dir[mid] as { name: string } | undefined)?.name ?? "someone")
-                  .join(", ")}{" "}
-                is typing…
-              </div>
-            )}
-
-            <Composer
-              placeholder={`Message #${c?.name ?? ""}`}
-              conversationId={id}
-              onTyping={() => {
-                api.post(`/conversations/${id}/typing`).catch(() => {
-                  // ignore
-                });
-              }}
-              onSend={async (bodyMd, attachments) => {
-                await post.mutateAsync({ bodyMd, attachments });
-              }}
-            />
-          </>
-        ) : (
-          <Board conversationId={id} />
+        {typingMembers.length > 0 && (
+          <div className="typing">
+            <span className="typing-dots">
+              <span /><span /><span />
+            </span>
+            {typingMembers
+              .map((mid) => (dir[mid] as { name: string } | undefined)?.name ?? "someone")
+              .join(", ")}{" "}
+            is typing…
+          </div>
         )}
+
+        <Composer
+          placeholder={`Message #${c?.name ?? ""}`}
+          conversationId={id}
+          onTyping={() => {
+            api.post(`/conversations/${id}/typing`).catch(() => {
+              // ignore
+            });
+          }}
+          onSend={async (bodyMd, attachments) => {
+            await post.mutateAsync({ bodyMd, attachments });
+          }}
+        />
       </div>
 
       {threadMsg && (

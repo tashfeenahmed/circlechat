@@ -12,20 +12,24 @@ export type Event =
   | { type: "agent.run.finished"; conversationId?: string | null; agentId: string; runId: string; status: string }
   | { type: "approval.new"; approvalId: string; agentId: string; scope: string; action: string; conversationId?: string | null }
   | { type: "approval.decided"; approvalId: string; status: string }
-  | { type: "task.new"; conversationId: string; task: unknown }
-  | { type: "task.updated"; conversationId: string; taskId: string; task: unknown }
-  | { type: "task.deleted"; conversationId: string; taskId: string }
-  | { type: "task.assigned"; conversationId: string; taskId: string; memberId: string; assignedBy: string }
-  | { type: "task.unassigned"; conversationId: string; taskId: string; memberId: string }
-  | { type: "task.comment.new"; conversationId: string; taskId: string; comment: unknown }
-  | { type: "task.comment.deleted"; conversationId: string; taskId: string; commentId: string };
+  | { type: "task.new"; workspaceId: string; task: unknown }
+  | { type: "task.updated"; workspaceId: string; taskId: string; task: unknown }
+  | { type: "task.deleted"; workspaceId: string; taskId: string }
+  | { type: "task.assigned"; workspaceId: string; taskId: string; memberId: string; assignedBy: string }
+  | { type: "task.unassigned"; workspaceId: string; taskId: string; memberId: string }
+  | { type: "task.comment.new"; workspaceId: string; taskId: string; comment: unknown }
+  | { type: "task.comment.deleted"; workspaceId: string; taskId: string; commentId: string };
 
 const CONV_CHANNEL = (conversationId: string): string => `cc:conv:${conversationId}`;
+const WORKSPACE_CHANNEL = (workspaceId: string): string => `cc:workspace:${workspaceId}`;
 const USER_CHANNEL = (memberId: string): string => `cc:member:${memberId}`;
 const GLOBAL_CHANNEL = "cc:global";
 
 export async function publishToConversation(conversationId: string, ev: Event): Promise<void> {
   await pub.publish(CONV_CHANNEL(conversationId), JSON.stringify(ev));
+}
+export async function publishToWorkspace(workspaceId: string, ev: Event): Promise<void> {
+  await pub.publish(WORKSPACE_CHANNEL(workspaceId), JSON.stringify(ev));
 }
 export async function publishToMember(memberId: string, ev: Event): Promise<void> {
   await pub.publish(USER_CHANNEL(memberId), JSON.stringify(ev));
@@ -34,4 +38,4 @@ export async function publishGlobal(ev: Event): Promise<void> {
   await pub.publish(GLOBAL_CHANNEL, JSON.stringify(ev));
 }
 
-export { CONV_CHANNEL, USER_CHANNEL, GLOBAL_CHANNEL };
+export { CONV_CHANNEL, WORKSPACE_CHANNEL, USER_CHANNEL, GLOBAL_CHANNEL };

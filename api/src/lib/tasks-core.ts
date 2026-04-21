@@ -7,12 +7,10 @@ import {
   taskLinks,
   taskComments,
   taskActivity,
-  conversations,
-  conversationMembers,
   members,
 } from "../db/schema.js";
 import { id } from "./ids.js";
-import { publishToConversation } from "./events.js";
+import { publishToWorkspace } from "./events.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 
 export const STATUSES = ["backlog", "in_progress", "review", "done"] as const;
@@ -20,23 +18,18 @@ export type Status = (typeof STATUSES)[number];
 
 type TaskRow = typeof tasks.$inferSelect;
 
-export async function assertConvMember(conversationId: string, memberId: string): Promise<boolean> {
-  const [mm] = await db
-    .select({ role: conversationMembers.role })
-    .from(conversationMembers)
-    .where(
-      and(
-        eq(conversationMembers.conversationId, conversationId),
-        eq(conversationMembers.memberId, memberId),
-      ),
-    )
-    .limit(1);
-  return !!mm;
-}
-
 export async function loadTask(taskId: string): Promise<TaskRow | null> {
   const [t] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
   return t ?? null;
+}
+
+// Workspace guard: the session-carried memberId must belong to the same
+// workspace as the task. `requireWorkspace` already pins the session to a
+// workspace, so this is a simple equality check on the task row.
+function guard(t: TaskRow | null, workspaceId: string): { ok: boolean; error?: "not_found" | "wrong_workspace" } {
+  if (!t) return { ok: false, error: "not_found" };
+  if (t.workspaceId !== workspaceId) return { ok: false, error: "wrong_workspace" };
+  return { ok: true };
 }
 
 export async function hydrateTasks(
@@ -116,7 +109,7 @@ export async function logActivity(
 export async function maybeFireAgentTrigger(
   memberId: string,
   taskId: string,
-  conversationId: string,
+  conversationId: string | null,
   trigger: "task_assigned" | "task_comment",
 ): Promise<void> {
   const [m] = await db
@@ -130,21 +123,20 @@ export async function maybeFireAgentTrigger(
 
 // ───── list / get ─────
 
-export async function listTasks(conversationId: string, memberId: string) {
-  if (!(await assertConvMember(conversationId, memberId))) return { error: "not_a_member" as const };
+export async function listTasks(workspaceId: string) {
   const rows = await db
     .select()
     .from(tasks)
-    .where(and(eq(tasks.conversationId, conversationId), eq(tasks.archived, false)))
+    .where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.archived, false)))
     .orderBy(asc(tasks.status), asc(tasks.position), asc(tasks.createdAt));
   return { tasks: await hydrateTasks(rows) };
 }
 
-export async function getTaskDetail(taskId: string, memberId: string) {
+export async function getTaskDetail(taskId: string, workspaceId: string) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, memberId))) return { error: "not_a_member" as const };
-  const [hydrated] = await hydrateTasks([t]);
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
+  const [hydrated] = await hydrateTasks([t!]);
   const subs = await db
     .select()
     .from(tasks)
@@ -188,11 +180,12 @@ export async function getTaskDetail(taskId: string, memberId: string) {
 // ───── create / update / delete ─────
 
 export interface CreateTaskInput {
-  conversationId: string;
   title: string;
   bodyMd?: string;
   status?: Status;
   parentId?: string;
+  // Optional pointer back to the channel that spawned the task — not a scope.
+  conversationId?: string | null;
   sourceMessageId?: string;
   assignees?: string[];
   labels?: string[];
@@ -201,20 +194,9 @@ export interface CreateTaskInput {
 }
 
 export async function createTask(input: CreateTaskInput, creatorMemberId: string, workspaceId: string) {
-  if (!(await assertConvMember(input.conversationId, creatorMemberId))) {
-    return { error: "not_a_member" as const };
-  }
-  const [conv] = await db
-    .select({ id: conversations.id, kind: conversations.kind, workspaceId: conversations.workspaceId })
-    .from(conversations)
-    .where(eq(conversations.id, input.conversationId))
-    .limit(1);
-  if (!conv) return { error: "conversation_not_found" as const };
-  if (conv.workspaceId !== workspaceId) return { error: "wrong_workspace" as const };
-  if (conv.kind !== "channel") return { error: "dm_board_unsupported" as const };
   if (input.parentId) {
     const parent = await loadTask(input.parentId);
-    if (!parent || parent.conversationId !== input.conversationId)
+    if (!parent || parent.workspaceId !== workspaceId)
       return { error: "invalid_parent" as const };
   }
   const status: Status = input.status ?? "backlog";
@@ -223,13 +205,14 @@ export async function createTask(input: CreateTaskInput, creatorMemberId: string
     const [maxRow] = await db
       .select({ m: dsql<number>`coalesce(max(${tasks.position}), 0)`.as("m") })
       .from(tasks)
-      .where(and(eq(tasks.conversationId, input.conversationId), eq(tasks.status, status)));
+      .where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.status, status)));
     position = (Number(maxRow?.m) || 0) + 1;
   }
   const taskId = id("task");
   await db.insert(tasks).values({
     id: taskId,
-    conversationId: input.conversationId,
+    workspaceId,
+    conversationId: input.conversationId ?? null,
     parentId: input.parentId ?? null,
     title: input.title,
     bodyMd: input.bodyMd ?? "",
@@ -241,11 +224,22 @@ export async function createTask(input: CreateTaskInput, creatorMemberId: string
     sourceMessageId: input.sourceMessageId ?? null,
     archived: false,
   });
-  const assignees = Array.from(new Set(input.assignees ?? []));
-  if (assignees.length) {
+  // Validate assignees are in the same workspace before inserting.
+  const rawAssignees = Array.from(new Set(input.assignees ?? []));
+  const validAssignees = rawAssignees.length
+    ? (
+        await db
+          .select({ id: members.id })
+          .from(members)
+          .where(and(inArray(members.id, rawAssignees), eq(members.workspaceId, workspaceId)))
+      ).map((r) => r.id)
+    : [];
+  if (validAssignees.length) {
     await db
       .insert(taskAssignees)
-      .values(assignees.map((mid) => ({ taskId, memberId: mid, assignedBy: creatorMemberId })))
+      .values(
+        validAssignees.map((mid) => ({ taskId, memberId: mid, assignedBy: creatorMemberId })),
+      )
       .onConflictDoNothing();
   }
   const labels = Array.from(new Set((input.labels ?? []).map((l) => l.trim()).filter(Boolean)));
@@ -256,18 +250,18 @@ export async function createTask(input: CreateTaskInput, creatorMemberId: string
       .onConflictDoNothing();
   }
   await logActivity(taskId, creatorMemberId, "created");
-  if (assignees.length) {
-    await logActivity(taskId, creatorMemberId, "assigned", { members: assignees });
+  if (validAssignees.length) {
+    await logActivity(taskId, creatorMemberId, "assigned", { members: validAssignees });
   }
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
-  await publishToConversation(input.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.new",
-    conversationId: input.conversationId,
+    workspaceId,
     task: hydrated,
   });
-  for (const mid of assignees) {
-    await maybeFireAgentTrigger(mid, taskId, input.conversationId, "task_assigned");
+  for (const mid of validAssignees) {
+    await maybeFireAgentTrigger(mid, taskId, input.conversationId ?? null, "task_assigned");
   }
   return { task: hydrated };
 }
@@ -282,10 +276,10 @@ export interface UpdateTaskInput {
   archived?: boolean;
 }
 
-export async function updateTask(taskId: string, input: UpdateTaskInput, actorMemberId: string) {
+export async function updateTask(taskId: string, input: UpdateTaskInput, actorMemberId: string, workspaceId: string) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   const patch: Partial<typeof tasks.$inferInsert> = { updatedAt: new Date() };
   if (input.title !== undefined) patch.title = input.title;
   if (input.bodyMd !== undefined) patch.bodyMd = input.bodyMd;
@@ -295,30 +289,30 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
   if (input.progress !== undefined) patch.progress = input.progress;
   if (input.archived !== undefined) patch.archived = input.archived;
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
-  if (input.status !== undefined && input.status !== t.status) {
-    await logActivity(taskId, actorMemberId, "status_changed", { from: t.status, to: input.status });
+  if (input.status !== undefined && input.status !== t!.status) {
+    await logActivity(taskId, actorMemberId, "status_changed", { from: t!.status, to: input.status });
   }
-  if (input.title !== undefined && input.title !== t.title) {
-    await logActivity(taskId, actorMemberId, "renamed", { from: t.title, to: input.title });
+  if (input.title !== undefined && input.title !== t!.title) {
+    await logActivity(taskId, actorMemberId, "renamed", { from: t!.title, to: input.title });
   }
-  if (input.progress !== undefined && input.progress !== t.progress) {
+  if (input.progress !== undefined && input.progress !== t!.progress) {
     await logActivity(taskId, actorMemberId, "progress_changed", { to: input.progress });
   }
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.updated",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     task: hydrated,
   });
   return { task: hydrated };
 }
 
-export async function deleteTask(taskId: string, actorMemberId: string) {
+export async function deleteTask(taskId: string, workspaceId: string) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   const subIds = (
     await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, taskId))
   ).map((r) => r.id);
@@ -331,9 +325,9 @@ export async function deleteTask(taskId: string, actorMemberId: string) {
     .where(or(inArray(taskLinks.taskId, allIds), inArray(taskLinks.linkedTaskId, allIds)));
   await db.delete(taskActivity).where(inArray(taskActivity.taskId, allIds));
   await db.delete(tasks).where(inArray(tasks.id, allIds));
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.deleted",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
   });
   return { ok: true as const };
@@ -343,8 +337,8 @@ export async function deleteTask(taskId: string, actorMemberId: string) {
 
 export async function addAssignee(taskId: string, target: string, actorMemberId: string, workspaceId: string) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   const [tm] = await db
     .select({ workspaceId: members.workspaceId })
     .from(members)
@@ -358,52 +352,52 @@ export async function addAssignee(taskId: string, target: string, actorMemberId:
   await logActivity(taskId, actorMemberId, "assigned", { member: target });
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.assigned",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     memberId: target,
     assignedBy: actorMemberId,
   });
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.updated",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     task: hydrated,
   });
-  await maybeFireAgentTrigger(target, taskId, t.conversationId, "task_assigned");
+  await maybeFireAgentTrigger(target, taskId, t!.conversationId, "task_assigned");
   return { task: hydrated };
 }
 
-export async function removeAssignee(taskId: string, target: string, actorMemberId: string) {
+export async function removeAssignee(taskId: string, target: string, actorMemberId: string, workspaceId: string) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   await db
     .delete(taskAssignees)
     .where(and(eq(taskAssignees.taskId, taskId), eq(taskAssignees.memberId, target)));
   await logActivity(taskId, actorMemberId, "unassigned", { member: target });
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.unassigned",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     memberId: target,
   });
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.updated",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     task: hydrated,
   });
   return { task: hydrated };
 }
 
-export async function setLabels(taskId: string, labels: string[], actorMemberId: string) {
+export async function setLabels(taskId: string, labels: string[], actorMemberId: string, workspaceId: string) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   const next = Array.from(new Set(labels.map((l) => l.trim()).filter(Boolean)));
   await db.delete(taskLabels).where(eq(taskLabels.taskId, taskId));
   if (next.length) {
@@ -412,9 +406,9 @@ export async function setLabels(taskId: string, labels: string[], actorMemberId:
   await logActivity(taskId, actorMemberId, "labels_changed", { labels: next });
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.updated",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     task: hydrated,
   });
@@ -426,19 +420,14 @@ export async function addLink(
   linkedTaskId: string,
   kind: "relates" | "blocks" | "duplicate",
   actorMemberId: string,
+  workspaceId: string,
 ) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   if (linkedTaskId === taskId) return { error: "cannot_link_to_self" as const };
   const linked = await loadTask(linkedTaskId);
-  if (!linked) return { error: "linked_not_found" as const };
-  if (
-    linked.conversationId !== t.conversationId &&
-    !(await assertConvMember(linked.conversationId, actorMemberId))
-  ) {
-    return { error: "not_a_member_of_linked" as const };
-  }
+  if (!linked || linked.workspaceId !== workspaceId) return { error: "linked_not_found" as const };
   const linkId = id("tlnk");
   await db
     .insert(taskLinks)
@@ -453,26 +442,26 @@ export async function addLink(
   await logActivity(taskId, actorMemberId, "link_added", { linkedTaskId, kind });
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.updated",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     task: hydrated,
   });
   return { ok: true as const, linkId };
 }
 
-export async function removeLink(taskId: string, linkId: string, actorMemberId: string) {
+export async function removeLink(taskId: string, linkId: string, actorMemberId: string, workspaceId: string) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   await db.delete(taskLinks).where(and(eq(taskLinks.id, linkId), eq(taskLinks.taskId, taskId)));
   await logActivity(taskId, actorMemberId, "link_removed", { linkId });
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.updated",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     task: hydrated,
   });
@@ -484,10 +473,11 @@ export async function addComment(
   bodyMd: string,
   mentions: string[],
   actorMemberId: string,
+  workspaceId: string,
 ) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   const commentId = id("tcom");
   const cleanMentions = Array.from(new Set(mentions ?? []));
   await db.insert(taskComments).values({
@@ -499,9 +489,9 @@ export async function addComment(
   });
   await logActivity(taskId, actorMemberId, "comment", { commentId });
   const [row] = await db.select().from(taskComments).where(eq(taskComments.id, commentId));
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.comment.new",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     comment: row,
   });
@@ -512,15 +502,15 @@ export async function addComment(
   const wake = new Set<string>([...cleanMentions, ...assignees.map((a) => a.memberId)]);
   wake.delete(actorMemberId);
   for (const mid of wake) {
-    await maybeFireAgentTrigger(mid, taskId, t.conversationId, "task_comment");
+    await maybeFireAgentTrigger(mid, taskId, t!.conversationId, "task_comment");
   }
   return { comment: row };
 }
 
-export async function deleteComment(taskId: string, commentId: string, actorMemberId: string) {
+export async function deleteComment(taskId: string, commentId: string, actorMemberId: string, workspaceId: string) {
   const t = await loadTask(taskId);
-  if (!t) return { error: "not_found" as const };
-  if (!(await assertConvMember(t.conversationId, actorMemberId))) return { error: "not_a_member" as const };
+  const g = guard(t, workspaceId);
+  if (!g.ok) return { error: g.error! };
   const [c] = await db
     .select()
     .from(taskComments)
@@ -529,9 +519,9 @@ export async function deleteComment(taskId: string, commentId: string, actorMemb
   if (!c) return { error: "comment_not_found" as const };
   if (c.memberId !== actorMemberId) return { error: "not_author" as const };
   await db.update(taskComments).set({ deletedAt: new Date() }).where(eq(taskComments.id, commentId));
-  await publishToConversation(t.conversationId, {
+  await publishToWorkspace(workspaceId, {
     type: "task.comment.deleted",
-    conversationId: t.conversationId,
+    workspaceId,
     taskId,
     commentId,
   });

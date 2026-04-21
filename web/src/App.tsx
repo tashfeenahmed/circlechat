@@ -15,6 +15,7 @@ import OrgPage from "./pages/Org";
 import SkillsPage from "./pages/Skills";
 import AgentPage from "./pages/AgentDetail";
 import ApprovalsPage from "./pages/Approvals";
+import BoardPage from "./pages/Board";
 import SettingsPage from "./pages/Settings";
 import HomeRedirect from "./pages/HomeRedirect";
 
@@ -79,6 +80,7 @@ function Shell() {
         <Route path="/c/:id" element={<ChannelPage />} />
         <Route path="/d/:memberId" element={<DMPage />} />
         <Route path="/members" element={<MembersPage />} />
+        <Route path="/board" element={<BoardPage />} />
         <Route path="/files" element={<FilesPage />} />
         <Route path="/org" element={<OrgPage />} />
         <Route path="/skills" element={<SkillsPage />} />

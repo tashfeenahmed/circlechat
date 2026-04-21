@@ -21,11 +21,9 @@ const ALL_STATUSES: TaskStatus[] = ["backlog", "in_progress", "review", "done"];
 
 export default function TaskModal({
   taskId,
-  conversationId,
   onClose,
 }: {
   taskId: string;
-  conversationId: string;
   onClose: () => void;
 }) {
   const q = useTaskDetail(taskId);
@@ -92,7 +90,7 @@ export default function TaskModal({
     if (!detail?.task) return;
     await api.patch(`/tasks/${taskId}`, patch);
     qc.invalidateQueries({ queryKey: ["task", taskId] });
-    qc.invalidateQueries({ queryKey: ["tasks", conversationId] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
   }
 
   async function saveTitle() {
@@ -135,13 +133,12 @@ export default function TaskModal({
     setBusy(true);
     try {
       await api.post("/tasks", {
-        conversationId,
         title,
         parentId: taskId,
       });
       setSubDraft("");
       qc.invalidateQueries({ queryKey: ["task", taskId] });
-      qc.invalidateQueries({ queryKey: ["tasks", conversationId] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
     } catch (e) {
       alert(`Subtask failed: ${(e as Error).message}`);
     } finally {
@@ -154,7 +151,7 @@ export default function TaskModal({
       status: sub.status === "done" ? "backlog" : "done",
     });
     qc.invalidateQueries({ queryKey: ["task", taskId] });
-    qc.invalidateQueries({ queryKey: ["tasks", conversationId] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
   }
 
   async function addLink() {
@@ -184,14 +181,14 @@ export default function TaskModal({
     await api.put(`/tasks/${taskId}/labels`, { labels: next });
     setLabelDraft("");
     qc.invalidateQueries({ queryKey: ["task", taskId] });
-    qc.invalidateQueries({ queryKey: ["tasks", conversationId] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
   }
   async function removeLabel(label: string) {
     if (!detail?.task) return;
     const next = (detail.task.labels ?? []).filter((l) => l !== label);
     await api.put(`/tasks/${taskId}/labels`, { labels: next });
     qc.invalidateQueries({ queryKey: ["task", taskId] });
-    qc.invalidateQueries({ queryKey: ["tasks", conversationId] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
   }
 
   async function addAssignee(memberId: string) {
@@ -199,19 +196,19 @@ export default function TaskModal({
     setAssignPickerOpen(false);
     setAssignFilter("");
     qc.invalidateQueries({ queryKey: ["task", taskId] });
-    qc.invalidateQueries({ queryKey: ["tasks", conversationId] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
   }
   async function removeAssignee(memberId: string) {
     await api.del(`/tasks/${taskId}/assignees/${memberId}`);
     qc.invalidateQueries({ queryKey: ["task", taskId] });
-    qc.invalidateQueries({ queryKey: ["tasks", conversationId] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
   }
 
   async function deleteTask() {
     if (!detail?.task) return;
     if (!confirm(`Delete "${detail.task.title}"? All subtasks, comments, and links will be removed.`)) return;
     await api.del(`/tasks/${taskId}`);
-    qc.invalidateQueries({ queryKey: ["tasks", conversationId] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
     onClose();
   }
 

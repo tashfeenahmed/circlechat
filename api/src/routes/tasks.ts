@@ -1,8 +1,8 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { and, eq, inArray, asc } from "drizzle-orm";
+import { and, eq, asc } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { tasks, taskAssignees, conversationMembers } from "../db/schema.js";
+import { tasks, taskAssignees } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import {
   STATUSES,
@@ -22,11 +22,11 @@ import {
 } from "../lib/tasks-core.js";
 
 const CreateBody = z.object({
-  conversationId: z.string().min(1),
   title: z.string().min(1).max(200),
   bodyMd: z.string().max(20000).optional(),
   status: z.enum(STATUSES).optional(),
   parentId: z.string().optional(),
+  conversationId: z.string().nullable().optional(),
   sourceMessageId: z.string().optional(),
   assignees: z.array(z.string()).optional(),
   labels: z.array(z.string().max(40)).optional(),
@@ -56,18 +56,14 @@ const CommentBody = z.object({
 });
 
 const ERR_CODE: Record<string, number> = {
-  not_a_member: 403,
+  wrong_workspace: 403,
   not_found: 404,
   not_author: 403,
   comment_not_found: 404,
-  conversation_not_found: 404,
-  dm_board_unsupported: 400,
   invalid_parent: 400,
   invalid_assignee: 400,
-  wrong_workspace: 403,
   cannot_link_to_self: 400,
   linked_not_found: 400,
-  not_a_member_of_linked: 403,
 };
 
 function send(reply: import("fastify").FastifyReply, result: { error?: string; [k: string]: unknown }) {
@@ -78,10 +74,8 @@ function send(reply: import("fastify").FastifyReply, result: { error?: string; [
 export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireWorkspace);
 
-  app.get("/conversations/:id/tasks", async (req, reply) => {
-    const convId = (req.params as { id: string }).id;
-    const r = await listTasks(convId, req.auth!.memberId!);
-    return send(reply, r);
+  app.get("/tasks", async (req) => {
+    return await listTasks(req.auth!.workspaceId!);
   });
 
   app.post("/tasks", async (req, reply) => {
@@ -92,20 +86,20 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/tasks/:id", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
-    const r = await getTaskDetail(taskId, req.auth!.memberId!);
+    const r = await getTaskDetail(taskId, req.auth!.workspaceId!);
     return send(reply, r);
   });
 
   app.patch("/tasks/:id", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
     const body = UpdateBody.parse(req.body);
-    const r = await updateTask(taskId, body, req.auth!.memberId!);
+    const r = await updateTask(taskId, body, req.auth!.memberId!, req.auth!.workspaceId!);
     return send(reply, r);
   });
 
   app.delete("/tasks/:id", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
-    const r = await deleteTask(taskId, req.auth!.memberId!);
+    const r = await deleteTask(taskId, req.auth!.workspaceId!);
     return send(reply, r);
   });
 
@@ -119,55 +113,60 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
   app.delete("/tasks/:id/assignees/:memberId", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
     const target = (req.params as { memberId: string }).memberId;
-    const r = await removeAssignee(taskId, target, req.auth!.memberId!);
+    const r = await removeAssignee(taskId, target, req.auth!.memberId!, req.auth!.workspaceId!);
     return send(reply, r);
   });
 
   app.put("/tasks/:id/labels", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
     const body = LabelsBody.parse(req.body);
-    const r = await setLabels(taskId, body.labels, req.auth!.memberId!);
+    const r = await setLabels(taskId, body.labels, req.auth!.memberId!, req.auth!.workspaceId!);
     return send(reply, r);
   });
 
   app.post("/tasks/:id/links", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
     const body = LinkBody.parse(req.body);
-    const r = await addLink(taskId, body.linkedTaskId, body.kind ?? "relates", req.auth!.memberId!);
+    const r = await addLink(
+      taskId,
+      body.linkedTaskId,
+      body.kind ?? "relates",
+      req.auth!.memberId!,
+      req.auth!.workspaceId!,
+    );
     return send(reply, r);
   });
 
   app.delete("/tasks/:id/links/:linkId", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
     const linkId = (req.params as { linkId: string }).linkId;
-    const r = await removeLink(taskId, linkId, req.auth!.memberId!);
+    const r = await removeLink(taskId, linkId, req.auth!.memberId!, req.auth!.workspaceId!);
     return send(reply, r);
   });
 
   app.post("/tasks/:id/comments", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
     const body = CommentBody.parse(req.body);
-    const r = await addComment(taskId, body.bodyMd, body.mentions ?? [], req.auth!.memberId!);
+    const r = await addComment(
+      taskId,
+      body.bodyMd,
+      body.mentions ?? [],
+      req.auth!.memberId!,
+      req.auth!.workspaceId!,
+    );
     return send(reply, r);
   });
 
   app.delete("/tasks/:id/comments/:commentId", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
     const commentId = (req.params as { commentId: string }).commentId;
-    const r = await deleteComment(taskId, commentId, req.auth!.memberId!);
+    const r = await deleteComment(taskId, commentId, req.auth!.memberId!, req.auth!.workspaceId!);
     return send(reply, r);
   });
 
-  // Helper for UI: all tasks assigned to a member (across channels the caller shares).
+  // Helper for UI: all tasks assigned to the caller in their current workspace.
   app.get("/my-tasks", async (req) => {
-    const { memberId } = req.auth!;
-    const convs = (
-      await db
-        .select({ id: conversationMembers.conversationId })
-        .from(conversationMembers)
-        .where(eq(conversationMembers.memberId, memberId!))
-    ).map((r) => r.id);
-    if (!convs.length) return { tasks: [] };
+    const { memberId, workspaceId } = req.auth!;
     const rows = await db
       .select()
       .from(tasks)
@@ -175,7 +174,7 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
       .where(
         and(
           eq(taskAssignees.memberId, memberId!),
-          inArray(tasks.conversationId, convs),
+          eq(tasks.workspaceId, workspaceId!),
           eq(tasks.archived, false),
         ),
       )

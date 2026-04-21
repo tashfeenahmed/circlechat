@@ -278,7 +278,7 @@ function buildPrompt(entry, packet) {
               : packet.trigger === "ambient"
                 ? `Ambient window — the channel's been quiet and the team wants to keep it feeling alive. You're allowed (not required) to post a short, in-character contribution: continue the last thread of thought, ask a specific colleague something in your role's lane (@-mention them), share what you're working on, or react to a recent message. ONE message only, 1–2 sentences, no fake enthusiasm. If you genuinely have nothing to add right now, respond with exactly "HEARTBEAT_OK" — don't post filler.`
                 : packet.trigger === "task_assigned"
-                  ? `You were assigned a task on the ${packet.task?.conversationName ? "#" + packet.task.conversationName : "channel"} board. Task details are below in the TASK block. Decide what to do: if you can get started now, move it to in_progress via the task API and post a short (1–2 sentence) note in the channel telling the team you've picked it up. If the scope is unclear, add a comment on the task with your clarifying question rather than starting work. If this isn't in your lane, add a comment saying so and unassign yourself. Don't write a reply in the channel just to say "got it" — the activity log already shows the assignment. Return "HEARTBEAT_OK" if you acknowledged via the task itself.`
+                  ? `You were assigned a task on the workspace board. Task details are below in the TASK block. Decide what to do: if you can get started now, move it to in_progress via the task API and optionally comment on the task to tell the team you've picked it up. If the scope is unclear, add a comment with your clarifying question rather than starting work. If this isn't in your lane, add a comment saying so and unassign yourself. Don't post in the channel just to say "got it" — the activity log already shows the assignment. Return "HEARTBEAT_OK" if you acknowledged via the task itself.`
                   : packet.trigger === "task_comment"
                     ? `A new comment landed on a task you're involved with. Read the recent comments in the TASK block. Reply by adding a comment on the task (POST /agent-api/tasks/<id>/comments), not by posting in the channel. If the comment is a question for you, answer concretely. If it's an ack or thanks, respond with "HEARTBEAT_OK" — silence is fine on the task thread too.`
                     : `Trigger: ${packet.trigger}.`;
@@ -303,9 +303,9 @@ function buildPrompt(entry, packet) {
     `  — GET /agent-api/search?q=<text>&limit=20[&conversationId=<id>]`,
     `  — GET /agent-api/members`,
     `  — POST /agent-api/react  body:{"messageId":"<id>","emoji":"🙏"} — use this instead of replying for acks, thanks, agreement, celebration`,
-    `  — GET  /agent-api/tasks?conversationId=<id>          — list tasks on a channel's board`,
+    `  — GET  /agent-api/tasks                              — list all tasks on the workspace board`,
     `  — GET  /agent-api/tasks/<id>                         — full task + subtasks + links + comments`,
-    `  — POST /agent-api/tasks  body:{"conversationId":"<id>","title":"…","bodyMd":"…","status":"backlog","parentId":"<task id for subtask>","assignees":["<memberId>"],"labels":["eng"]}`,
+    `  — POST /agent-api/tasks  body:{"title":"…","bodyMd":"…","status":"backlog","parentId":"<task id for subtask>","conversationId":"<optional channel>","assignees":["<memberId>"],"labels":["eng"]}`,
     `  — PATCH /agent-api/tasks/<id>  body:{"status":"in_progress","progress":50,"title":"…","bodyMd":"…","dueAt":"2026-05-01T00:00:00Z","archived":true}`,
     `  — POST /agent-api/tasks/<id>/assignees  body:{"memberId":"<id>"}   (DELETE /assignees/<memberId> to unassign)`,
     `  — PUT  /agent-api/tasks/<id>/labels  body:{"labels":["eng","urgent"]}   (replaces the whole set)`,
@@ -330,11 +330,13 @@ function buildPrompt(entry, packet) {
     const commentsLine = (t.recentComments || []).length
       ? `\nRecent comments:\n${t.recentComments.map((c) => `  @${c.memberHandle}: ${String(c.bodyMd).slice(0, 200)}`).join("\n")}`
       : "";
+    const sourceLine = t.conversationName ? `From channel: #${t.conversationName}` : null;
     taskBlock = [
       ``,
       `TASK (id ${t.id}) — status: ${t.status}${t.progress ? ` · progress ${t.progress}%` : ""}${t.dueAt ? ` · due ${t.dueAt.slice(0, 10)}` : ""}`,
       `Title: ${t.title}`,
       t.bodyMd ? `Description: ${t.bodyMd}` : null,
+      sourceLine,
       t.labels?.length ? `Labels: ${t.labels.join(", ")}` : null,
       assignLine,
       subsLine ? subsLine.trimStart() : null,

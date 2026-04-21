@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
-import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert } from "lucide-react";
+import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid } from "lucide-react";
 import { useConversations, useMe, useMembersDirectory, useApprovals } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
@@ -77,22 +77,13 @@ export default function Sidebar() {
 
       <div className="sb-group">
         <Link
-          to="/org"
-          className={`sb-item ${location.pathname === "/org" ? "active" : ""}`}
+          to="/board"
+          className={`sb-item ${location.pathname === "/board" ? "active" : ""}`}
         >
           <span className="sb-glyph">
-            <Network size={14} strokeWidth={2} />
+            <LayoutGrid size={14} strokeWidth={2} />
           </span>
-          <span className="sb-name">Org chart</span>
-        </Link>
-        <Link
-          to="/skills"
-          className={`sb-item ${location.pathname.startsWith("/skills") ? "active" : ""}`}
-        >
-          <span className="sb-glyph">
-            <BookOpen size={14} strokeWidth={2} />
-          </span>
-          <span className="sb-name">Skills</span>
+          <span className="sb-name">Board</span>
         </Link>
         <Link
           to="/files"
@@ -114,6 +105,24 @@ export default function Sidebar() {
           {pendingApprovals > 0 && (
             <span className="sb-badge mention">{pendingApprovals}</span>
           )}
+        </Link>
+        <Link
+          to="/skills"
+          className={`sb-item ${location.pathname.startsWith("/skills") ? "active" : ""}`}
+        >
+          <span className="sb-glyph">
+            <BookOpen size={14} strokeWidth={2} />
+          </span>
+          <span className="sb-name">Skills</span>
+        </Link>
+        <Link
+          to="/org"
+          className={`sb-item ${location.pathname === "/org" ? "active" : ""}`}
+        >
+          <span className="sb-glyph">
+            <Network size={14} strokeWidth={2} />
+          </span>
+          <span className="sb-name">Org chart</span>
         </Link>
       </div>
 

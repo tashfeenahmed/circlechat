@@ -92,7 +92,7 @@ export interface ContextPacket {
   reporting: ReportingBundle;
   task?: {
     id: string;
-    conversationId: string;
+    conversationId: string | null;
     conversationName: string | null;
     title: string;
     bodyMd: string;
@@ -384,11 +384,13 @@ export async function buildContext(opts: {
   if (opts.taskId) {
     const [t] = await db.select().from(tasks).where(eq(tasks.id, opts.taskId)).limit(1);
     if (t) {
-      const [conv] = await db
-        .select({ name: conversations.name })
-        .from(conversations)
-        .where(eq(conversations.id, t.conversationId))
-        .limit(1);
+      const [conv] = t.conversationId
+        ? await db
+            .select({ name: conversations.name })
+            .from(conversations)
+            .where(eq(conversations.id, t.conversationId))
+            .limit(1)
+        : [];
       const as = await db
         .select({ memberId: taskAssignees.memberId })
         .from(taskAssignees)

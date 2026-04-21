@@ -213,15 +213,9 @@ const TOOLS = [
   {
     name: "list_tasks",
     description:
-      "List tasks on a channel's board. Every channel has a board — pass that channel's conversationId.",
-    inputSchema: {
-      type: "object",
-      properties: { conversationId: { type: "string" } },
-      required: ["conversationId"],
-      additionalProperties: false,
-    },
-    run: ({ conversationId }) =>
-      apiGet(`/agent-api/tasks?conversationId=${encodeURIComponent(conversationId)}`),
+      "List every task on your workspace's board (there's one board per workspace).",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    run: () => apiGet("/agent-api/tasks"),
   },
   {
     name: "get_task",
@@ -237,20 +231,20 @@ const TOOLS = [
   {
     name: "create_task",
     description:
-      "Create a new task on a channel's board. Pass parentId to make it a subtask. Assignees are memberIds (use list_members to resolve). Status defaults to backlog.",
+      "Create a new task on the workspace board. Pass parentId to make it a subtask. Assignees are memberIds (use list_members to resolve). conversationId is optional — set it to link the task back to the channel it came from.",
     inputSchema: {
       type: "object",
       properties: {
-        conversationId: { type: "string" },
         title: { type: "string", minLength: 1, maxLength: 200 },
         bodyMd: { type: "string" },
         status: { type: "string", enum: ["backlog", "in_progress", "review", "done"] },
         parentId: { type: "string" },
+        conversationId: { type: "string", description: "Optional: channel the task came from" },
         assignees: { type: "array", items: { type: "string" } },
         labels: { type: "array", items: { type: "string" } },
         dueAt: { type: "string", description: "ISO 8601 timestamp" },
       },
-      required: ["conversationId", "title"],
+      required: ["title"],
       additionalProperties: false,
     },
     run: (a) => apiPost("/agent-api/tasks", a),

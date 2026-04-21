@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { agentRuns, agents, conversationMembers } from "../db/schema.js";
 import { COOKIE_NAME, loadSession } from "../auth/session.js";
 import { subscribe, unsubscribeAll } from "./bus.js";
-import { CONV_CHANNEL, USER_CHANNEL, GLOBAL_CHANNEL, publishGlobal } from "../lib/events.js";
+import { CONV_CHANNEL, WORKSPACE_CHANNEL, USER_CHANNEL, GLOBAL_CHANNEL, publishGlobal } from "../lib/events.js";
 
 export default async function eventsWs(app: FastifyInstance): Promise<void> {
   app.get(
@@ -37,6 +37,7 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
 
       await subscribe(socket, USER_CHANNEL(memberId));
       await subscribe(socket, GLOBAL_CHANNEL);
+      if (s.workspaceId) await subscribe(socket, WORKSPACE_CHANNEL(s.workspaceId));
       for (const c of myConvs) await subscribe(socket, CONV_CHANNEL(c.id));
 
       socket.send(

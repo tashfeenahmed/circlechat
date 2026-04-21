@@ -270,12 +270,15 @@ export const presence = pgTable("presence", {
   lastSeen: timestamp("last_seen", { withTimezone: true }).defaultNow().notNull(),
 });
 
-// ───────────────── tasks (channel-scoped kanban boards) ─────────────────
+// ───────────────── tasks (workspace-scoped kanban board) ─────────────────
 export const tasks = pgTable(
   "tasks",
   {
     id: varchar("id", { length: 32 }).primaryKey(),
-    conversationId: varchar("conversation_id", { length: 32 }).notNull(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    // Optional pointer back to the channel the task was spawned from — used
+    // for "came from #eng" context on the card. Not a scope.
+    conversationId: varchar("conversation_id", { length: 32 }),
     parentId: varchar("parent_id", { length: 32 }),
     title: varchar("title", { length: 200 }).notNull(),
     bodyMd: text("body_md").notNull().default(""),
@@ -290,9 +293,10 @@ export const tasks = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
+    wsIdx: index("tasks_ws_idx").on(t.workspaceId, t.archived),
     convIdx: index("tasks_conv_idx").on(t.conversationId, t.archived),
     parentIdx: index("tasks_parent_idx").on(t.parentId),
-    statusPosIdx: index("tasks_status_pos_idx").on(t.conversationId, t.status, t.position),
+    statusPosIdx: index("tasks_status_pos_idx").on(t.workspaceId, t.status, t.position),
   }),
 );
 

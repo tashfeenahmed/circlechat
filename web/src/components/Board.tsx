@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTasks, useMembersDirectory, useMe } from "../lib/hooks";
 import { api, type Task, type TaskStatus } from "../api/client";
@@ -13,8 +13,8 @@ const COLUMNS: Array<{ id: TaskStatus; title: string; glyph: string }> = [
   { id: "done", title: "Done", glyph: "✓" },
 ];
 
-export default function Board({ conversationId }: { conversationId: string }) {
-  const q = useTasks(conversationId);
+export default function Board() {
+  const q = useTasks();
   const qc = useQueryClient();
   const me = useMe();
   const dir = useMembersDirectory();
@@ -44,7 +44,6 @@ export default function Board({ conversationId }: { conversationId: string }) {
     setBusy(true);
     try {
       await api.post<{ task: Task }>("/tasks", {
-        conversationId,
         title,
         status: col,
         assignees: me.data?.memberId ? [me.data.memberId] : [],
@@ -59,7 +58,6 @@ export default function Board({ conversationId }: { conversationId: string }) {
   }
 
   async function moveTask(taskId: string, toCol: TaskStatus, beforeId?: string | null) {
-    // Pick a position: if beforeId, half-between prev and that; else end of column + 1.
     const dest = byCol(toCol);
     const targetIdx = beforeId ? dest.findIndex((t) => t.id === beforeId) : dest.length;
     const prev = targetIdx > 0 ? dest[targetIdx - 1] : undefined;
@@ -70,8 +68,7 @@ export default function Board({ conversationId }: { conversationId: string }) {
     else if (!prev && next) position = next.position - 1;
     else position = (prev!.position + next!.position) / 2;
 
-    // Optimistic update
-    qc.setQueryData<{ tasks: Task[] }>(["tasks", conversationId], (old) =>
+    qc.setQueryData<{ tasks: Task[] }>(["tasks"], (old) =>
       old
         ? {
             tasks: old.tasks.map((t) =>
@@ -121,7 +118,6 @@ export default function Board({ conversationId }: { conversationId: string }) {
                 if (!id) return;
                 dragIdRef.current = null;
                 setDragId(null);
-                // If dropped onto empty area (not on a card), goes to the end.
                 if (!(e.target as HTMLElement).closest(".kcard")) {
                   moveTask(id, col.id, null);
                 }
@@ -191,9 +187,7 @@ export default function Board({ conversationId }: { conversationId: string }) {
                       setDragId(null);
                       setHoverCol(null);
                     }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                    }}
+                    onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -267,11 +261,7 @@ export default function Board({ conversationId }: { conversationId: string }) {
         })}
       </div>
       {openTaskId && (
-        <TaskModal
-          taskId={openTaskId}
-          conversationId={conversationId}
-          onClose={() => setOpenTaskId(null)}
-        />
+        <TaskModal taskId={openTaskId} onClose={() => setOpenTaskId(null)} />
       )}
     </div>
   );
