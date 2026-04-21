@@ -3,6 +3,7 @@ import { Paperclip, MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
 import Avatar from "./Avatar";
 import MemberHoverCard from "./MemberHoverCard";
+import Tooltip from "./Tooltip";
 import { renderMarkdown } from "../lib/md";
 import { api, type Message } from "../api/client";
 
@@ -158,18 +159,26 @@ export default function MessageRow({
                 const m = dir[mid] as { name?: string; handle?: string } | undefined;
                 return m?.name ?? m?.handle ?? mid.slice(0, 6);
               });
-              const title = `${emoji} · ${names.join(", ")}`;
+              const verb = mids.length === 1 ? "reacted with" : "reacted with";
+              const tip = (
+                <div className="tt-reactors">
+                  <div className="tt-emoji">{emoji}</div>
+                  <div>
+                    <strong>{formatList(names)}</strong> {verb} {emoji}
+                  </div>
+                </div>
+              );
               return (
-                <button
-                  key={emoji}
-                  className={`rx ${meMemberId && mids.includes(meMemberId) ? "me" : ""}`}
-                  onClick={() => onReact(emoji)}
-                  title={title}
-                  aria-label={title}
-                >
-                  <span>{emoji}</span>
-                  <span className="text-[11px]">{mids.length}</span>
-                </button>
+                <Tooltip key={emoji} content={tip}>
+                  <button
+                    className={`rx ${meMemberId && mids.includes(meMemberId) ? "me" : ""}`}
+                    onClick={() => onReact(emoji)}
+                    aria-label={`${emoji} reacted by ${names.join(", ")}`}
+                  >
+                    <span>{emoji}</span>
+                    <span className="text-[11px]">{mids.length}</span>
+                  </button>
+                </Tooltip>
               );
             })}
           </div>
@@ -223,4 +232,10 @@ function isAgentHandle(handle: string, dir: Record<string, unknown>): boolean {
     if (mm.handle === handle && mm.kind === "agent") return true;
   }
   return false;
+}
+
+function formatList(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
