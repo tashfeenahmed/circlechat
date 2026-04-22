@@ -59,9 +59,9 @@ function reconcile() {
   }
 }
 
-function buildHermesSpawn(hermesHome, hermesArgs) {
+function buildHermesSpawn(hermesHome, hermesArgs, envExtras = {}) {
   if (HERMES_RUNTIME === "host") {
-    const env = { ...process.env };
+    const env = { ...process.env, ...envExtras };
     if (hermesHome) env.HERMES_HOME = hermesHome;
     return { cmd: "hermes", args: hermesArgs, env };
   }
@@ -69,6 +69,14 @@ function buildHermesSpawn(hermesHome, hermesArgs) {
   // use the default entrypoint so config.yaml / .env / SOUL.md get bootstrapped
   // the first time. The entrypoint also prints skills_sync progress to stdout
   // on every invocation, which extractReply() filters out below.
+  //
+  // `-e` flags forward the agent's bot token + API base into the container so
+  // its terminal / Python snippets can call back into /agent-api/* without
+  // hard-coding secrets. See the `browser/agent-browser` skill for usage.
+  const envArgs = [];
+  for (const [k, v] of Object.entries(envExtras)) {
+    if (v !== undefined && v !== null) envArgs.push("-e", `${k}=${v}`);
+  }
   const dockerArgs = [
     "run",
     "--rm",
@@ -76,16 +84,21 @@ function buildHermesSpawn(hermesHome, hermesArgs) {
     "--network=host",
     "-v",
     `${hermesHome}:${CONTAINER_HERMES_HOME}`,
+    ...envArgs,
     HERMES_IMAGE,
     ...hermesArgs,
   ];
   return { cmd: "docker", args: dockerArgs, env: process.env };
 }
 
-function callHermes(prompt, hermesHome) {
+function callHermes(prompt, hermesHome, token) {
   return new Promise((resolve, reject) => {
     const hermesArgs = ["chat", "-q", prompt, "-Q", "--yolo", "--source", "circlechat"];
-    const spec = buildHermesSpawn(hermesHome, hermesArgs);
+    const envExtras = {
+      CC_API_BASE: API_BASE,
+      CC_BOT_TOKEN: token,
+    };
+    const spec = buildHermesSpawn(hermesHome, hermesArgs, envExtras);
     const p = spawn(spec.cmd, spec.args, { timeout: HERMES_TIMEOUT * 1000, env: spec.env });
     let out = "",
       err = "";
@@ -102,7 +115,7 @@ function callHermes(prompt, hermesHome) {
 // One-shot openclaw invocation against a container-local agent. Uses
 // `openclaw agent --local --agent main` — the `main` agent is always
 // present in a freshly onboarded state dir.
-function callOpenClaw(prompt, openclawHome) {
+function callOpenClaw(prompt, openclawHome, token) {
   return new Promise((resolve, reject) => {
     const args = [
       "run",
@@ -113,6 +126,10 @@ function callOpenClaw(prompt, openclawHome) {
       "--network=host",
       "-v",
       `${openclawHome}:${CONTAINER_OPENCLAW_HOME}`,
+      "-e",
+      `CC_API_BASE=${API_BASE}`,
+      "-e",
+      `CC_BOT_TOKEN=${token}`,
       "--entrypoint",
       "openclaw",
       OPENCLAW_IMAGE,
@@ -489,9 +506,11 @@ function buildPrompt(entry, packet) {
     `Emit as many actions as needed in one block. If a user asks for 5 tasks, create 5 create_task entries.`,
     `If your only job this turn is to do actions (no chat reply needed), leave your prose body empty — the actions still run and no "thinking" message posts. Otherwise write a short reply naming the concrete outcomes (e.g. "Created task_xyz, assigned to @ada").`,
     ``,
-    `TOOLS (read-only context lookups via your terminal skill — curl + jq, when you need older context not already in the packet):`,
-    `  CircleChat API base: ${API_BASE}`,
-    `  Auth header:         Authorization: Bearer ${entry.token}`,
+    `TOOLS (read-only context lookups via your terminal skill — use when you need older context not already in the packet):`,
+    `  Your container exposes CC_API_BASE=${API_BASE} and CC_BOT_TOKEN=<your bot token> as env vars — read from those, never hardcode.`,
+    entry.kind === "openclaw" || typeof entry.openclawHome === "string"
+      ? `  You have \`curl\` available. Example: curl -s -H "Authorization: Bearer $CC_BOT_TOKEN" "$CC_API_BASE/agent-api/tasks"`
+      : `  Your container has python3 but no curl. Use urllib:\n    python3 -c 'import os,urllib.request as u;r=u.Request(f"{os.environ[\\"CC_API_BASE\\"]}/agent-api/tasks",headers={"Authorization":f"Bearer {os.environ[\\"CC_BOT_TOKEN\\"]}"});print(u.urlopen(r).read().decode())'`,
     `  — GET /agent-api/conversations`,
     `  — GET /agent-api/messages?conversationId=<id>&limit=50&before=<iso>&parentId=<id>`,
     `  — GET /agent-api/thread?messageId=<id>`,
@@ -614,8 +633,8 @@ function connect(entry) {
     try {
       const isOpenClaw = entry.kind === "openclaw" || typeof entry.openclawHome === "string";
       const { stdout, stderr } = isOpenClaw
-        ? await callOpenClaw(prompt, entry.openclawHome)
-        : await callHermes(prompt, entry.hermesHome);
+        ? await callOpenClaw(prompt, entry.openclawHome, entry.token)
+        : await callHermes(prompt, entry.hermesHome, entry.token);
       const rawText = isOpenClaw
         ? (extractOpenClawReply(stdout) || extractOpenClawReply(stderr) || "(empty reply)")
         : (extractReply(stdout) || extractReply(stderr) || "(empty reply)");
