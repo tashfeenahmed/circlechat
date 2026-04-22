@@ -23,9 +23,18 @@ export default function MessageList({ messages, meMemberId, onOpenThread, inThre
   });
 
   const prevCount = useRef(0);
+  const didInitialScroll = useRef(false);
   useEffect(() => {
     if (!parentRef.current) return;
     const el = parentRef.current;
+    // First time we have messages after mount, jump to the latest unconditionally
+    // — opening a channel should land you at "now", not the top of history.
+    if (!didInitialScroll.current && visible.length > 0) {
+      virtualizer.scrollToIndex(visible.length - 1, { align: "end" });
+      didInitialScroll.current = true;
+      prevCount.current = visible.length;
+      return;
+    }
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     const grew = visible.length > prevCount.current;
     const latest = visible[visible.length - 1];

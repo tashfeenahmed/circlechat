@@ -345,6 +345,16 @@ function buildPrompt(entry, packet) {
   const colleaguesLine = colleagues.length
     ? `\nYour agent colleagues (you may @-mention to loop them in when relevant): ${colleagues.join(", ")}`
     : "";
+  // Member IDs for the people in this conversation. The task API takes
+  // memberIds (not handles) for assignees, so surface them here so the agent
+  // doesn't have to round-trip through GET /agent-api/members first.
+  const memberIdLines = Object.values(packet.members || {})
+    .filter((m) => m.memberId)
+    .map((m) => `  ${m.memberId} — @${m.handle} (${m.name}${m.kind === "agent" ? ", agent" : ""}${m.isMe ? ", you" : ""})`)
+    .slice(0, 30);
+  const memberIdBlock = memberIdLines.length
+    ? `\nMember IDs (use these when calling task/assignee APIs):\n${memberIdLines.join("\n")}`
+    : "";
 
   // Reporting / org-chart context: who the agent reports to, who reports to
   // them, and peers under the same manager. Helps route questions up, down,
@@ -446,7 +456,9 @@ function buildPrompt(entry, packet) {
     `  — POST /agent-api/uploads   (multipart file upload; returns {key,name,contentType,size,url})`,
     `If a user attaches a file, the attachment line shows the URL — you can curl it directly with your Bearer header.`,
     `To send a file back: (1) upload with curl -s -X POST -H "Authorization: Bearer <token>" -F file=@/path ${API_BASE}/agent-api/uploads — this returns JSON {key,name,contentType,size,url}. (2) End your reply with an <attachments> block containing a JSON array of one or more of these descriptors, e.g.: <attachments>[{"key":"u/ab12/foo.pdf","name":"foo.pdf","contentType":"application/pdf","size":12345,"url":"/files/u/ab12/foo.pdf"}]</attachments>. The block will be stripped from your message body before it posts.`,
-    `Only call a tool if you genuinely need older context. Don't mention the tool in your final reply.`,
+    ``,
+    `IMPORTANT — these tools are how you DO things, not just look things up. If a message asks you (or your team) to create tasks, assign work, comment on a task, react with an emoji, or anything else listed above, you MUST call the matching POST/PATCH endpoint via your terminal skill BEFORE writing your final chat reply. Do not write "I'll create the tasks" or "I'll assign this" without actually calling the API in the same turn — that's a broken promise. After the API calls succeed, then write a short reply naming the task IDs (or other concrete outcomes) you produced. If a colleague should own the work, create the task and assign it to their memberId from the list above. Only skip the tools when the user is just chatting and hasn't asked for an action.`,
+    `Don't mention the tool itself in your final reply — name the outcome (e.g. "Created task_xyz, assigned to @ada").`,
   ].join("\n");
 
   let taskBlock = "";
@@ -480,7 +492,7 @@ function buildPrompt(entry, packet) {
   return [
     identity,
     ``,
-    `You are currently in ${convLabel}.${topicLine}${othersLine}${colleaguesLine}${reportingLine}`,
+    `You are currently in ${convLabel}.${topicLine}${othersLine}${colleaguesLine}${reportingLine}${memberIdBlock}`,
     threadBlock,
     taskBlock,
     ``,

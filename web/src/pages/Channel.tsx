@@ -138,6 +138,7 @@ export default function ChannelPage() {
         </header>
 
         <MessageList
+          key={id}
           messages={msgs.data?.messages ?? []}
           meMemberId={me.data?.memberId ?? undefined}
           onOpenThread={(mid) => openThread(id, mid)}

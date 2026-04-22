@@ -15,8 +15,15 @@ export type GuardResult =
   | { ok: false; reason: string };
 
 const HEARTBEAT_RE = /^\s*HEARTBEAT_OK\s*$/;
-const TOOL_USE_RE = /<\/?tool_use>|<function_calls>|<invoke name=/i;
-const FN_CALL_BLOCK_RE = /```\s*(json|tool|function_call)?\s*\n\s*\{[^`]{0,2000}"(?:tool|name|arguments|parameters)"/i;
+// XML-ish tool-call markup. Match opening AND closing variants of all three
+// tag families — Hermes / OpenClaw sometimes emit only the closing `</invoke>`
+// at the tail of a botched JSON tool call.
+const TOOL_USE_RE = /<\/?tool_use\b|<\/?function_calls\b|<\/?invoke\b/i;
+// JSON-shaped tool call, fenced or bare. The fingerprint is a `"tool"` key
+// paired with `"input"|"arguments"|"parameters"` somewhere nearby in the same
+// JSON blob. Catches both `{ "tool": "...", "input": {...} }` and the
+// fenced-then-keyed legacy variant.
+const TOOL_CALL_JSON_RE = /\{[\s\S]{0,1200}["“]tool["”]\s*:\s*["“][^"”]+["”][\s\S]{0,1200}["“](?:input|arguments|parameters)["”]\s*:/i;
 const CURL_BLOCK_RE = /```[^`]*?\bcurl\s+-[^`]{0,500}```/s;
 // Bot tokens look like `cc_<32 lowercase alphanumerics>` (see api routes that
 // mint them). The literal token is shipped to the agent in its system prompt
@@ -41,7 +48,7 @@ export function checkReplyBody(bodyMd: string): GuardResult {
   if (!trimmed) return { ok: false, reason: "empty_body" };
   if (HEARTBEAT_RE.test(trimmed)) return { ok: false, reason: "heartbeat_leaked" };
   if (TOOL_USE_RE.test(trimmed)) return { ok: false, reason: "tool_use_markup" };
-  if (FN_CALL_BLOCK_RE.test(trimmed)) return { ok: false, reason: "function_call_json" };
+  if (TOOL_CALL_JSON_RE.test(trimmed)) return { ok: false, reason: "tool_call_json" };
   if (CURL_BLOCK_RE.test(trimmed)) return { ok: false, reason: "curl_transcript" };
   if (PURE_JSON_FENCE_RE.test(trimmed) && trimmed.length > 400) {
     return { ok: false, reason: "pure_json_dump" };

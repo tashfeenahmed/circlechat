@@ -93,6 +93,7 @@ export default function DMPage() {
         {convId ? (
           <>
             <MessageList
+              key={convId}
               messages={msgs.data?.messages ?? []}
               meMemberId={me.data?.memberId ?? undefined}
               onOpenThread={(mid) => openThread(convId!, mid)}
