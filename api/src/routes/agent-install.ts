@@ -404,6 +404,40 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
 
       const onboardCmd = buildOpenClawCommand(openclawHome, onboardArgs);
       await runCmd(onboardCmd.cmd, onboardCmd.args, onboardCmd.env);
+
+      // OpenClaw's pi-ai embedded runner defaults unknown custom-provider
+      // models to a 16k context window and preemptively rejects larger
+      // prompts with "Context overflow". Register the picked model under
+      // `models.providers.<id>.models[]` with a generous contextWindow so the
+      // precheck trusts what the upstream actually supports.
+      if (isFreeApi && body.model) {
+        const configPath = join(openclawHome, "openclaw.json");
+        try {
+          const raw = await fs.readFile(configPath, "utf8");
+          const cfg = JSON.parse(raw) as Record<string, unknown>;
+          const models = (cfg.models ??= {}) as Record<string, unknown>;
+          const providers = (models.providers ??= {}) as Record<string, unknown>;
+          const fp = (providers.freeapi ??= {}) as Record<string, unknown>;
+          const list = ((fp.models ??= []) as Array<Record<string, unknown>>);
+          const existing = list.find((m) => m.id === body.model);
+          const entry = {
+            id: body.model,
+            name: `${body.model} (via FreeLLMAPI)`,
+            api: "openai-completions",
+            // Trust whatever FreeLLMAPI's upstream model supports; 1M is safely
+            // above every current frontier model and disables the precheck.
+            contextWindow: 1_000_000,
+          };
+          if (existing) Object.assign(existing, entry);
+          else list.push(entry);
+          await fs.writeFile(configPath, JSON.stringify(cfg, null, 2));
+        } catch (e) {
+          req.log.warn(
+            { err: (e as Error).message.slice(0, 200) },
+            "openclaw contextWindow patch failed",
+          );
+        }
+      }
     } catch (e) {
       try { await fs.rm(openclawHome, { recursive: true, force: true }); } catch { /* ignore */ }
       return reply
