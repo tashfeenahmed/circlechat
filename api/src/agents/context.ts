@@ -128,14 +128,21 @@ export async function buildContext(opts: {
     .limit(1);
   const agentMemberId = agentMember?.id ?? "";
 
-  // Conversations the agent belongs to.
-  const myConvs = await db
-    .select({
-      conversation: conversations,
-    })
+  // Conversations the agent belongs to. For event-triggered runs (mention,
+  // dm, thread_reply, channel_post, task_*) we narrow the scope to the one
+  // conversation that woke the agent so the context packet doesn't balloon
+  // with every channel's history — that was blowing past OpenClaw's 16k
+  // context window in channel mentions while DMs stayed small.
+  const narrowToTrigger =
+    opts.trigger !== "scheduled" && opts.trigger !== "ambient" && !!opts.conversationId;
+  const myConvsAll = await db
+    .select({ conversation: conversations })
     .from(conversationMembers)
     .innerJoin(conversations, eq(conversations.id, conversationMembers.conversationId))
     .where(eq(conversationMembers.memberId, agentMemberId));
+  const myConvs = narrowToTrigger
+    ? myConvsAll.filter((c) => c.conversation.id === opts.conversationId)
+    : myConvsAll;
 
   const convIds = myConvs.map((c) => c.conversation.id);
 
