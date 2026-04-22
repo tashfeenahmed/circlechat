@@ -376,6 +376,7 @@ function buildPrompt(entry, packet) {
   const recent = (conv.messages || []).slice(-12);
   const history = recent.map((m) => formatMsg(agent, m)).join("\n");
   const last = recent[recent.length - 1];
+  const lastSenderKind = last ? packet.members?.[last.memberId]?.kind : undefined;
 
   // For scheduled beats, also show a compact summary of every OTHER active
   // conversation the agent belongs to, so they can jump in wherever there's
@@ -394,7 +395,9 @@ function buildPrompt(entry, packet) {
 
   const triggerLine =
     packet.trigger === "mention"
-      ? `You were @-mentioned by @${last?.memberHandle ?? "someone"}. Reply ONLY if the message asks YOU a specific question, assigns YOU a task, or gives YOU new info you need to act on. If it's recognition / thanks / agreement / pleasantries, react with an emoji (use the react tool: 🙏 👏 🎉 ✅ 👍 ❤️) and respond with exactly "HEARTBEAT_OK" — don't write a reply. Never write a prose "thanks back" message. When you DO write a reply, do NOT @-mention the person you're replying to (they're already in the thread); re-tag only when bringing in someone new.`
+      ? lastSenderKind === "agent"
+        ? `You were @-mentioned by another agent (@${last?.memberHandle ?? "someone"}). Reply ONLY if the message asks YOU a specific question, assigns YOU a task, or gives YOU new info you need to act on. If it's recognition / thanks / agreement / pleasantries, react with an emoji (use the react tool: 🙏 👏 🎉 ✅ 👍 ❤️) and respond with exactly "HEARTBEAT_OK" — don't write a reply. Never write a prose "thanks back" message. When you DO write a reply, do NOT @-mention the person you're replying to (they're already in the thread); re-tag only when bringing in someone new.`
+        : `A human (@${last?.memberHandle ?? "someone"}) @-mentioned you directly. ALWAYS write a real reply — never return "HEARTBEAT_OK" on a human mention, even if the message looks like thanks or a pleasantry. If they're assigning a task, acknowledge it concretely and say what you'll do (or who you're delegating to). If it's a question, answer it. If it's praise, respond briefly in character. Optionally also react with an emoji (POST /agent-api/react), but the reply itself is required. Do NOT @-mention the human back (they're already in the thread); re-tag only when bringing in someone new.`
       : packet.trigger === "dm"
         ? `This is a DM — always reply.`
         : packet.trigger === "thread_reply"
@@ -557,8 +560,20 @@ function connect(entry) {
       const rawText = isOpenClaw
         ? (extractOpenClawReply(stdout) || extractOpenClawReply(stderr) || "(empty reply)")
         : (extractReply(stdout) || extractReply(stderr) || "(empty reply)");
+      // Silence-allowed triggers: model is permitted to skip a post by returning
+      // HEARTBEAT_OK. `mention` is here only for agent→agent mentions (the
+      // prompt forbids it on human mentions, and the executor's reply-guard
+      // would also reject HEARTBEAT_OK as `heartbeat_leaked` if it slipped
+      // through). Keeping it on the whitelist avoids misleading
+      // `heartbeat_leaked` errors in run logs when agents legitimately stay
+      // quiet on a colleague's @-mention.
       if (
-        (trigger === "scheduled" || trigger === "thread_reply" || trigger === "ambient") &&
+        (trigger === "scheduled" ||
+          trigger === "thread_reply" ||
+          trigger === "ambient" ||
+          trigger === "mention" ||
+          trigger === "task_assigned" ||
+          trigger === "task_comment") &&
         /^\s*HEARTBEAT_OK\s*$/i.test(rawText)
       ) {
         return reply({ status: "HEARTBEAT_OK" });
