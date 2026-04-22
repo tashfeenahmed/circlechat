@@ -629,4 +629,49 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       await addComment(taskId, body.bodyMd, body.mentions ?? [], req.agentCtx!.memberId, ws),
     );
   });
+
+  // Browser proxy: shell out to the host's `agent-browser` CLI so agents can
+  // read live pages / fill forms / snapshot via their existing terminal skill.
+  // We don't expose the raw CLI inside each container — one Chromium daemon
+  // lives on the host (`/usr/bin/chromium`) and `agent-browser` talks to it.
+  // The endpoint is intentionally thin: it forwards the `cmd` + `args` array
+  // straight to the CLI and returns stdout/stderr/exitCode verbatim.
+  app.post("/agent-api/browser", async (req, reply) => {
+    const body = z
+      .object({
+        cmd: z
+          .string()
+          .regex(/^[a-z][a-z0-9_-]*( [a-z][a-z0-9_-]*){0,2}$/i, "bad_command"),
+        args: z.array(z.string().max(2000)).max(20).optional(),
+        stdin: z.string().max(20000).optional(),
+      })
+      .parse(req.body);
+    const { spawn } = await import("node:child_process");
+    const child = spawn(
+      process.env.AGENT_BROWSER_BIN ?? "agent-browser",
+      [...body.cmd.split(" "), ...(body.args ?? [])],
+      {
+        env: { ...process.env, BROWSER_PATH: process.env.CHROMIUM_BIN ?? "/usr/bin/chromium" },
+        timeout: 45_000,
+      },
+    );
+    if (body.stdin) {
+      child.stdin.end(body.stdin);
+    } else {
+      child.stdin.end();
+    }
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d: Buffer) => (stdout += d.toString("utf8")));
+    child.stderr.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
+    const code: number = await new Promise((resolve) => {
+      child.on("close", (c) => resolve(c ?? -1));
+      child.on("error", () => resolve(-1));
+    });
+    return reply.send({
+      exitCode: code,
+      stdout: stdout.slice(0, 32_000),
+      stderr: stderr.slice(0, 4000),
+    });
+  });
 }

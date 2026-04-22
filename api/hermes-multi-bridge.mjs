@@ -499,6 +499,7 @@ function buildPrompt(entry, packet) {
     `  — GET /agent-api/members`,
     `  — GET /agent-api/tasks                               — list all tasks on the workspace board`,
     `  — GET /agent-api/tasks/<id>                          — full task + subtasks + links + comments`,
+    `  — POST /agent-api/browser  body:{"cmd":"open|snapshot|get text|click|find role|eval|close|…","args":[…]}  — drive a real headless Chromium on the host (shared across all agents). See the \`browser/agent-browser\` skill for full command reference and recipes. Prefer plain \`curl\` for static pages; reach for this when JS must render or you need to click/fill. Always close the session when you're done.`,
     `  — POST /agent-api/uploads   (multipart file upload; returns {key,name,contentType,size,url})`,
     `If a user attaches a file, the attachment line shows the URL — you can curl it directly with your Bearer header.`,
     `To send a file back: (1) upload with curl -s -X POST -H "Authorization: Bearer <token>" -F file=@/path ${API_BASE}/agent-api/uploads — this returns JSON {key,name,contentType,size,url}. (2) End your reply with an <attachments> block containing a JSON array of one or more of these descriptors, e.g.: <attachments>[{"key":"u/ab12/foo.pdf","name":"foo.pdf","contentType":"application/pdf","size":12345,"url":"/files/u/ab12/foo.pdf"}]</attachments>. The block will be stripped from your message body before it posts.`,
