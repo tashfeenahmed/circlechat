@@ -25,6 +25,23 @@ const TOOL_USE_RE = /<\/?tool_use\b|<\/?function_calls\b|<\/?invoke\b/i;
 // fenced-then-keyed legacy variant.
 const TOOL_CALL_JSON_RE = /\{[\s\S]{0,1200}["“]tool["”]\s*:\s*["“][^"”]+["”][\s\S]{0,1200}["“](?:input|arguments|parameters)["”]\s*:/i;
 const CURL_BLOCK_RE = /```[^`]*?\bcurl\s+-[^`]{0,500}```/s;
+// The prompt feeds conversation history as `[m_<id>] @handle: body` lines.
+// Smaller models occasionally echo that format directly into their reply,
+// usually as the start of a runaway repetition loop. A real reply never
+// looks like this.
+const HISTORY_ECHO_RE = /^\s*\[m_[a-z0-9]{12,}\]\s*@?/i;
+
+// Detect degenerate repetition: same non-trivial line emitted 3+ times. 3B
+// models occasionally lock into a loop and emit the same sentence dozens of
+// times until they hit the token cap.
+function hasRunawayRepetition(s: string): boolean {
+  const lines = s.split(/\n+/).map((l) => l.trim()).filter((l) => l.length >= 20);
+  if (lines.length < 3) return false;
+  const counts = new Map<string, number>();
+  for (const l of lines) counts.set(l, (counts.get(l) ?? 0) + 1);
+  for (const n of counts.values()) if (n >= 3) return true;
+  return false;
+}
 // Bot tokens look like `cc_<32 lowercase alphanumerics>` (see api routes that
 // mint them). The literal token is shipped to the agent in its system prompt
 // so it can construct curl commands; smaller models occasionally echo it back
@@ -49,6 +66,8 @@ export function checkReplyBody(bodyMd: string): GuardResult {
   if (HEARTBEAT_RE.test(trimmed)) return { ok: false, reason: "heartbeat_leaked" };
   if (TOOL_USE_RE.test(trimmed)) return { ok: false, reason: "tool_use_markup" };
   if (TOOL_CALL_JSON_RE.test(trimmed)) return { ok: false, reason: "tool_call_json" };
+  if (HISTORY_ECHO_RE.test(trimmed)) return { ok: false, reason: "history_format_echo" };
+  if (hasRunawayRepetition(trimmed)) return { ok: false, reason: "runaway_repetition" };
   if (CURL_BLOCK_RE.test(trimmed)) return { ok: false, reason: "curl_transcript" };
   if (PURE_JSON_FENCE_RE.test(trimmed) && trimmed.length > 400) {
     return { ok: false, reason: "pure_json_dump" };

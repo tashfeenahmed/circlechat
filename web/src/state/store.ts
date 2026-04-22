@@ -28,6 +28,27 @@ interface PresenceState {
     string,
     { agentId: string; agentName: string | null; agentHandle: string | null; trigger: string; startedAt: number }
   >;
+  // Transient list of recent run failures (reply-guard rejects, etc.) that
+  // the UI surfaces for a few seconds so users know why nothing posted.
+  recentFailures: Array<{
+    runId: string;
+    agentId: string;
+    agentName: string | null;
+    agentHandle: string | null;
+    conversationId: string | null;
+    errors: string[];
+    at: number;
+  }>;
+  addRunFailure: (f: {
+    runId: string;
+    agentId: string;
+    agentName: string | null;
+    agentHandle: string | null;
+    conversationId: string | null;
+    errors: string[];
+    at: number;
+  }) => void;
+  pruneRunFailures: () => void;
   beginRun: (
     runId: string,
     agentId: string,
@@ -66,6 +87,7 @@ export const useBus = create<PresenceState>((set, get) => ({
   presence: {},
   typing: {},
   agentRuns: {},
+  recentFailures: [],
   directory: {},
   setPresence: (memberId, status) =>
     set((s) => ({ presence: { ...s.presence, [memberId]: status } })),
@@ -115,6 +137,13 @@ export const useBus = create<PresenceState>((set, get) => ({
       delete n[runId];
       return { agentRuns: n };
     }),
+  addRunFailure: (f) =>
+    set((s) => ({ recentFailures: [...s.recentFailures.filter((x) => x.runId !== f.runId), f].slice(-10) })),
+  pruneRunFailures: () => {
+    const now = Date.now();
+    const next = get().recentFailures.filter((f) => now - f.at < 12_000);
+    if (next.length !== get().recentFailures.length) set({ recentFailures: next });
+  },
   syncRuns: (runs) =>
     set((s) => {
       // Merge the server-side truth into local state: server wins for runs it
@@ -200,3 +229,4 @@ export const useBus = create<PresenceState>((set, get) => ({
 
 setInterval(() => useBus.getState().pruneTyping(), 2000);
 setInterval(() => useBus.getState().pruneStaleRuns(), 15_000);
+setInterval(() => useBus.getState().pruneRunFailures(), 2000);

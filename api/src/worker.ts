@@ -135,7 +135,11 @@ const worker = new Worker<AgentJobPayload>(
       })
       .where(eq(agentRuns.id, runId));
     await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
-    await emitFinished(agent.id, runId, "ok", payload.conversationId);
+    await emitFinished(agent.id, runId, "ok", payload.conversationId, {
+      agentName: agent.name,
+      agentHandle: agent.handle,
+      errors: outcome.errors,
+    });
   },
   { connection: redis, concurrency: 10, lockDuration: 120_000 },
 );
@@ -145,23 +149,21 @@ async function emitFinished(
   runId: string,
   status: string,
   conversationId?: string | null,
+  extra?: { agentName?: string; agentHandle?: string; errors?: string[] },
 ): Promise<void> {
+  const base = {
+    type: "agent.run.finished" as const,
+    agentId,
+    runId,
+    status,
+    ...(extra?.agentName ? { agentName: extra.agentName } : {}),
+    ...(extra?.agentHandle ? { agentHandle: extra.agentHandle } : {}),
+    ...(extra?.errors && extra.errors.length ? { errors: extra.errors } : {}),
+  };
   if (conversationId) {
-    await publishToConversation(conversationId, {
-      type: "agent.run.finished",
-      agentId,
-      runId,
-      status,
-      conversationId,
-    });
+    await publishToConversation(conversationId, { ...base, conversationId });
   } else {
-    await publishGlobal({
-      type: "agent.run.finished",
-      agentId,
-      runId,
-      status,
-      conversationId: null,
-    });
+    await publishGlobal({ ...base, conversationId: null });
   }
 }
 

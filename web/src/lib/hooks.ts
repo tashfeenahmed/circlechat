@@ -307,6 +307,18 @@ export function usePresenceBus() {
       }
       if (ev.type === "agent.run.finished") {
         set.endRun(ev.runId as string);
+        const errs = ev.errors as string[] | undefined;
+        if (errs && errs.length) {
+          set.addRunFailure({
+            runId: ev.runId as string,
+            agentId: ev.agentId as string,
+            agentName: (ev.agentName as string | null | undefined) ?? null,
+            agentHandle: (ev.agentHandle as string | null | undefined) ?? null,
+            conversationId: (ev.conversationId as string | null | undefined) ?? null,
+            errors: errs,
+            at: Date.now(),
+          });
+        }
       }
       if (ev.type === "agent.runs.snapshot") {
         // Replay in-flight runs from the server after (re)connect.

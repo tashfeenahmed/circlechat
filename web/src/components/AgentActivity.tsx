@@ -23,23 +23,51 @@ function phaseFromElapsed(ms: number, trigger: string): string {
   return "running tools / waiting on model";
 }
 
+const FAILURE_LABELS: Record<string, string> = {
+  heartbeat_leaked: "tried to reply with silence sentinel",
+  tool_use_markup: "leaked tool-call markup",
+  tool_call_json: "pasted a tool call as text",
+  function_call_json: "pasted a function call as text",
+  curl_transcript: "pasted a curl transcript",
+  bearer_token_leak: "leaked its auth token",
+  pure_json_dump: "returned a raw JSON dump",
+  history_format_echo: "echoed the prompt format",
+  runaway_repetition: "got stuck in a repetition loop",
+  empty_body: "returned an empty reply",
+};
+function humanizeError(err: string): string {
+  // Errors look like "post_message rejected: reason" or "create_task: reason"
+  const m = err.match(/^([a-z_]+)(?:\s*rejected)?:\s*([a-z_]+)/i);
+  if (m) {
+    const reason = m[2];
+    return FAILURE_LABELS[reason] ?? `blocked (${reason})`;
+  }
+  return err.length > 80 ? err.slice(0, 77) + "…" : err;
+}
+
 export default function AgentActivity({ conversationId }: Props) {
   const runs = useBus((s) => s.agentRuns);
+  const failures = useBus((s) => s.recentFailures);
   const dir = useBus((s) => s.directory);
   // Only show pills for runs that plausibly haven't finished yet. Hermes's
   // hard timeout is 180s; anything older is almost certainly a stale pill
   // from a missed `agent.run.finished` WS frame.
   const active = Object.values(runs).filter((r) => Date.now() - r.startedAt < 180_000);
+  // Failures for this conversation (or global, unscoped). Global failures are
+  // rare but happen for scheduled / ambient runs; show them in every open
+  // channel so the user notices.
+  const myFailures = failures.filter(
+    (f) => f.conversationId === conversationId || f.conversationId == null,
+  );
   const [, tick] = useState(0);
-  void conversationId;
 
   useEffect(() => {
-    if (active.length === 0) return;
+    if (active.length === 0 && myFailures.length === 0) return;
     const t = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(t);
-  }, [active.length]);
+  }, [active.length, myFailures.length]);
 
-  if (active.length === 0) return null;
+  if (active.length === 0 && myFailures.length === 0) return null;
   const now = Date.now();
   return (
     <div className="px-6 pb-1 flex flex-wrap gap-2">
@@ -57,12 +85,29 @@ export default function AgentActivity({ conversationId }: Props) {
         const phase = phaseFromElapsed(elapsed, r.trigger);
         const secs = Math.floor(elapsed / 1000);
         return (
-          <span key={idx} className="thinking-pill">
+          <span key={`run-${idx}`} className="thinking-pill">
             <span className="pres agent working" />
             <span>
               <b className="font-medium">{name}</b> is {phase}
             </span>
             <span className="text-[var(--color-muted-2)]">· {secs}s</span>
+          </span>
+        );
+      })}
+      {myFailures.map((f) => {
+        const dirMatch = Object.values(dir).find(
+          (d) =>
+            (d as { kind: string; id: string }).kind === "agent" &&
+            (d as { id: string }).id === f.agentId,
+        ) as { name?: string } | undefined;
+        const name = f.agentName ?? dirMatch?.name ?? (f.agentHandle ? `@${f.agentHandle}` : "agent");
+        const primary = humanizeError(f.errors[0] ?? "unknown");
+        const more = f.errors.length > 1 ? ` (+${f.errors.length - 1} more)` : "";
+        return (
+          <span key={`fail-${f.runId}`} className="thinking-pill" style={{ color: "var(--color-warn)", borderColor: "currentColor" }}>
+            <span>
+              ⚠️ <b className="font-medium">{name}</b> {primary}{more}
+            </span>
           </span>
         );
       })}

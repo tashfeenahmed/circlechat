@@ -17,6 +17,12 @@ import {
   resolveHandlesToMemberIds,
   fireMentionTriggers,
 } from "./mention-triggers.js";
+import {
+  createTask,
+  updateTask,
+  addAssignee,
+  addComment,
+} from "../lib/tasks-core.js";
 
 export interface AgentAttachment {
   key: string;
@@ -32,7 +38,33 @@ export type AgentAction =
   | { type: "open_thread"; message_id: string; body_md: string }
   | { type: "request_approval"; scope: string; action: string; conversation_id?: string; payload?: Record<string, unknown> }
   | { type: "set_memory"; key: string; value: unknown }
-  | { type: "call_tool"; name: string; args?: unknown };
+  | { type: "call_tool"; name: string; args?: unknown }
+  // Task-board actions — let the agent runtime emit structured calls instead
+  // of round-tripping curl through its terminal skill. Field names mirror the
+  // `/agent-api/tasks` HTTP route bodies for consistency.
+  | {
+      type: "create_task";
+      title: string;
+      body_md?: string;
+      status?: "backlog" | "in_progress" | "review" | "done";
+      parent_id?: string;
+      conversation_id?: string;
+      assignees?: string[];
+      labels?: string[];
+      due_at?: string;
+    }
+  | {
+      type: "update_task";
+      task_id: string;
+      title?: string;
+      body_md?: string;
+      status?: "backlog" | "in_progress" | "review" | "done";
+      progress?: number;
+      due_at?: string | null;
+      archived?: boolean;
+    }
+  | { type: "assign_task"; task_id: string; member_id: string }
+  | { type: "task_comment"; task_id: string; body_md: string; mentions?: string[] };
 
 export interface ExecOutcome {
   actionsApplied: number;
@@ -300,9 +332,98 @@ async function applyOne(
       out.trace.push(`tool ${a.name}`);
       return;
     }
+    case "create_task": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const r = await createTask(
+        {
+          title: a.title,
+          bodyMd: a.body_md,
+          status: a.status,
+          parentId: a.parent_id,
+          conversationId: a.conversation_id ?? null,
+          assignees: a.assignees,
+          labels: a.labels,
+          dueAt: a.due_at,
+        },
+        agentMemberId,
+        ws,
+      );
+      if ("error" in r) {
+        out.errors.push(`create_task: ${r.error}`);
+        return;
+      }
+      out.trace.push(`create_task ${r.task.id}`);
+      return;
+    }
+    case "update_task": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const r = await updateTask(
+        a.task_id,
+        {
+          title: a.title,
+          bodyMd: a.body_md,
+          status: a.status,
+          progress: a.progress,
+          dueAt: a.due_at ?? undefined,
+          archived: a.archived,
+        },
+        agentMemberId,
+        ws,
+      );
+      if ("error" in r) {
+        out.errors.push(`update_task: ${r.error}`);
+        return;
+      }
+      out.trace.push(`update_task ${a.task_id}`);
+      return;
+    }
+    case "assign_task": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const r = await addAssignee(a.task_id, a.member_id, agentMemberId, ws);
+      if ("error" in r) {
+        out.errors.push(`assign_task: ${r.error}`);
+        return;
+      }
+      out.trace.push(`assign_task ${a.task_id}→${a.member_id}`);
+      return;
+    }
+    case "task_comment": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const guard = checkReplyBody(a.body_md);
+      if (!guard.ok) {
+        out.errors.push(`task_comment rejected: ${guard.reason}`);
+        return;
+      }
+      const r = await addComment(
+        a.task_id,
+        guard.bodyMd,
+        Array.isArray(a.mentions) ? a.mentions : [],
+        agentMemberId,
+        ws,
+      );
+      if ("error" in r) {
+        out.errors.push(`task_comment: ${r.error}`);
+        return;
+      }
+      out.trace.push(`task_comment on ${a.task_id}`);
+      return;
+    }
     default:
       out.errors.push(`unknown_action: ${(a as { type: string }).type}`);
   }
+}
+
+async function loadAgentWorkspace(agentMemberId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ workspaceId: members.workspaceId })
+    .from(members)
+    .where(eq(members.id, agentMemberId))
+    .limit(1);
+  return row?.workspaceId ?? null;
 }
 
 // Agents may emit attachments via post_message. Require the file to have been

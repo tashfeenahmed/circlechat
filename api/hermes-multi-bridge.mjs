@@ -287,6 +287,44 @@ function extractAttachments(text) {
   return { body: text.replace(re, "").trim(), attachments: clean };
 }
 
+// Pulls an optional trailing <actions>[...]</actions> block — the native
+// side-channel for structured tool calls (create_task, react, assign_task,
+// task_comment, etc.). Shape-checks each entry against a whitelist of action
+// types and drops junk. Returns the stripped reply body plus the validated
+// action list, ready to be appended to the post_message action before it
+// hits the executor.
+const ALLOWED_ACTION_TYPES = new Set([
+  "react",
+  "open_thread",
+  "request_approval",
+  "set_memory",
+  "create_task",
+  "update_task",
+  "assign_task",
+  "task_comment",
+]);
+function extractActions(text) {
+  const re = /<actions>\s*(\[[\s\S]*?\])\s*<\/actions>/i;
+  const m = re.exec(text);
+  if (!m) return { body: text, actions: [] };
+  let arr;
+  try {
+    arr = JSON.parse(m[1]);
+  } catch {
+    return { body: text.replace(re, "").trim(), actions: [] };
+  }
+  if (!Array.isArray(arr)) return { body: text.replace(re, "").trim(), actions: [] };
+  const clean = [];
+  for (const raw of arr) {
+    if (!raw || typeof raw !== "object") continue;
+    if (typeof raw.type !== "string") continue;
+    if (!ALLOWED_ACTION_TYPES.has(raw.type)) continue;
+    clean.push(raw);
+    if (clean.length >= 20) break;
+  }
+  return { body: text.replace(re, "").trim(), actions: clean };
+}
+
 function formatMsg(agent, m) {
   const who = m.memberId === agent.memberId ? "you" : `@${m.memberHandle}`;
   let rxStr = "";
@@ -435,7 +473,23 @@ function buildPrompt(entry, packet) {
 
   const toolBlock = [
     ``,
-    `TOOLS (via your terminal skill — curl + jq):`,
+    `ACTIONS you can take (the native, preferred channel):`,
+    `End your reply with a JSON block: <actions>[ {...}, {...} ]</actions>`,
+    `The block is parsed out of your reply, executed server-side, and stripped from the message body before it posts. Use it whenever you'd otherwise promise to "do" something.`,
+    ``,
+    `Action types:`,
+    `  {"type":"react","message_id":"<id>","emoji":"🙏"}            — react instead of writing an ack/thanks/agreement`,
+    `  {"type":"create_task","title":"…","body_md":"…","status":"backlog|in_progress|review|done","conversation_id":"<optional channel>","parent_id":"<optional parent task_…>","assignees":["<memberId>","<memberId>"],"labels":["eng"],"due_at":"2026-05-01"}`,
+    `  {"type":"update_task","task_id":"task_…","status":"in_progress|review|done","progress":50,"title":"…","body_md":"…","due_at":"2026-05-01","archived":true}`,
+    `  {"type":"assign_task","task_id":"task_…","member_id":"m_…"}`,
+    `  {"type":"task_comment","task_id":"task_…","body_md":"…","mentions":["m_…"]}`,
+    `  {"type":"open_thread","message_id":"<id>","body_md":"…"}      — start a thread reply on a specific message`,
+    ``,
+    `Use the Member IDs block above to fill assignees / mentions / member_id fields — those fields take memberIds (m_…), NOT handles.`,
+    `Emit as many actions as needed in one block. If a user asks for 5 tasks, create 5 create_task entries.`,
+    `If your only job this turn is to do actions (no chat reply needed), leave your prose body empty — the actions still run and no "thinking" message posts. Otherwise write a short reply naming the concrete outcomes (e.g. "Created task_xyz, assigned to @ada").`,
+    ``,
+    `TOOLS (read-only context lookups via your terminal skill — curl + jq, when you need older context not already in the packet):`,
     `  CircleChat API base: ${API_BASE}`,
     `  Auth header:         Authorization: Bearer ${entry.token}`,
     `  — GET /agent-api/conversations`,
@@ -443,22 +497,14 @@ function buildPrompt(entry, packet) {
     `  — GET /agent-api/thread?messageId=<id>`,
     `  — GET /agent-api/search?q=<text>&limit=20[&conversationId=<id>]`,
     `  — GET /agent-api/members`,
-    `  — POST /agent-api/react  body:{"messageId":"<id>","emoji":"🙏"} — use this instead of replying for acks, thanks, agreement, celebration`,
-    `  — GET  /agent-api/tasks                              — list all tasks on the workspace board`,
-    `  — GET  /agent-api/tasks/<id>                         — full task + subtasks + links + comments`,
-    `  — POST /agent-api/tasks  body:{"title":"…","bodyMd":"…","status":"backlog","parentId":"<task id for subtask>","conversationId":"<optional channel>","assignees":["<memberId>"],"labels":["eng"]}`,
-    `  — PATCH /agent-api/tasks/<id>  body:{"status":"in_progress","progress":50,"title":"…","bodyMd":"…","dueAt":"2026-05-01T00:00:00Z","archived":true}`,
-    `  — POST /agent-api/tasks/<id>/assignees  body:{"memberId":"<id>"}   (DELETE /assignees/<memberId> to unassign)`,
-    `  — PUT  /agent-api/tasks/<id>/labels  body:{"labels":["eng","urgent"]}   (replaces the whole set)`,
-    `  — POST /agent-api/tasks/<id>/links  body:{"linkedTaskId":"<id>","kind":"relates|blocks|duplicate"}`,
-    `  — POST /agent-api/tasks/<id>/comments  body:{"bodyMd":"…","mentions":["<memberId>"]}`,
-    `Prefer commenting on the task to posting in the channel when the discussion is about the task itself.`,
+    `  — GET /agent-api/tasks                               — list all tasks on the workspace board`,
+    `  — GET /agent-api/tasks/<id>                          — full task + subtasks + links + comments`,
     `  — POST /agent-api/uploads   (multipart file upload; returns {key,name,contentType,size,url})`,
     `If a user attaches a file, the attachment line shows the URL — you can curl it directly with your Bearer header.`,
     `To send a file back: (1) upload with curl -s -X POST -H "Authorization: Bearer <token>" -F file=@/path ${API_BASE}/agent-api/uploads — this returns JSON {key,name,contentType,size,url}. (2) End your reply with an <attachments> block containing a JSON array of one or more of these descriptors, e.g.: <attachments>[{"key":"u/ab12/foo.pdf","name":"foo.pdf","contentType":"application/pdf","size":12345,"url":"/files/u/ab12/foo.pdf"}]</attachments>. The block will be stripped from your message body before it posts.`,
     ``,
-    `IMPORTANT — these tools are how you DO things, not just look things up. If a message asks you (or your team) to create tasks, assign work, comment on a task, react with an emoji, or anything else listed above, you MUST call the matching POST/PATCH endpoint via your terminal skill BEFORE writing your final chat reply. Do not write "I'll create the tasks" or "I'll assign this" without actually calling the API in the same turn — that's a broken promise. After the API calls succeed, then write a short reply naming the task IDs (or other concrete outcomes) you produced. If a colleague should own the work, create the task and assign it to their memberId from the list above. Only skip the tools when the user is just chatting and hasn't asked for an action.`,
-    `Don't mention the tool itself in your final reply — name the outcome (e.g. "Created task_xyz, assigned to @ada").`,
+    `PREFER the <actions> block over curl for anything listed as an action type above. Curl is only for read-only context lookups and file uploads.`,
+    `Don't promise an action without emitting the matching <actions> entry in the same turn. "I'll create the tasks" without an <actions> block is a broken promise.`,
   ].join("\n");
 
   let taskBlock = "";
@@ -590,19 +636,35 @@ function connect(entry) {
       ) {
         return reply({ status: "HEARTBEAT_OK" });
       }
-      const { body, attachments } = extractAttachments(rawText);
-      console.log(`[${entry.handle}] replying, len=${body.length}, att=${attachments.length}`);
+      // Order matters: pull the <actions> side-channel first, then
+      // <attachments>, so the actions JSON can't accidentally be matched
+      // by the attachments regex.
+      const afterActions = extractActions(rawText);
+      const afterAtt = extractAttachments(afterActions.body);
+      const body = afterAtt.body;
+      const attachments = afterAtt.attachments;
+      const sideActions = afterActions.actions;
+      const actions = [];
+      // Only emit a post_message if there's something to say. When the model
+      // returns just actions + empty text, skip the chat post entirely —
+      // tasks / reactions are enough.
+      if (body && body.trim()) {
+        actions.push({
+          type: "post_message",
+          conversation_id: conv.conversationId,
+          body_md: body,
+          ...(replyTo ? { reply_to: replyTo } : {}),
+          ...(attachments.length ? { attachments } : {}),
+        });
+      }
+      for (const a of sideActions) actions.push(a);
+      console.log(
+        `[${entry.handle}] replying, len=${body.length}, att=${attachments.length}${sideActions.length ? `, actions=${sideActions.length} (${sideActions.map((a) => a.type).join("+")})` : ""}`,
+      );
+      if (actions.length === 0) return reply({ status: "HEARTBEAT_OK" });
       reply({
-        actions: [
-          {
-            type: "post_message",
-            conversation_id: conv.conversationId,
-            body_md: body,
-            ...(replyTo ? { reply_to: replyTo } : {}),
-            ...(attachments.length ? { attachments } : {}),
-          },
-        ],
-        trace: [`${entry.handle} responded, len=${body.length}${attachments.length ? `, att=${attachments.length}` : ""}`],
+        actions,
+        trace: [`${entry.handle} responded, len=${body.length}${attachments.length ? `, att=${attachments.length}` : ""}${sideActions.length ? `, actions=${sideActions.length}` : ""}`],
       });
     } catch (e) {
       console.error(`[${entry.handle}] error: ${e.message.split("\n")[0]}`);
