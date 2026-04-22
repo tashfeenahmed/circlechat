@@ -38,6 +38,12 @@ export async function resolveHermesHome(
 const SKILL_TEMPLATE_DIR =
   process.env.CC_SKILL_TEMPLATE ??
   pathResolve(process.cwd(), "templates/circlechat-skill");
+// Optional second skill: the agent-browser skill docs. Same shape as
+// circlechat-skill (a directory containing DESCRIPTION.md). Lives at
+// `skills/browser/agent-browser/` on the agent's home dir.
+const BROWSER_SKILL_TEMPLATE_DIR =
+  process.env.CC_BROWSER_SKILL_TEMPLATE ??
+  pathResolve(process.cwd(), "templates/browser-skill");
 const MCP_SCRIPT =
   process.env.CC_MCP_SCRIPT ??
   pathResolve(process.cwd(), "scripts/circlechat-mcp.mjs");
@@ -79,8 +85,18 @@ export async function installCircleChatTooling(params: {
     } catch (e) {
       notes.push(`skill copy failed: ${(e as Error).message.slice(0, 200)}`);
     }
+    // Also stage the agent-browser skill. Non-fatal if it's missing so older
+    // deploys without the template still work.
+    try {
+      const browserDest = join(skillsRoot, "browser", "agent-browser");
+      await fs.mkdir(browserDest, { recursive: true });
+      await copyDir(BROWSER_SKILL_TEMPLATE_DIR, browserDest);
+    } catch (e) {
+      notes.push(`browser skill copy failed: ${(e as Error).message.slice(0, 200)}`);
+    }
     try {
       await addToManifest(skillsRoot, "circlechat");
+      await addToManifest(skillsRoot, "browser");
     } catch (e) {
       notes.push(`manifest write failed: ${(e as Error).message.slice(0, 200)}`);
     }
@@ -249,18 +265,26 @@ async function copyDir(src: string, dest: string): Promise<void> {
 // we act as root on the mounted volume — host-side `fs.copyFile` can't write
 // into skills/ after the hermes image's entrypoint has chown'd it to uid=10000.
 async function runSkillOpsViaDocker(hermesHome: string): Promise<void> {
-  // Bind-mount the host skill template read-only into a known container path.
+  // Bind-mount both skill templates read-only. The `browser` dir is copied
+  // only when the host actually has the template staged — during an old
+  // deploy that predates browser-skill this path is silently skipped.
   const script = [
     "set -e",
     `mkdir -p "${CONTAINER_HERMES_HOME}/skills/circlechat"`,
     `rm -rf "${CONTAINER_HERMES_HOME}/skills/circlechat/"*`,
     `cp -r /cc-skill-template/. "${CONTAINER_HERMES_HOME}/skills/circlechat/"`,
-    `echo '["circlechat"]' > "${CONTAINER_HERMES_HOME}/skills/.circlechat-managed.json"`,
-    // Quarantine everything except circlechat + dotfiles.
+    `if [ -d /cc-browser-skill-template ]; then`,
+    `  mkdir -p "${CONTAINER_HERMES_HOME}/skills/browser/agent-browser"`,
+    `  rm -rf "${CONTAINER_HERMES_HOME}/skills/browser/agent-browser/"*`,
+    `  cp -r /cc-browser-skill-template/. "${CONTAINER_HERMES_HOME}/skills/browser/agent-browser/"`,
+    `fi`,
+    // Manifest lists both so future updates can find them.
+    `echo '["circlechat","browser"]' > "${CONTAINER_HERMES_HOME}/skills/.circlechat-managed.json"`,
+    // Quarantine everything except circlechat, browser, and dotfiles.
     `mkdir -p "${CONTAINER_HERMES_HOME}/skills-disabled"`,
     `for d in "${CONTAINER_HERMES_HOME}"/skills/*/; do`,
     `  n=$(basename "$d")`,
-    `  case "$n" in circlechat|.*) continue ;; esac`,
+    `  case "$n" in circlechat|browser|.*) continue ;; esac`,
     `  mv "$d" "${CONTAINER_HERMES_HOME}/skills-disabled/$n" 2>/dev/null || true`,
     `done`,
   ].join("\n");
@@ -272,6 +296,8 @@ async function runSkillOpsViaDocker(hermesHome: string): Promise<void> {
       `${hermesHome}:${CONTAINER_HERMES_HOME}`,
       "-v",
       `${SKILL_TEMPLATE_DIR}:/cc-skill-template:ro`,
+      "-v",
+      `${BROWSER_SKILL_TEMPLATE_DIR}:/cc-browser-skill-template:ro`,
       "--entrypoint",
       "bash",
       HERMES_IMAGE,

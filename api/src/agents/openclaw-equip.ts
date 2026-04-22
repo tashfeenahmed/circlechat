@@ -10,6 +10,9 @@ const CC_API_BASE = process.env.CC_API_BASE ?? "http://localhost:3300/api";
 const SKILL_TEMPLATE_DIR =
   process.env.CC_SKILL_TEMPLATE ??
   pathResolve(process.cwd(), "templates/circlechat-skill");
+const BROWSER_SKILL_TEMPLATE_DIR =
+  process.env.CC_BROWSER_SKILL_TEMPLATE ??
+  pathResolve(process.cwd(), "templates/browser-skill");
 
 async function copyDir(src: string, dest: string): Promise<void> {
   const entries = await fs.readdir(src, { withFileTypes: true });
@@ -55,9 +58,18 @@ export async function equipOpenClawAgent(params: {
   } catch (e) {
     notes.push(`skill copy failed: ${(e as Error).message.slice(0, 200)}`);
   }
+  // Stage agent-browser skill next to circlechat. Non-fatal on old deploys
+  // that don't have the template yet.
+  try {
+    const browserDest = join(skillsRoot, "browser", "agent-browser");
+    await fs.mkdir(browserDest, { recursive: true });
+    await copyDir(BROWSER_SKILL_TEMPLATE_DIR, browserDest);
+  } catch (e) {
+    notes.push(`browser skill copy failed: ${(e as Error).message.slice(0, 200)}`);
+  }
   try {
     const manifestPath = join(skillsRoot, ".circlechat-managed.json");
-    await fs.writeFile(manifestPath, JSON.stringify(["circlechat"], null, 2));
+    await fs.writeFile(manifestPath, JSON.stringify(["circlechat", "browser"], null, 2));
   } catch (e) {
     notes.push(`manifest write failed: ${(e as Error).message.slice(0, 200)}`);
   }
