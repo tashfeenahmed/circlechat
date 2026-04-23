@@ -211,6 +211,13 @@ function isEntrypointNoise(line) {
   if (/^\s*[~+↑!] \S/.test(line)) return true;
   if (/^Dropping root privileges/i.test(t)) return true;
   if (/^\s*==+/.test(t)) return true;
+  // Hermes' tool-dispatcher status lines. These are internal diagnostics and
+  // must never land as chat messages. "Auto-repaired tool name" specifically
+  // happens when the model emits a tool call whose name Hermes fuzzy-matches
+  // to a registered tool (e.g. our `share_files` action → `search_files`).
+  if (/^🔧\s*Auto-repaired tool name/i.test(t)) return true;
+  if (/^⚠️?\s*Unknown tool/i.test(t)) return true;
+  if (/^✓\s*(Enabled toolset|Loaded \d+ tools?)/i.test(t)) return true;
   return false;
 }
 
@@ -228,6 +235,7 @@ function extractReply(raw) {
     if (!inside) continue;
     const content = line.replace(/^│\s?/, "").replace(/\s?│\s*$/, "");
     if (/^\s*⚕?\s*Hermes\s*$/.test(content)) continue;
+    if (isEntrypointNoise(content)) continue;
     out.push(content);
   }
   const text = out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -493,6 +501,8 @@ function buildPrompt(entry, packet) {
     `ACTIONS you can take (the native, preferred channel):`,
     `End your reply with a JSON block: <actions>[ {...}, {...} ]</actions>`,
     `The block is parsed out of your reply, executed server-side, and stripped from the message body before it posts. Use it whenever you'd otherwise promise to "do" something.`,
+    ``,
+    `IMPORTANT: <actions> is LITERAL TEXT you write in your reply body. It is NOT a tool call. Do NOT invoke share_files, create_task, react, or any action type below as a function/tool — write the JSON inside <actions>…</actions> tags as part of your message. If your runtime tries to auto-route one of these names to a similarly-named tool (e.g. share_files → search_files), that means you emitted it wrong: wrap it in <actions> next turn.`,
     ``,
     `DO IT, DON'T TASK IT. If the user is asking for a direct in-chat thing you can fulfill this turn — share a file from the web, fetch and summarise a page, look something up, send a DM, react — DO IT with the matching action. Don't self-assign a create_task and call it a day. Tasks are for multi-step work that spans sessions, needs delegation, or genuinely needs tracking. "Add cat photos from the web" is NOT a ticket to create — it's a share_files action with URLs you fetched or found.`,
     ``,
