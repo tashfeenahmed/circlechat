@@ -623,6 +623,17 @@ function connect(entry) {
     if (!last && trigger !== "ambient") return reply({ status: "HEARTBEAT_OK" });
 
     const inDm = conv.conversationKind === "dm";
+    // DMs are 1:1 and private. Another agent being @-mentioned inside
+    // someone else's DM must not drag us in — drop any trigger where we
+    // aren't one of the two DM participants.
+    if (inDm) {
+      const dmMembers = Array.isArray(conv.conversationMembers) ? conv.conversationMembers : [];
+      const myMemberId = p.agent?.memberId;
+      if (myMemberId && !dmMembers.includes(myMemberId)) {
+        console.log(`[${entry.handle}] ${trigger} → skip (not a DM participant)`);
+        return reply({ status: "HEARTBEAT_OK" });
+      }
+    }
     const replyTo = inDm ? undefined : p.thread?.rootMessageId ?? undefined;
 
     console.log(
