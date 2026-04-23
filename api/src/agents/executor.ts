@@ -66,17 +66,20 @@ export type AgentAction =
     }
   | { type: "assign_task"; task_id: string; member_id: string }
   | { type: "task_comment"; task_id: string; body_md: string; mentions?: string[] }
-  // Fetch one or more URLs server-side and post them as attachments. Saves
-  // the agent from a six-step shell ritual (urllib → tempfile → multipart
-  // upload → parse → <attachments> block) for the common "share a photo /
-  // doc from the web" case. Without this, faced with the friction, agents
+  // Fetch one or more URLs server-side OR pick up files the agent wrote to
+  // /tmp, then post them as attachments. Saves the agent from a six-step
+  // shell ritual (urllib/tempfile/multipart/parse/<attachments> block) for
+  // the common "share a photo from the web" and "browser pdf /tmp/x.pdf
+  // then send it" flows. Without this, faced with the friction, agents
   // tend to just create_task for themselves instead of doing the work.
+  // Each file entry must provide exactly one of `url` (http/https) or
+  // `path` (absolute path under /tmp/).
   | {
       type: "share_files";
       conversation_id: string;
       body_md?: string;
       reply_to?: string;
-      files: Array<{ url: string; name?: string }>;
+      files: Array<{ url?: string; path?: string; name?: string }>;
     };
 
 export interface ExecOutcome {
@@ -449,36 +452,79 @@ async function applyOne(
 
       const fetched: AgentAttachment[] = [];
       for (const f of files) {
-        const url = typeof f?.url === "string" ? f.url : "";
-        if (!/^https?:\/\//i.test(url)) {
-          out.trace.push(`share_files skip: invalid url`);
+        const rawUrl = typeof f?.url === "string" ? f.url : "";
+        const rawPath = typeof f?.path === "string" ? f.path : "";
+        const hasUrl = rawUrl.length > 0;
+        const hasPath = rawPath.length > 0;
+        if (hasUrl === hasPath) {
+          out.trace.push(`share_files skip: exactly one of {url,path} required`);
           continue;
         }
         try {
-          const controller = new AbortController();
-          const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-          const res = await fetch(url, { signal: controller.signal, redirect: "follow" });
-          clearTimeout(t);
-          if (!res.ok) {
-            out.trace.push(`share_files skip ${url}: HTTP ${res.status}`);
-            continue;
+          let buf: Buffer;
+          let contentType = "application/octet-stream";
+          let nameHint = "";
+
+          if (hasUrl) {
+            if (!/^https?:\/\//i.test(rawUrl)) {
+              out.trace.push(`share_files skip: invalid url scheme`);
+              continue;
+            }
+            const controller = new AbortController();
+            const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+            const res = await fetch(rawUrl, { signal: controller.signal, redirect: "follow" });
+            clearTimeout(t);
+            if (!res.ok) {
+              out.trace.push(`share_files skip ${rawUrl}: HTTP ${res.status}`);
+              continue;
+            }
+            buf = Buffer.from(await res.arrayBuffer());
+            contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim() || contentType;
+            try { nameHint = new URL(rawUrl).pathname.split("/").pop() ?? ""; } catch { nameHint = ""; }
+          } else {
+            // Local path: restrict to /tmp/ to prevent arbitrary reads. The
+            // browser pdf/screenshot commands save here by convention, and
+            // agent-terminal shell blocks default to /tmp scratch space.
+            const { resolve: pResolve } = await import("node:path");
+            const { promises: fsp } = await import("node:fs");
+            const abs = pResolve(rawPath);
+            if (!abs.startsWith("/tmp/")) {
+              out.trace.push(`share_files skip: path must be under /tmp/ (got ${abs})`);
+              continue;
+            }
+            const stat = await fsp.stat(abs).catch(() => null);
+            if (!stat || !stat.isFile()) {
+              out.trace.push(`share_files skip ${abs}: not a regular file`);
+              continue;
+            }
+            if (stat.size > MAX_BYTES) {
+              out.trace.push(`share_files skip ${abs}: ${stat.size}B > ${MAX_BYTES}B`);
+              continue;
+            }
+            buf = await fsp.readFile(abs);
+            nameHint = abs.split("/").pop() ?? "";
+            const ext = (nameHint.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? "").toLowerCase();
+            const extMap: Record<string, string> = {
+              pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+              gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+              txt: "text/plain", md: "text/markdown", csv: "text/csv",
+              json: "application/json", html: "text/html", xml: "application/xml",
+              zip: "application/zip",
+            };
+            if (extMap[ext]) contentType = extMap[ext];
           }
-          const buf = Buffer.from(await res.arrayBuffer());
+
           if (buf.length > MAX_BYTES) {
-            out.trace.push(`share_files skip ${url}: ${buf.length}B > ${MAX_BYTES}B`);
+            out.trace.push(`share_files skip: ${buf.length}B > ${MAX_BYTES}B`);
             continue;
           }
-          const ct = (res.headers.get("content-type") ?? "").split(";")[0].trim() || "application/octet-stream";
-          const urlTail = (() => {
-            try { return new URL(url).pathname.split("/").pop() ?? ""; } catch { return ""; }
-          })();
-          const rawName = (typeof f?.name === "string" && f.name.trim()) || urlTail || "file";
+          const rawName = (typeof f?.name === "string" && f.name.trim()) || nameHint || "file";
           const safeName = rawName.replace(/[^a-z0-9._-]/gi, "_").slice(0, 120) || "file";
           const key = `u/${id("f").slice(2)}/${safeName}`;
           await putObject(key, buf);
-          fetched.push({ key, name: safeName, contentType: ct, size: buf.length, url: publicUrl(key) });
+          fetched.push({ key, name: safeName, contentType, size: buf.length, url: publicUrl(key) });
         } catch (e) {
-          out.trace.push(`share_files fetch ${url} failed: ${(e as Error).message}`);
+          out.trace.push(`share_files source ${hasUrl ? rawUrl : rawPath} failed: ${(e as Error).message}`);
         }
       }
 

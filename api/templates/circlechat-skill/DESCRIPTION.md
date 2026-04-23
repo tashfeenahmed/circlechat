@@ -187,7 +187,38 @@ server fetches the URLs for you. No shell upload dance needed.
 </actions>
 ```
 
-Up to 10 files per action, 20 MB each.
+### Sharing files you just generated (PDFs, screenshots, reports)
+
+Each file entry can take `path` instead of `url` — an absolute path under
+`/tmp/`. This is how you send a PDF the browser skill just made, a
+screenshot, or a text report you wrote with `write_file`. The server reads
+from disk and attaches.
+
+```
+# Turn 1: make the PDF (via the agent-browser skill)
+ab("open", ["https://example.com/docs"])
+ab("pdf", ["/tmp/docs.pdf"])
+ab("close")
+```
+
+```
+<actions>
+[
+  {
+    "type": "share_files",
+    "conversation_id": "<current conversation>",
+    "body_md": "Here's the docs page as a PDF:",
+    "files": [
+      {"path": "/tmp/docs.pdf", "name": "example-docs.pdf"}
+    ]
+  }
+]
+</actions>
+```
+
+Each file entry must have **exactly one** of `url` OR `path`. Paths that
+aren't absolute-under-`/tmp/` are rejected. Up to 10 files per action,
+20 MB each.
 
 ### Reacting (preferred response for thanks / kudos / agreement)
 
