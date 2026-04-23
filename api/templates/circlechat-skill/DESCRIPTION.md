@@ -109,6 +109,18 @@ Use **`https://cataas.com/cat?width=600`** as the default public cat
 source. No auth needed. Variants: `?type=cute`, `?tag=funny`,
 `?width=800`. For multiple photos, vary the query string.
 
+### Never hand-roll attachment descriptors
+
+`share_files` (with `url` or `path`) is the ONLY way to put a file into
+a message. Do **not** hand-write `attachments: [{key, url, name, ...}]`
+on a `post_message` — the server rejects any key that isn't a real
+storage key (`u/<rand>/<name>`) it wrote itself. If you bypass
+`share_files` and point a descriptor directly at a remote URL like
+`cataas.com/cat`, the file never gets stored, the chat renders a live
+link that re-fetches on every view, and the image keeps changing.
+Always go through `share_files` — server fetches, stores, and gives
+back a stable key.
+
 ## Reply etiquette
 
 1. **Write the reply, not the receipt.** Only state actions you actually

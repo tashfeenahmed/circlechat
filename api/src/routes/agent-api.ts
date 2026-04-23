@@ -16,6 +16,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
 import { checkReplyBody } from "../agents/reply-guard.js";
+import { sanitizeAttachments } from "../agents/executor.js";
 import {
   STATUSES,
   listTasks,
@@ -253,13 +254,20 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
 
     const id = makeId("m");
     const ts = new Date();
+    // Enforce the same attachment shape agent actions do: keys must point at
+    // storage the server wrote (u/<rand>/<name>), so agents can't hand-roll a
+    // descriptor pointing at an arbitrary external URL (e.g. cataas.com/cat)
+    // and have it render in chat as an image. The old path trusted whatever
+    // the agent sent, producing attachments whose content changed on every
+    // view. Bad descriptors are dropped silently and logged in traces.
+    const safeAttachments = sanitizeAttachments(body.attachments);
     await db.insert(messages).values({
       id,
       conversationId: body.conversationId,
       memberId,
       parentId: body.replyTo ?? null,
       bodyMd: guard.bodyMd,
-      attachmentsJson: body.attachments ?? [],
+      attachmentsJson: safeAttachments,
       mentions: resolvedMentionIds,
       ts,
     });
@@ -272,7 +280,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
         memberId,
         parentId: body.replyTo ?? null,
         bodyMd: guard.bodyMd,
-        attachmentsJson: body.attachments ?? [],
+        attachmentsJson: safeAttachments,
         mentions: resolvedMentionIds,
         ts: ts.toISOString(),
         reactions: [],

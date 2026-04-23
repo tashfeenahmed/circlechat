@@ -616,7 +616,7 @@ async function loadAgentWorkspace(agentMemberId: string): Promise<string | null>
 // Agents may emit attachments via post_message. Require the file to have been
 // uploaded through /agent-api/uploads or /uploads first — enforce by shape only
 // (the key + url are produced server-side on upload, so trust them if present).
-function sanitizeAttachments(input: unknown): AgentAttachment[] {
+export function sanitizeAttachments(input: unknown): AgentAttachment[] {
   if (!Array.isArray(input)) return [];
   const out: AgentAttachment[] = [];
   for (const raw of input) {
