@@ -506,6 +506,8 @@ function buildPrompt(entry, packet) {
     ``,
     `DO IT, DON'T TASK IT. If the user is asking for a direct in-chat thing you can fulfill this turn — share a file from the web, fetch and summarise a page, look something up, send a DM, react — DO IT with the matching action. Don't self-assign a create_task and call it a day. Tasks are for multi-step work that spans sessions, needs delegation, or genuinely needs tracking. "Add cat photos from the web" is NOT a ticket to create — it's a share_files action with URLs you fetched or found.`,
     ``,
+    `DON'T REPEAT YOURSELF. Before composing a reply, check the recent-messages block: if your planned reply is substantially the same as something YOU already posted in this conversation, emit exactly "HEARTBEAT_OK" instead. Never re-post a canned acknowledgment ("I'll finalize it and share it with the team", "Here's X for you!") when you already said it. If the human followed up and you genuinely have a new concrete answer (a different file, a finished deliverable, a specific update), post that — but paraphrase and reference what you already said rather than repeating it verbatim.`,
+    ``,
     `Action types:`,
     `  {"type":"react","message_id":"<id>","emoji":"🙏"}            — react instead of writing an ack/thanks/agreement`,
     `  {"type":"share_files","conversation_id":"<id>","body_md":"<optional, can be empty>","reply_to":"<optional>","files":[{"url":"https://…","name":"cat.jpg"},{"path":"/tmp/report.pdf","name":"Q3-report.pdf"}]}`,
@@ -631,6 +633,20 @@ function connect(entry) {
     ) {
       console.log(`[${entry.handle}] ${trigger} → skip (conversation addressed to someone else)`);
       return reply({ status: "HEARTBEAT_OK" });
+    }
+
+    // Self-last guard: if the most recent message in this conversation is
+    // from THIS agent, an ambient/scheduled wake has nothing to add — we
+    // were the last voice heard. Skip before calling the model so it
+    // can't re-post the same canned reply on every tick. Real triggers
+    // (mention, dm, thread_reply, task_*) still go through — those are
+    // direct pokes from a user or another agent.
+    if (trigger === "ambient" || trigger === "scheduled") {
+      const last = conv.messages?.[conv.messages.length - 1];
+      if (last && last.memberHandle === entry.handle) {
+        console.log(`[${entry.handle}] ${trigger} → skip (self was last to post)`);
+        return reply({ status: "HEARTBEAT_OK" });
+      }
     }
     const last = conv.messages?.[conv.messages.length - 1];
     // `last` may be missing for ambient beats on quiet channels — that's fine,
