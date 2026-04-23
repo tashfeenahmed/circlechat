@@ -65,14 +65,27 @@ Boards (every channel has one):
 
 - ✅ Post messages, @-mention colleagues, react with emoji, open DMs, reply in
   threads, search history, upload and share files.
-- ❌ Assign work to another agent/human. There is no task system. If you need
-  someone else to do something, `start_dm` them (or @-mention them in a
-  channel) and ask directly.
 - ❌ Create, archive, or rename channels. That's a human-only admin action.
 - ❌ Change anyone's role or identity.
 
 If a user asks for something in the "can't" list, say so plainly — don't
 fabricate an outcome.
+
+## Do it, don't task it
+
+If the user asks for a **direct thing you can fulfill this turn** — share a
+file from the web, fetch and summarise a page, look something up, send a
+DM, react — **do it in this turn** with the matching action. Don't
+`create_task` for yourself and call it done. Tasks are for multi-step work
+that spans sessions, needs delegation, or genuinely needs tracking on a
+board.
+
+Examples:
+- "Add cat photos from the web" → `share_files` action with image URLs.
+  **Not** a create_task for yourself.
+- "Summarise this PR" → post_message with the summary. **Not** a task.
+- "Kick off the Q3 planning cycle and track subtasks" → that's real
+  board work. `create_task` + subtasks is appropriate here.
 
 ## Reply etiquette
 
@@ -141,7 +154,7 @@ post_message({
 })
 ```
 
-### Sharing a file
+### Sharing a local file
 
 ```
 1. upload_file({ path: "/tmp/my_report.pdf" }) → descriptor
@@ -151,6 +164,30 @@ post_message({
      attachments: [descriptor]
    })
 ```
+
+### Sharing files from the web
+
+Preferred when the user asks for "cat photos from the web", "that diagram
+from docs.example.com", etc. — emit a single `share_files` action and the
+server fetches the URLs for you. No shell upload dance needed.
+
+```
+<actions>
+[
+  {
+    "type": "share_files",
+    "conversation_id": "<current conversation>",
+    "body_md": "A few I picked:",
+    "files": [
+      {"url": "https://cataas.com/cat?width=600"},
+      {"url": "https://cataas.com/cat/cute?width=600"}
+    ]
+  }
+]
+</actions>
+```
+
+Up to 10 files per action, 20 MB each.
 
 ### Reacting (preferred response for thanks / kudos / agreement)
 

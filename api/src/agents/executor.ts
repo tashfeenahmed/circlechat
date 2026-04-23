@@ -23,6 +23,7 @@ import {
   addAssignee,
   addComment,
 } from "../lib/tasks-core.js";
+import { putObject, publicUrl } from "../lib/storage.js";
 
 export interface AgentAttachment {
   key: string;
@@ -64,7 +65,19 @@ export type AgentAction =
       archived?: boolean;
     }
   | { type: "assign_task"; task_id: string; member_id: string }
-  | { type: "task_comment"; task_id: string; body_md: string; mentions?: string[] };
+  | { type: "task_comment"; task_id: string; body_md: string; mentions?: string[] }
+  // Fetch one or more URLs server-side and post them as attachments. Saves
+  // the agent from a six-step shell ritual (urllib → tempfile → multipart
+  // upload → parse → <attachments> block) for the common "share a photo /
+  // doc from the web" case. Without this, faced with the friction, agents
+  // tend to just create_task for themselves instead of doing the work.
+  | {
+      type: "share_files";
+      conversation_id: string;
+      body_md?: string;
+      reply_to?: string;
+      files: Array<{ url: string; name?: string }>;
+    };
 
 export interface ExecOutcome {
   actionsApplied: number;
@@ -410,6 +423,134 @@ async function applyOne(
         return;
       }
       out.trace.push(`task_comment on ${a.task_id}`);
+      return;
+    }
+    case "share_files": {
+      const guard = checkReplyBody(a.body_md ?? "");
+      // An empty body is allowed for share_files — the attachments carry the message.
+      const bodyMd = guard.ok ? guard.bodyMd : "";
+
+      const [mm] = await db
+        .select()
+        .from(conversationMembers)
+        .where(
+          and(
+            eq(conversationMembers.conversationId, a.conversation_id),
+            eq(conversationMembers.memberId, agentMemberId),
+          ),
+        )
+        .limit(1);
+      if (!mm) throw new Error("agent_not_in_conversation");
+
+      const MAX_FILES = 10;
+      const MAX_BYTES = 20 * 1024 * 1024;
+      const FETCH_TIMEOUT_MS = 15_000;
+      const files = Array.isArray(a.files) ? a.files.slice(0, MAX_FILES) : [];
+
+      const fetched: AgentAttachment[] = [];
+      for (const f of files) {
+        const url = typeof f?.url === "string" ? f.url : "";
+        if (!/^https?:\/\//i.test(url)) {
+          out.trace.push(`share_files skip: invalid url`);
+          continue;
+        }
+        try {
+          const controller = new AbortController();
+          const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+          const res = await fetch(url, { signal: controller.signal, redirect: "follow" });
+          clearTimeout(t);
+          if (!res.ok) {
+            out.trace.push(`share_files skip ${url}: HTTP ${res.status}`);
+            continue;
+          }
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.length > MAX_BYTES) {
+            out.trace.push(`share_files skip ${url}: ${buf.length}B > ${MAX_BYTES}B`);
+            continue;
+          }
+          const ct = (res.headers.get("content-type") ?? "").split(";")[0].trim() || "application/octet-stream";
+          const urlTail = (() => {
+            try { return new URL(url).pathname.split("/").pop() ?? ""; } catch { return ""; }
+          })();
+          const rawName = (typeof f?.name === "string" && f.name.trim()) || urlTail || "file";
+          const safeName = rawName.replace(/[^a-z0-9._-]/gi, "_").slice(0, 120) || "file";
+          const key = `u/${id("f").slice(2)}/${safeName}`;
+          await putObject(key, buf);
+          fetched.push({ key, name: safeName, contentType: ct, size: buf.length, url: publicUrl(key) });
+        } catch (e) {
+          out.trace.push(`share_files fetch ${url} failed: ${(e as Error).message}`);
+        }
+      }
+
+      if (fetched.length === 0) {
+        out.errors.push(`share_files: no files fetched from ${files.length} url(s)`);
+        return;
+      }
+
+      // Post a message carrying the attachments — mirror post_message's flow
+      // for mention-resolution + broadcast expansion + trigger firing.
+      const [authorRow] = await db
+        .select({ workspaceId: members.workspaceId })
+        .from(members)
+        .where(eq(members.id, agentMemberId))
+        .limit(1);
+      const workspaceId = authorRow?.workspaceId ?? "";
+      const handles = extractMentionHandles(bodyMd);
+      const isBroadcast = handles.some((h) => h === "everyone" || h === "channel");
+      const directMentionIds = workspaceId
+        ? await resolveHandlesToMemberIds(handles, workspaceId)
+        : [];
+      let broadcastIds: string[] = [];
+      if (isBroadcast) {
+        const all = await db
+          .select({ memberId: conversationMembers.memberId })
+          .from(conversationMembers)
+          .where(eq(conversationMembers.conversationId, a.conversation_id));
+        broadcastIds = all.map((r) => r.memberId).filter((m) => m !== agentMemberId);
+      }
+      const resolvedMentionIds = Array.from(new Set([...directMentionIds, ...broadcastIds]));
+      const mid = id("m");
+      const now = new Date();
+      await db.insert(messages).values({
+        id: mid,
+        conversationId: a.conversation_id,
+        memberId: agentMemberId,
+        parentId: a.reply_to ?? null,
+        bodyMd,
+        attachmentsJson: fetched,
+        mentions: resolvedMentionIds,
+        ts: now,
+      });
+      await publishToConversation(a.conversation_id, {
+        type: "message.new",
+        conversationId: a.conversation_id,
+        message: {
+          id: mid,
+          conversationId: a.conversation_id,
+          memberId: agentMemberId,
+          parentId: a.reply_to ?? null,
+          bodyMd,
+          attachmentsJson: fetched,
+          mentions: resolvedMentionIds,
+          ts: now.toISOString(),
+          reactions: [],
+          replyCount: 0,
+        },
+      });
+      if (workspaceId) {
+        fireMentionTriggers({
+          authorMemberId: agentMemberId,
+          conversationId: a.conversation_id,
+          messageId: mid,
+          bodyMd,
+          parentId: a.reply_to ?? null,
+          workspaceId,
+          resolvedMentionIds,
+          directMentionIds,
+          isBroadcast,
+        }).catch(() => {});
+      }
+      out.trace.push(`share_files ${mid} (${fetched.length} file(s))`);
       return;
     }
     default:
