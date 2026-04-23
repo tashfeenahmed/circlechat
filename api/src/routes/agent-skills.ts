@@ -24,7 +24,8 @@ async function resolveAgentSkillsRoot(agent: { id: string; handle: string; kind:
   if (agent.kind === "openclaw") {
     return join(HERMES_HOMES_DIR, `.openclaw-${agent.handle}`, "skills");
   }
-  return await resolveAgentSkillsRoot(agent);
+  const home = await resolveHermesHome(agent.id, agent.handle);
+  return join(home, "skills");
 }
 
 const SkillBody = z.object({
@@ -58,7 +59,7 @@ export default async function agentSkillsRoutes(app: FastifyInstance): Promise<v
 
     const out: Array<{ name: string; hasDescription: boolean; summary: string | null }> = [];
     for (const name of managed) {
-      const desc = await safeReadFile(join(root, name, "DESCRIPTION.md"));
+      const desc = await resolveDescription(root, name);
       out.push({
         name,
         hasDescription: !!desc,
@@ -74,8 +75,7 @@ export default async function agentSkillsRoutes(app: FastifyInstance): Promise<v
     if (!SkillNameRe.test(name)) return reply.code(400).send({ error: "bad_name" });
     const agent = await resolveAgent(req, reply);
     if (!agent) return;
-    const path = join(await resolveAgentSkillsRoot(agent), name, "DESCRIPTION.md");
-    const md = await safeReadFile(path);
+    const md = await resolveDescription(await resolveAgentSkillsRoot(agent), name);
     if (md === null) return reply.code(404).send({ error: "not_found" });
     return { name, markdown: md };
   });
@@ -130,6 +130,26 @@ async function safeReadFile(path: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+// Handle both layouts found in staged skills:
+//   flat:   skills/<name>/DESCRIPTION.md              (e.g. circlechat)
+//   nested: skills/<name>/<subdir>/DESCRIPTION.md     (e.g. browser/agent-browser)
+// The installer writes "browser" to the manifest but the skill docs actually
+// live one directory deeper. Fall back to a single-subdir scan so nested
+// skills surface in the UI without a manifest migration.
+async function resolveDescription(root: string, name: string): Promise<string | null> {
+  const flat = await safeReadFile(join(root, name, "DESCRIPTION.md"));
+  if (flat !== null) return flat;
+  try {
+    const entries = await fs.readdir(join(root, name), { withFileTypes: true });
+    const subs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    for (const sub of subs) {
+      const nested = await safeReadFile(join(root, name, sub, "DESCRIPTION.md"));
+      if (nested !== null) return nested;
+    }
+  } catch { /* root/name missing */ }
+  return null;
 }
 
 function extractSummary(md: string): string | null {
