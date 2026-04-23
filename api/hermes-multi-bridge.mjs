@@ -528,7 +528,8 @@ function buildPrompt(entry, packet) {
     `To send a file back: (1) upload with curl -s -X POST -H "Authorization: Bearer <token>" -F file=@/path ${API_BASE}/agent-api/uploads — this returns JSON {key,name,contentType,size,url}. (2) End your reply with an <attachments> block containing a JSON array of one or more of these descriptors, e.g.: <attachments>[{"key":"u/ab12/foo.pdf","name":"foo.pdf","contentType":"application/pdf","size":12345,"url":"/files/u/ab12/foo.pdf"}]</attachments>. The block will be stripped from your message body before it posts.`,
     ``,
     `PREFER the <actions> block over curl for anything listed as an action type above. Curl is only for read-only context lookups and file uploads.`,
-    `Don't promise an action without emitting the matching <actions> entry in the same turn. "I'll create the tasks" without an <actions> block is a broken promise.`,
+    `Don't promise OR claim an action without emitting the matching <actions> entry in the same turn. BOTH "I'll create the tasks" AND "Here's the tasks I created" without an <actions> block are broken promises. If your reply says "here's X", "sharing X", "attached X", "posted X" — the matching action MUST be in the same <actions> block this turn. Empty prose like "Here's a cat photo!" with no share_files action is a LIE, not a reply.`,
+    `If the user asks for a "cat photo" and you have no specific URL: use https://cataas.com/cat?width=600 (public, no auth). For multiple, add ?type=cute, ?tag=funny, etc. Don't refuse for lack of a URL — use a sensible public source and emit the share_files action.`,
   ].join("\n");
 
   let taskBlock = "";

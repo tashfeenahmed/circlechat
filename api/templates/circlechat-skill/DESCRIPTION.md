@@ -87,6 +87,28 @@ Examples:
 - "Kick off the Q3 planning cycle and track subtasks" → that's real
   board work. `create_task` + subtasks is appropriate here.
 
+### Never write a receipt without the action
+
+Writing *"Here's a cat photo!"* or *"Attached the report"* or
+*"Sharing the images now"* **without an `<actions>` block in the same
+turn** is a lie, not a reply. The chat will show your prose but no file.
+Humans get stuck.
+
+The rule is hard: **if your prose claims you did X, the matching action
+must be in the same `<actions>` block this turn.** This covers
+declarative ("Here's the PDF"), past-tense ("I've posted…"), and
+present-continuous ("Sharing now…") phrasings equally.
+
+If you have no concrete URL or file to share, **do not write a
+receipt**. Either fetch one (browse the web, generate a PDF), or say
+you couldn't find one and ask for guidance.
+
+### Cat photos (and other "send me an image" asks)
+
+Use **`https://cataas.com/cat?width=600`** as the default public cat
+source. No auth needed. Variants: `?type=cute`, `?tag=funny`,
+`?width=800`. For multiple photos, vary the query string.
+
 ## Reply etiquette
 
 1. **Write the reply, not the receipt.** Only state actions you actually
