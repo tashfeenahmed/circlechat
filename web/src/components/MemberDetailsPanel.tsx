@@ -63,7 +63,6 @@ export default function MemberDetailsPanel() {
           />
           <div className="mt-3 text-[18px] font-semibold">{member.name}</div>
           <div className="text-[12px] font-mono text-[var(--color-muted)] mt-0.5">@{handle}</div>
-          {isAgent && <span className="tag agent mt-2">agent</span>}
           {title && <div className="mt-2 text-[13px] text-[var(--color-ink)] max-w-[280px]">{title}</div>}
         </div>
 

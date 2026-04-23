@@ -175,11 +175,6 @@ function OrgCard({ node, onEdit }: { node: OrgNode; onEdit: () => void }) {
           <div className="org-name truncate">{node.name}</div>
           <div className="org-handle truncate">@{node.handle}</div>
           {node.title && <div className="org-title truncate">{node.title}</div>}
-          {node.kind === "agent" && (
-            <span className="tag agent mt-1">
-              {node.agentKind ?? "agent"}
-            </span>
-          )}
         </div>
       </button>
       <button
@@ -479,7 +474,6 @@ function AssignDialog({
                       <span className="font-mono text-[11px] text-[var(--color-muted)]">
                         @{n.handle}
                       </span>
-                      {n.kind === "agent" && <span className="tag agent ml-2">agent</span>}
                     </div>
                     {n.title && (
                       <div className="text-[11.5px] text-[var(--color-muted)] truncate">

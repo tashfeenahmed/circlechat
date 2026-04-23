@@ -87,7 +87,6 @@ export default function DMPage() {
           <div className="ch-title">{otherName}</div>
           <div className="ch-meta">
             <span className="font-mono text-[12px]">@{otherHandle}</span>
-            {otherAgent && <span className="tag agent ml-1">agent</span>}
           </div>
         </header>
         {convId ? (

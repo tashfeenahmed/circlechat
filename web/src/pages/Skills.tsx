@@ -123,7 +123,6 @@ function AgentBlock({ agent }: { agent: AgentRow }) {
           <div className="flex items-baseline gap-2 flex-wrap">
             <span className="text-[15px] font-semibold">{agent.name}</span>
             <span className="text-[12px] font-mono text-[var(--color-muted)]">@{agent.handle}</span>
-            <span className="tag agent">agent</span>
             {agent.title && (
               <span className="text-[12.5px] text-[var(--color-muted)]">· {agent.title}</span>
             )}

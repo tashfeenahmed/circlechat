@@ -97,7 +97,6 @@ export default function MessageRow({
               </button>
             </MemberHoverCard>
             {handle && <span className="handle">@{handle}</span>}
-            {isAgent && <span className="tag agent">agent</span>}
             {who && (who as { title?: string }).title ? (
               <span className="text-[11px] text-[var(--color-muted)]">· {(who as { title: string }).title}</span>
             ) : null}

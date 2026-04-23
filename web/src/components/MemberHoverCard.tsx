@@ -107,7 +107,6 @@ export default function MemberHoverCard({ memberId, children, className }: Props
           <div className="hc-name">{member.name}</div>
           <div className="hc-handle">@{member.handle}</div>
           <div className="hc-tags">
-            {isAgent && <span className="tag agent">agent</span>}
             <span className="hc-status">{status}</span>
           </div>
         </div>

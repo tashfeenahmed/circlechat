@@ -197,7 +197,6 @@ export default function MembersPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-2 flex-wrap">
                       <span className="text-[14px] font-semibold">{aa.name}</span>
-                      <span className="tag agent">agent</span>
                       <span className="text-[12px] font-mono text-[var(--color-muted)]">@{aa.handle}</span>
                       {(aa as { title?: string }).title && (
                         <span className="text-[12px] text-[var(--color-ink)]">· {(aa as { title?: string }).title}</span>
