@@ -86,6 +86,11 @@ export async function fileDirectoryRoutes(app: FastifyInstance): Promise<void> {
         and(
           inArray(messages.conversationId, convIds),
           isNull(messages.deletedAt),
+          // Gate jsonb_array_length on type-check — a single row with
+          // attachments_json stored as anything other than a JSON array
+          // (e.g. a double-encoded string) would otherwise throw and
+          // blow up the whole /files listing for every caller.
+          dsql`jsonb_typeof(${messages.attachmentsJson}) = 'array'` as never,
           dsql`jsonb_array_length(${messages.attachmentsJson}) > 0` as never,
         ),
       )
