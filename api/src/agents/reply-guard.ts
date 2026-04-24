@@ -14,7 +14,15 @@ export type GuardResult =
   | { ok: true; bodyMd: string }
   | { ok: false; reason: string };
 
-const HEARTBEAT_RE = /^\s*HEARTBEAT_OK\s*$/;
+// startsWith rather than exact match: a valid <actions> block gets stripped
+// before this check runs, so anything still starting with HEARTBEAT_OK is
+// either a bare silence sentinel or a malformed actions block that the
+// bridge couldn't parse — either way, not a real chat message.
+const HEARTBEAT_RE = /^\s*HEARTBEAT_OK\b/;
+// A Python traceback in a reply body means Hermes itself crashed and the
+// bridge's stderr-as-reply fallback picked up the crash dump. Reject
+// rather than post it to the channel.
+const TRACEBACK_RE = /^\s*Traceback \(most recent call last\):/m;
 // XML-ish tool-call markup. Match opening AND closing variants of all three
 // tag families — Hermes / OpenClaw sometimes emit only the closing `</invoke>`
 // at the tail of a botched JSON tool call.
@@ -64,6 +72,7 @@ export function checkReplyBody(bodyMd: string): GuardResult {
   const trimmed = scrubbed.trim();
   if (!trimmed) return { ok: false, reason: "empty_body" };
   if (HEARTBEAT_RE.test(trimmed)) return { ok: false, reason: "heartbeat_leaked" };
+  if (TRACEBACK_RE.test(trimmed)) return { ok: false, reason: "python_traceback" };
   if (TOOL_USE_RE.test(trimmed)) return { ok: false, reason: "tool_use_markup" };
   if (TOOL_CALL_JSON_RE.test(trimmed)) return { ok: false, reason: "tool_call_json" };
   if (HISTORY_ECHO_RE.test(trimmed)) return { ok: false, reason: "history_format_echo" };

@@ -221,8 +221,26 @@ function isEntrypointNoise(line) {
   return false;
 }
 
+// Python traceback in stdout/stderr means Hermes crashed (usually SIGTERM
+// from our spawn timeout → KeyboardInterrupt). Posting the traceback to
+// chat is never useful — treat it as a crash and let the bridge fall
+// through to its error handler.
+function looksLikeTraceback(text) {
+  return /^\s*Traceback \(most recent call last\):/m.test(text);
+}
+
+// Hermes' built-in "clarify" feature emits this placeholder to stdout when
+// its internal clarification prompt times out. It's scaffolding text, not
+// something the agent decided to say — strip it.
+function stripClarifyNoise(text) {
+  return text
+    .replace(/^\s*\(clarify timed out after \d+s[^)]*\)\s*\n?/gm, "")
+    .trim();
+}
+
 function extractReply(raw) {
   const stripAnsi = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+  if (looksLikeTraceback(stripAnsi)) return "";
   const lines = stripAnsi.split("\n");
   const out = [];
   let inside = false;
@@ -238,9 +256,9 @@ function extractReply(raw) {
     if (isEntrypointNoise(content)) continue;
     out.push(content);
   }
-  const text = out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  const text = stripClarifyNoise(out.join("\n").replace(/\n{3,}/g, "\n\n").trim());
   if (text) return text;
-  return stripAnsi
+  return stripClarifyNoise(stripAnsi
     .replace(/[╭╰│╮╯─]+/g, "")
     .split("\n")
     .filter((l) => !/^session_id:/i.test(l))
@@ -248,7 +266,7 @@ function extractReply(raw) {
     .filter((l) => !isEntrypointNoise(l))
     .join("\n")
     .trim()
-    .slice(0, 2000);
+    .slice(0, 2000));
 }
 
 // Pulls every @handle token out of a markdown body. Skips `@` inside code
@@ -678,15 +696,24 @@ function connect(entry) {
         ? await callOpenClaw(prompt, entry.openclawHome, entry.token)
         : await callHermes(prompt, entry.hermesHome, entry.token);
       const rawText = isOpenClaw
-        ? (extractOpenClawReply(stdout) || extractOpenClawReply(stderr) || "(empty reply)")
-        : (extractReply(stdout) || extractReply(stderr) || "(empty reply)");
+        ? (extractOpenClawReply(stdout) || extractOpenClawReply(stderr) || "")
+        : (extractReply(stdout) || extractReply(stderr) || "");
+      // Hermes produced nothing usable (crash, SIGTERM, empty streams). Stay
+      // silent rather than posting "(empty reply)" as text — always safer.
+      if (!rawText.trim()) {
+        console.log(`[${entry.handle}] ${trigger} → skip (empty/crashed reply)`);
+        return reply({ status: "HEARTBEAT_OK" });
+      }
       // Silence-allowed triggers: model is permitted to skip a post by returning
       // HEARTBEAT_OK. `mention` is here only for agent→agent mentions (the
       // prompt forbids it on human mentions, and the executor's reply-guard
       // would also reject HEARTBEAT_OK as `heartbeat_leaked` if it slipped
       // through). Keeping it on the whitelist avoids misleading
       // `heartbeat_leaked` errors in run logs when agents legitimately stay
-      // quiet on a colleague's @-mention.
+      // quiet on a colleague's @-mention. Exact match here so a valid
+      // `<actions>` block following HEARTBEAT_OK still gets extracted +
+      // executed below — the text "HEARTBEAT_OK" left over as body will be
+      // rejected by the reply-guard on the API side.
       if (
         (trigger === "scheduled" ||
           trigger === "thread_reply" ||
