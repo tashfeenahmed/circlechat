@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, desc, asc } from "drizzle-orm";
+import { and, eq, gt, inArray, desc, asc, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   agents,
@@ -154,7 +154,7 @@ export async function buildContext(opts: {
     ? await db
         .select()
         .from(messages)
-        .where(inArray(messages.conversationId, convIds))
+        .where(and(inArray(messages.conversationId, convIds), isNull(messages.deletedAt)))
         .orderBy(desc(messages.ts))
         .limit(historyLimit * convIds.length)
     : [];
@@ -166,6 +166,7 @@ export async function buildContext(opts: {
           and(
             inArray(messages.conversationId, convIds),
             gt(messages.ts, opts.sinceTs),
+            isNull(messages.deletedAt),
           ),
         )
         .orderBy(desc(messages.ts))
@@ -308,7 +309,7 @@ export async function buildContext(opts: {
       const replies = await db
         .select()
         .from(messages)
-        .where(eq(messages.parentId, rootId))
+        .where(and(eq(messages.parentId, rootId), isNull(messages.deletedAt)))
         .orderBy(asc(messages.ts));
       const chain = [rootMsg, ...replies].filter(Boolean) as typeof replies;
       // Ensure every author is in the directory.

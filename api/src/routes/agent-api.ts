@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { and, eq, inArray, asc, desc, lt, ilike } from "drizzle-orm";
+import { and, eq, inArray, asc, desc, lt, ilike, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   agents,
@@ -419,7 +419,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     if (!convIds.includes(q.conversationId))
       return reply.code(403).send({ error: "not_visible" });
 
-    const where = [eq(messages.conversationId, q.conversationId)];
+    const where = [eq(messages.conversationId, q.conversationId), isNull(messages.deletedAt)];
     if (q.parentId) where.push(eq(messages.parentId, q.parentId));
     if (q.before) where.push(lt(messages.ts, new Date(q.before)));
     const limit = Math.min(200, Math.max(1, Number(q.limit ?? 50)));
@@ -451,7 +451,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     const replies = await db
       .select()
       .from(messages)
-      .where(eq(messages.parentId, rootId))
+      .where(and(eq(messages.parentId, rootId), isNull(messages.deletedAt)))
       .orderBy(asc(messages.ts));
     const chain = [root, ...replies].filter(Boolean) as typeof replies;
     const dir = await resolveMembers(chain.map((m) => m.memberId));
@@ -475,7 +475,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     const rows = await db
       .select()
       .from(messages)
-      .where(and(inArray(messages.conversationId, convIds), ilike(messages.bodyMd, `%${q.q}%`)))
+      .where(and(inArray(messages.conversationId, convIds), ilike(messages.bodyMd, `%${q.q}%`), isNull(messages.deletedAt)))
       .orderBy(desc(messages.ts))
       .limit(limit);
 
