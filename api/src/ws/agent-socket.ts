@@ -82,7 +82,7 @@ export default async function agentSocketWs(app: FastifyInstance): Promise<void>
         body.agentId,
         makeId("c").slice(2, 20),
         { type: body.kind, packet: body.packet },
-        body.timeoutMs ?? 120_000,
+        body.timeoutMs ?? 210_000,
       );
       return reply.send({ reply: resp });
     } catch (e) {

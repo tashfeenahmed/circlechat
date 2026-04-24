@@ -141,7 +141,7 @@ const worker = new Worker<AgentJobPayload>(
       errors: outcome.errors,
     });
   },
-  { connection: redis, concurrency: 10, lockDuration: 120_000 },
+  { connection: redis, concurrency: 10, lockDuration: 240_000 },
 );
 
 async function emitFinished(
