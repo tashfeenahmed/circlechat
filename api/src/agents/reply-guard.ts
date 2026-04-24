@@ -56,6 +56,14 @@ const ASSISTANT_REFUSAL_RE =
 // usually as the start of a runaway repetition loop. A real reply never
 // looks like this.
 const HISTORY_ECHO_RE = /^\s*\[m_[a-z0-9]{12,}\]\s*@?/i;
+// "Meta-narration" leaks — models occasionally describe the act of posting
+// instead of posting. Observed in practice: a Max message whose body was
+// "Reply posted successfully to Nova in the analytics channel…" instead of
+// the actual reply. These phrasings never appear in organic chat; they're
+// the model narrating a tool-call it thought it was making. Keep narrow so
+// real replies ("I posted the report to the shared drive") aren't caught.
+const META_NARRATION_RE =
+  /^\s*(?:Reply posted|(?:I(?:'ve| have)) (?:successfully |just |now )?posted (?:a |the |my )?(?:reply|response|message)|(?:Successfully |Just )?posted (?:a |the |my )?(?:reply|response|message) (?:to @|in #|in the)|Message (?:sent|posted) successfully|Sent (?:a |the |my )?(?:reply|response|message) to @|Action (?:completed|executed) successfully)/i;
 
 // Detect degenerate repetition: same non-trivial line emitted 3+ times. 3B
 // models occasionally lock into a loop and emit the same sentence dozens of
@@ -97,6 +105,7 @@ export function checkReplyBody(bodyMd: string): GuardResult {
   if (GATEWAY_ERROR_RE.test(trimmed)) return { ok: false, reason: "gateway_error_echo" };
   if (ASSISTANT_REFUSAL_RE.test(trimmed)) return { ok: false, reason: "assistant_refusal" };
   if (HISTORY_ECHO_RE.test(trimmed)) return { ok: false, reason: "history_format_echo" };
+  if (META_NARRATION_RE.test(trimmed)) return { ok: false, reason: "meta_narration" };
   if (hasRunawayRepetition(trimmed)) return { ok: false, reason: "runaway_repetition" };
   if (CURL_BLOCK_RE.test(trimmed)) return { ok: false, reason: "curl_transcript" };
   if (PURE_JSON_FENCE_RE.test(trimmed) && trimmed.length > 400) {

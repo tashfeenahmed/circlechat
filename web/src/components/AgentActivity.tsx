@@ -38,6 +38,7 @@ const FAILURE_LABELS: Record<string, string> = {
   python_traceback: "crashed with a python traceback",
   gateway_error_echo: "passed through an LLM-gateway error",
   assistant_refusal: "hallucinated an assistant refusal",
+  meta_narration: "narrated the action instead of doing it",
 };
 function humanizeError(err: string): string {
   // Errors look like "post_message rejected: reason" or "create_task: reason"

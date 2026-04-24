@@ -411,10 +411,13 @@ function formatMsg(agent, m) {
 
 function buildPrompt(entry, packet) {
   const agent = packet.agent || {};
-  const conv = (packet.inbox && packet.inbox[0]) || {};
+  const primaryConv = packet.inbox && packet.inbox[0];
+  const taskOnly = !primaryConv;
+  const conv = primaryConv || {};
   const kind = conv.conversationKind ?? "channel";
-  const convLabel =
-    kind === "dm"
+  const convLabel = taskOnly
+    ? "no active channel — this is a task-only heartbeat"
+    : kind === "dm"
       ? "a direct message (1:1)"
       : `the #${conv.conversationName || "channel"} channel`;
   const topicLine = conv.conversationTopic ? `\nChannel topic: ${conv.conversationTopic}` : "";
@@ -493,8 +496,9 @@ function buildPrompt(entry, packet) {
       otherConvSummary = `\nOther conversations with new activity:\n${lines.join("\n")}`;
   }
 
-  const triggerLine =
-    packet.trigger === "mention"
+  const triggerLine = taskOnly
+    ? `Task-only scheduled heartbeat — the channels you belong to have nothing new and you have no thread to reply in. Your only path to a useful turn is to act on a task from YOUR OPEN TASKS above. See TASK-ONLY MODE for the exact contract.`
+    : packet.trigger === "mention"
       ? lastSenderKind === "agent"
         ? `You were @-mentioned by another agent (@${last?.memberHandle ?? "someone"}). Reply ONLY if the message asks YOU a specific question, assigns YOU a task, or gives YOU new info you need to act on. If it's recognition / thanks / agreement / pleasantries, react with an emoji (use the react tool: 🙏 👏 🎉 ✅ 👍 ❤️) and respond with exactly "HEARTBEAT_OK" — don't write a reply. Never write a prose "thanks back" message. When you DO write a reply, do NOT @-mention the person you're replying to (they're already in the thread); re-tag only when bringing in someone new.`
         : `A human (@${last?.memberHandle ?? "someone"}) @-mentioned you directly. ALWAYS write a real reply — never return "HEARTBEAT_OK" on a human mention, even if the message looks like thanks or a pleasantry. If they're assigning a task, acknowledge it concretely and say what you'll do (or who you're delegating to). If it's a question, answer it. If it's praise, respond briefly in character. Optionally also react with an emoji (POST /agent-api/react), but the reply itself is required. Do NOT @-mention the human back (they're already in the thread); re-tag only when bringing in someone new.`
@@ -616,32 +620,64 @@ function buildPrompt(entry, packet) {
         : "";
       return `  • ${t.id} [${t.status}${prog}${due}${convHint}] ${t.title}${latest}`;
     });
+    const tail = taskOnly
+      ? [
+          ``,
+          `TASK-ONLY MODE — READ THIS CAREFULLY.`,
+          `No channel is attached to this heartbeat. You have NO chat surface. Prose you write has nowhere to land and will be dropped silently by the bridge. If you emit only prose and no <actions> block this turn, you accomplished nothing — the work queue advances zero, the team sees nothing.`,
+          ``,
+          `The ONLY way to make progress this turn is to emit one or more of these actions in an <actions>[...]</actions> block:`,
+          `  • {"type":"share_to_task","task_id":"task_…","body_md":"what I just did","files":[{"url":"…"}|{"path":"/tmp/…"}]}  — attach an artifact (screenshot, PDF, data, written-out answer)`,
+          `  • {"type":"task_comment","task_id":"task_…","body_md":"specific, concrete update"}  — narrate progress concretely (NOT "still working on it")`,
+          `  • {"type":"update_task","task_id":"task_…","progress":<0-100>,"status":"in_progress|review|done"}  — bump progress or flip status when you hit a milestone`,
+          ``,
+          `Pick the most-stale task above that's ACTUALLY IN YOUR LANE and do one concrete thing on it right now. A good turn produces at least one share_to_task OR task_comment with a specific deliverable attached or named. "I will look into X" is not a turn — "attached Q3 competitor table (pdf) pulled from tracker" is.`,
+          ``,
+          `If no task in the list is in your lane, or you genuinely have nothing to add on any of them, reply with exactly "HEARTBEAT_OK" — empty prose with no action is the worst possible output.`,
+          `NEVER emit post_message or any conversation-bound action in task-only mode — there is no conversation.`,
+        ]
+      : [
+          ``,
+          `On a quiet heartbeat, pick the most-stale one that's actually in your lane and make visible progress on it: use share_to_task to drop artifacts (screenshots, PDFs, data, written-out answers), task_comment to narrate what you did, and update_task to bump progress / flip status. Don't announce in chat — the activity log shows it. Keep comments specific: "attached Q3 competitor table (pdf)" not "working on it".`,
+        ];
     myTasksBlock = [
       ``,
       `YOUR OPEN TASKS (${mt.length} assigned, not done — freshest first):`,
       ...lines,
-      ``,
-      `On a quiet heartbeat, pick the most-stale one that's actually in your lane and make visible progress on it: use share_to_task to drop artifacts (screenshots, PDFs, data, written-out answers), task_comment to narrate what you did, and update_task to bump progress / flip status. Don't announce in chat — the activity log shows it. Keep comments specific: "attached Q3 competitor table (pdf)" not "working on it".`,
+      ...tail,
     ].join("\n");
   }
 
-  return [
-    identity,
-    ``,
-    `You are currently in ${convLabel}.${topicLine}${othersLine}${colleaguesLine}${reportingLine}${memberIdBlock}`,
-    threadBlock,
-    taskBlock,
-    myTasksBlock,
-    ``,
-    `Recent messages in this conversation (most recent last):`,
-    history || "(no prior messages)",
-    otherConvSummary,
-    ``,
-    triggerLine,
-    toolBlock,
-    ``,
-    `Reply briefly (1–2 sentences unless asked for more). Write only the reply text — no greetings, no sign-off, no markdown code fences around your reply.`,
-  ].join("\n");
+  const sections = taskOnly
+    ? [
+        identity,
+        ``,
+        `You are currently in ${convLabel}.${colleaguesLine}${reportingLine}${memberIdBlock}`,
+        myTasksBlock,
+        ``,
+        triggerLine,
+        toolBlock,
+        ``,
+        `Your reply body will be dropped — there is no conversation to post into. The ONLY valid output this turn is either (a) an <actions>[...]</actions> block doing real work on a task, or (b) exactly "HEARTBEAT_OK". No prose, no receipts, no "I will…".`,
+      ]
+    : [
+        identity,
+        ``,
+        `You are currently in ${convLabel}.${topicLine}${othersLine}${colleaguesLine}${reportingLine}${memberIdBlock}`,
+        threadBlock,
+        taskBlock,
+        myTasksBlock,
+        ``,
+        `Recent messages in this conversation (most recent last):`,
+        history || "(no prior messages)",
+        otherConvSummary,
+        ``,
+        triggerLine,
+        toolBlock,
+        ``,
+        `Reply briefly (1–2 sentences unless asked for more). Write only the reply text — no greetings, no sign-off, no markdown code fences around your reply.`,
+      ];
+  return sections.join("\n");
 }
 
 function connect(entry) {
