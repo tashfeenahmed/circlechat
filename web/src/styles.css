@@ -414,15 +414,12 @@ input, textarea { font: inherit; color: inherit; }
   border-radius: var(--radius-lg);
   background: var(--color-paper);
   color: var(--color-ink);
+  text-align: left;
   text-decoration: none;
-  transition: border-color 140ms, box-shadow 140ms, background 140ms, transform 140ms;
+  transition: border-color 140ms;
   cursor: pointer;
 }
-.att-file:hover {
-  border-color: var(--color-ink);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.07);
-  transform: translateY(-1px);
-}
+.att-file:hover { border-color: var(--color-ink); }
 .att-file:hover .att-file-open { opacity: 1; transform: translate(0, 0); }
 .att-file-icon {
   display: grid; place-items: center;
