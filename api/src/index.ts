@@ -77,11 +77,19 @@ if (existsSync(webDist)) {
   await app.register(fastifyStatic, { root: webDist, prefix: "/" });
   app.setNotFoundHandler((req, reply) => {
     const url = req.raw.url ?? "/";
+    // Real API / socket / file-serve paths must 404 as JSON. Everything else
+    // falls through to the SPA so client-side routes (/files, /board,
+    // /agents/:id, /c/:id, etc.) survive a hard refresh.
+    //
+    // Note: /files/u/<key> is the real file-serve route (handled in files.ts)
+    // and returns its own 404 from that handler — it never reaches here. The
+    // SPA also has a /files page, which DOES reach here and should render.
     if (
       url.startsWith("/api") ||
       url.startsWith("/events") ||
       url.startsWith("/agent-socket") ||
-      url.startsWith("/files")
+      url.startsWith("/files/u/") ||
+      url.startsWith("/_internal/")
     ) {
       reply.code(404).send({ error: "not_found" });
       return;

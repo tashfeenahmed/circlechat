@@ -211,6 +211,22 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
     return { runId };
   });
 
+  // Fire a *real* scheduled beat on demand — same trigger the cron uses every
+  // heartbeatIntervalSec. Useful for poking an idle agent without waiting for
+  // the next tick, and for debugging the full ambient/skip-guard path.
+  app.post("/agents/:id/run-heartbeat", { preHandler: requireWorkspace }, async (req, reply) => {
+    const aId = (req.params as { id: string }).id;
+    const { workspaceId } = req.auth!;
+    const [a] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.id, aId), eq(agents.workspaceId, workspaceId!)))
+      .limit(1);
+    if (!a) return reply.code(404).send({ error: "not_found" });
+    const runId = await enqueueAgentEvent(aId, { trigger: "scheduled" });
+    return { runId };
+  });
+
   app.post("/agents/:id/pause", { preHandler: requireWorkspace }, async (req, reply) => {
     const aId = (req.params as { id: string }).id;
     const { workspaceId } = req.auth!;

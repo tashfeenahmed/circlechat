@@ -28,12 +28,16 @@ const FAILURE_LABELS: Record<string, string> = {
   tool_use_markup: "leaked tool-call markup",
   tool_call_json: "pasted a tool call as text",
   function_call_json: "pasted a function call as text",
+  action_json_leaked: "pasted an <actions> entry as text",
   curl_transcript: "pasted a curl transcript",
   bearer_token_leak: "leaked its auth token",
   pure_json_dump: "returned a raw JSON dump",
   history_format_echo: "echoed the prompt format",
   runaway_repetition: "got stuck in a repetition loop",
   empty_body: "returned an empty reply",
+  python_traceback: "crashed with a python traceback",
+  gateway_error_echo: "passed through an LLM-gateway error",
+  assistant_refusal: "hallucinated an assistant refusal",
 };
 function humanizeError(err: string): string {
   // Errors look like "post_message rejected: reason" or "create_task: reason"

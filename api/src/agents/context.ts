@@ -90,6 +90,26 @@ export interface ContextPacket {
   }>;
   memory: Record<string, unknown>;
   reporting: ReportingBundle;
+  // Open tasks assigned to this agent, freshest first. Present on every
+  // trigger so heartbeats have a "what am I working on?" list — the agent
+  // can pick one up, move status, drop a progress comment, attach artifacts.
+  myTasks: Array<{
+    id: string;
+    title: string;
+    status: string;
+    progress: number;
+    dueAt: string | null;
+    conversationId: string | null;
+    conversationName: string | null;
+    labels: string[];
+    commentCount: number;
+    latestComment: {
+      memberId: string;
+      memberHandle: string;
+      bodyMd: string;
+      ts: string;
+    } | null;
+  }>;
   task?: {
     id: string;
     conversationId: string | null;
@@ -489,6 +509,124 @@ export async function buildContext(opts: {
     }
   }
 
+  // Agent's open workload — assigned tasks not yet `done` or archived.
+  // Bounded to 12 to keep prompts small; sorted freshest-activity-first so
+  // when the inbox wake fires, the most-active cards are at the top.
+  const myAssigned = agentMemberId
+    ? await db
+        .select({ taskId: taskAssignees.taskId })
+        .from(taskAssignees)
+        .where(eq(taskAssignees.memberId, agentMemberId))
+    : [];
+  const myTaskIds = myAssigned.map((r) => r.taskId);
+  const myTaskRows = myTaskIds.length
+    ? await db
+        .select()
+        .from(tasks)
+        .where(and(inArray(tasks.id, myTaskIds), eq(tasks.archived, false)))
+        .orderBy(desc(tasks.updatedAt))
+        .limit(20)
+    : [];
+  const openMyTaskRows = myTaskRows.filter((t) => t.status !== "done").slice(0, 12);
+  const myTaskIdsOpen = openMyTaskRows.map((t) => t.id);
+
+  const myLatestComments = myTaskIdsOpen.length
+    ? await db
+        .select({
+          taskId: taskComments.taskId,
+          memberId: taskComments.memberId,
+          bodyMd: taskComments.bodyMd,
+          ts: taskComments.ts,
+        })
+        .from(taskComments)
+        .where(and(inArray(taskComments.taskId, myTaskIdsOpen), isNull(taskComments.deletedAt)))
+        .orderBy(desc(taskComments.ts))
+    : [];
+  const myLatestByTask = new Map<string, (typeof myLatestComments)[number]>();
+  for (const c of myLatestComments) if (!myLatestByTask.has(c.taskId)) myLatestByTask.set(c.taskId, c);
+  const myCommentCount = new Map<string, number>();
+  for (const c of myLatestComments) myCommentCount.set(c.taskId, (myCommentCount.get(c.taskId) ?? 0) + 1);
+
+  // Resolve any comment authors we haven't already pulled into memberDirectory.
+  const myCommentMemberIds = Array.from(new Set(myLatestComments.map((c) => c.memberId))).filter(
+    (m) => !memberDirectory[m],
+  );
+  if (myCommentMemberIds.length) {
+    const extraMembers = await db
+      .select()
+      .from(members)
+      .where(inArray(members.id, myCommentMemberIds));
+    const uRefs = extraMembers.filter((m) => m.kind === "user").map((m) => m.refId);
+    const aRefs = extraMembers.filter((m) => m.kind === "agent").map((m) => m.refId);
+    const uX = uRefs.length ? await db.select().from(users).where(inArray(users.id, uRefs)) : [];
+    const aX = aRefs.length ? await db.select().from(agents).where(inArray(agents.id, aRefs)) : [];
+    const uXM = new Map(uX.map((u) => [u.id, u]));
+    const aXM = new Map(aX.map((a) => [a.id, a]));
+    for (const m of extraMembers) {
+      if (m.kind === "user") {
+        const u = uXM.get(m.refId);
+        if (u) memberDirectory[m.id] = { memberId: m.id, kind: "user", name: u.name, handle: u.handle };
+      } else {
+        const ag = aXM.get(m.refId);
+        if (ag) memberDirectory[m.id] = {
+          memberId: m.id,
+          kind: "agent",
+          name: ag.name,
+          handle: ag.handle,
+          isMe: m.id === agentMemberId,
+        };
+      }
+    }
+  }
+
+  const myTaskLabelRows = myTaskIdsOpen.length
+    ? await db
+        .select()
+        .from(taskLabels)
+        .where(inArray(taskLabels.taskId, myTaskIdsOpen))
+    : [];
+  const labelsByTask = new Map<string, string[]>();
+  for (const l of myTaskLabelRows) {
+    const arr = labelsByTask.get(l.taskId) ?? [];
+    arr.push(l.label);
+    labelsByTask.set(l.taskId, arr);
+  }
+
+  const myTaskConvIds = Array.from(
+    new Set(openMyTaskRows.map((t) => t.conversationId).filter((id): id is string => !!id)),
+  );
+  const myTaskConvs = myTaskConvIds.length
+    ? await db
+        .select({ id: conversations.id, name: conversations.name, kind: conversations.kind })
+        .from(conversations)
+        .where(inArray(conversations.id, myTaskConvIds))
+    : [];
+  const convNameById = new Map(myTaskConvs.map((c) => [c.id, c]));
+
+  const myTasks = openMyTaskRows.map((t) => {
+    const latest = myLatestByTask.get(t.id);
+    const conv = t.conversationId ? convNameById.get(t.conversationId) : null;
+    return {
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      progress: t.progress,
+      dueAt: t.dueAt?.toISOString() ?? null,
+      conversationId: t.conversationId ?? null,
+      conversationName: conv?.name ?? null,
+      labels: labelsByTask.get(t.id) ?? [],
+      commentCount: myCommentCount.get(t.id) ?? 0,
+      latestComment: latest
+        ? {
+            memberId: latest.memberId,
+            memberHandle: memberDirectory[latest.memberId]?.handle ?? "unknown",
+            bodyMd: latest.bodyMd.slice(0, 400),
+            ts: latest.ts.toISOString(),
+          }
+        : null,
+    };
+  });
+
   return {
     agent: {
       id: a.id,
@@ -514,6 +652,7 @@ export async function buildContext(opts: {
     })),
     memory,
     reporting,
+    myTasks,
     task: taskCtx,
   };
 }

@@ -212,6 +212,7 @@ export interface TaskComment {
   memberId: string;
   bodyMd: string;
   mentions: string[];
+  attachmentsJson: Attachment[];
   editedAt: string | null;
   deletedAt: string | null;
   ts: string;

@@ -474,18 +474,23 @@ export async function addComment(
   mentions: string[],
   actorMemberId: string,
   workspaceId: string,
+  attachments: ReadonlyArray<unknown> = [],
 ) {
   const t = await loadTask(taskId);
   const g = guard(t, workspaceId);
   if (!g.ok) return { error: g.error! };
   const commentId = id("tcom");
   const cleanMentions = Array.from(new Set(mentions ?? []));
+  const safeAttachments = (attachments as Array<Record<string, unknown>>).filter(
+    (x) => x && typeof x === "object",
+  );
   await db.insert(taskComments).values({
     id: commentId,
     taskId,
     memberId: actorMemberId,
     bodyMd,
     mentions: cleanMentions,
+    attachmentsJson: safeAttachments,
   });
   await logActivity(taskId, actorMemberId, "comment", { commentId });
   const [row] = await db.select().from(taskComments).where(eq(taskComments.id, commentId));

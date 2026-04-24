@@ -32,6 +32,16 @@ export default function AgentDetailPage() {
     }
   }
 
+  async function runHeartbeat() {
+    setPending("heartbeat");
+    try {
+      await api.post(`/agents/${id}/run-heartbeat`);
+    } finally {
+      setPending(null);
+      setTimeout(refresh, 2000);
+    }
+  }
+
   async function togglePause() {
     setPending("pause");
     try {
@@ -79,9 +89,18 @@ export default function AgentDetailPage() {
             <button
               onClick={runTest}
               disabled={!!pending}
+              title="Synthetic test trigger — smoke-tests the bridge and prompt pipeline"
               className="text-[12px] border border-[var(--color-hair-2)] rounded px-3 py-1.5 hover:bg-[var(--color-hi)]"
             >
               Test heartbeat
+            </button>
+            <button
+              onClick={runHeartbeat}
+              disabled={!!pending}
+              title="Fire a real scheduled beat right now — same trigger the cron uses"
+              className="text-[12px] border border-[var(--color-hair-2)] rounded px-3 py-1.5 hover:bg-[var(--color-hi)]"
+            >
+              Run heartbeat
             </button>
             <button
               onClick={togglePause}

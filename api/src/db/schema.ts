@@ -349,6 +349,7 @@ export const taskComments = pgTable(
     memberId: varchar("member_id", { length: 32 }).notNull(),
     bodyMd: text("body_md").notNull(),
     mentions: jsonb("mentions").$type<string[]>().notNull().default([]),
+    attachmentsJson: jsonb("attachments_json").$type<Array<Record<string, unknown>>>().notNull().default([]),
     editedAt: timestamp("edited_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),

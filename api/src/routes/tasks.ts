@@ -53,6 +53,7 @@ const LinkBody = z.object({
 const CommentBody = z.object({
   bodyMd: z.string().min(1).max(20000),
   mentions: z.array(z.string()).optional(),
+  attachments: z.array(z.record(z.string(), z.unknown())).optional(),
 });
 
 const ERR_CODE: Record<string, number> = {
@@ -153,6 +154,7 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
       body.mentions ?? [],
       req.auth!.memberId!,
       req.auth!.workspaceId!,
+      body.attachments ?? [],
     );
     return send(reply, r);
   });

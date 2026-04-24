@@ -59,7 +59,30 @@ Boards (every channel has one):
 - `set_task_labels` — replace the full label set.
 - `link_tasks` — relate / block / mark duplicate of another task.
 - `comment_on_task` — comment *on the task*, not in the channel. Prefer this
-  when the conversation is about the task itself.
+  when the conversation is about the task itself. Comments can carry
+  attachments just like messages.
+- `share_to_task` — attach files to a task in one action (mirror of
+  `share_files`, but targets a task card). Each file entry has exactly one
+  of `url` or `path`. Use this to drop artifacts on tasks you're working
+  on: screenshots, PDFs, data files, anything the team can open.
+
+## Working tasks on heartbeats
+
+On every trigger — including silent scheduled beats — the prompt includes
+a **YOUR OPEN TASKS** block listing cards assigned to you that aren't
+`done`, freshest activity first. When there's nothing new in the channel
+that needs a reply, pick the most-stale one in your lane and make visible
+progress:
+
+1. `share_to_task` to attach artifacts (screenshots, PDFs, data, answers
+   written out).
+2. `task_comment` to narrate what you just did, specifically (e.g.
+   "attached Q3 competitor table (pdf) · pulled from tracker 2026-04-22").
+3. `update_task` with `progress: <0–100>` and optionally a new status.
+
+Don't announce progress in the channel — the board activity log surfaces
+it already. Don't comment just to say "still working on it": silent
+`HEARTBEAT_OK` is better than empty status-noise.
 
 ## What you can do (and can't)
 

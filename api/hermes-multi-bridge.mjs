@@ -353,6 +353,7 @@ const ALLOWED_ACTION_TYPES = new Set([
   "update_task",
   "assign_task",
   "task_comment",
+  "share_to_task",
 ]);
 function extractActions(text) {
   const re = /<actions>\s*(\[[\s\S]*?\])\s*<\/actions>/i;
@@ -541,7 +542,9 @@ function buildPrompt(entry, packet) {
     `  {"type":"create_task","title":"…","body_md":"…","status":"backlog|in_progress|review|done","conversation_id":"<optional channel>","parent_id":"<optional parent task_…>","assignees":["<memberId>","<memberId>"],"labels":["eng"],"due_at":"2026-05-01"}`,
     `  {"type":"update_task","task_id":"task_…","status":"in_progress|review|done","progress":50,"title":"…","body_md":"…","due_at":"2026-05-01","archived":true}`,
     `  {"type":"assign_task","task_id":"task_…","member_id":"m_…"}`,
-    `  {"type":"task_comment","task_id":"task_…","body_md":"…","mentions":["m_…"]}`,
+    `  {"type":"task_comment","task_id":"task_…","body_md":"…","mentions":["m_…"],"attachments":[<optional, hand-rolled descriptors from /uploads>]}`,
+    `  {"type":"share_to_task","task_id":"task_…","body_md":"progress note","files":[{"url":"https://…","name":"snapshot.png"},{"path":"/tmp/report.pdf","name":"Q3.pdf"}]}`,
+    `                                                                — mirror of share_files but attaches to a task card. Use this to drop progress updates + artifacts (screenshots, PDFs, data files) on tasks you're working on during heartbeats. Files show up on the task AND in the workspace Files tab.`,
     `  {"type":"open_thread","message_id":"<id>","body_md":"…"}      — start a thread reply on a specific message`,
     ``,
     `Use the Member IDs block above to fill assignees / mentions / member_id fields — those fields take memberIds (m_…), NOT handles.`,
@@ -598,12 +601,37 @@ function buildPrompt(entry, packet) {
       .join("\n");
   }
 
+  // Agent's open workload — shown on every trigger so the agent can pick
+  // up a task on heartbeats instead of just waiting for mentions. Sorted
+  // freshest-activity-first by context.ts.
+  let myTasksBlock = "";
+  const mt = Array.isArray(packet.myTasks) ? packet.myTasks : [];
+  if (mt.length) {
+    const lines = mt.slice(0, 12).map((t) => {
+      const due = t.dueAt ? ` · due ${String(t.dueAt).slice(0, 10)}` : "";
+      const prog = t.progress ? ` · ${t.progress}%` : "";
+      const convHint = t.conversationName ? ` · from #${t.conversationName}` : "";
+      const latest = t.latestComment
+        ? `\n      ↳ @${t.latestComment.memberHandle}: ${String(t.latestComment.bodyMd).slice(0, 140).replace(/\n/g, " ")}`
+        : "";
+      return `  • ${t.id} [${t.status}${prog}${due}${convHint}] ${t.title}${latest}`;
+    });
+    myTasksBlock = [
+      ``,
+      `YOUR OPEN TASKS (${mt.length} assigned, not done — freshest first):`,
+      ...lines,
+      ``,
+      `On a quiet heartbeat, pick the most-stale one that's actually in your lane and make visible progress on it: use share_to_task to drop artifacts (screenshots, PDFs, data, written-out answers), task_comment to narrate what you did, and update_task to bump progress / flip status. Don't announce in chat — the activity log shows it. Keep comments specific: "attached Q3 competitor table (pdf)" not "working on it".`,
+    ].join("\n");
+  }
+
   return [
     identity,
     ``,
     `You are currently in ${convLabel}.${topicLine}${othersLine}${colleaguesLine}${reportingLine}${memberIdBlock}`,
     threadBlock,
     taskBlock,
+    myTasksBlock,
     ``,
     `Recent messages in this conversation (most recent last):`,
     history || "(no prior messages)",
@@ -641,60 +669,69 @@ function connect(entry) {
     const reply = (body) =>
       ws.send(JSON.stringify({ correlation_id: frame.correlation_id, type: "reply", ...body }));
 
-    // Scheduled beats with no new activity → skip, don't wake Hermes.
+    // Scheduled beats with no new activity → skip, don't wake Hermes UNLESS
+    // the agent has open tasks. In that case fall through into a "task-only"
+    // run: no conv attached, the prompt's YOUR OPEN TASKS block gives the
+    // agent something to act on (share_to_task / task_comment / update_task).
     // Ambient beats are allowed through even when the inbox is bare: the whole
     // point is to let the agent post on a quiet channel.
-    if (trigger === "scheduled" && inbox.length === 0) return reply({ status: "HEARTBEAT_OK" });
-    const conv = inbox[0];
-    if (!conv) return reply({ status: "HEARTBEAT_OK" });
-
-    // If a recent message in the primary conversation @-mentioned a specific
-    // colleague who isn't me, this scheduled/channel_post beat isn't my turn.
-    // Stay silent without even calling Hermes — saves tokens AND prevents
-    // piggybacks. `channel_post` fires on any plain post, so this filter is
-    // how we avoid waking every agent when one's already been tagged.
-    if (
-      (trigger === "scheduled" || trigger === "channel_post") &&
-      recentlyAddressedToSomeoneElse(conv.messages, entry.handle)
-    ) {
-      console.log(`[${entry.handle}] ${trigger} → skip (conversation addressed to someone else)`);
+    const hasMyTasks = Array.isArray(p.myTasks) && p.myTasks.length > 0;
+    if (trigger === "scheduled" && inbox.length === 0 && !hasMyTasks) {
       return reply({ status: "HEARTBEAT_OK" });
     }
+    const conv = inbox[0]; // may be undefined in task-only mode
+    if (!conv && !hasMyTasks) return reply({ status: "HEARTBEAT_OK" });
 
-    // Self-last guard: if the most recent message in this conversation is
-    // from THIS agent, an ambient/scheduled wake has nothing to add — we
-    // were the last voice heard. Skip before calling the model so it
-    // can't re-post the same canned reply on every tick. Real triggers
-    // (mention, dm, thread_reply, task_*) still go through — those are
-    // direct pokes from a user or another agent.
-    if (trigger === "ambient" || trigger === "scheduled") {
-      const last = conv.messages?.[conv.messages.length - 1];
-      if (last && last.memberHandle === entry.handle) {
-        console.log(`[${entry.handle}] ${trigger} → skip (self was last to post)`);
+    // The conv-bound guards (addressed-to-someone-else, self-last, DM) only
+    // make sense when there IS a conv. In task-only mode we skip them and go
+    // straight to the prompt — there's no chat surface to be quiet about.
+    let inDm = false;
+    let replyTo = undefined;
+    let last = undefined;
+    if (conv) {
+      // If a recent message in the primary conversation @-mentioned a specific
+      // colleague who isn't me, this scheduled/channel_post beat isn't my turn.
+      // Stay silent without even calling Hermes — saves tokens AND prevents
+      // piggybacks.
+      if (
+        (trigger === "scheduled" || trigger === "channel_post") &&
+        recentlyAddressedToSomeoneElse(conv.messages, entry.handle)
+      ) {
+        console.log(`[${entry.handle}] ${trigger} → skip (conversation addressed to someone else)`);
         return reply({ status: "HEARTBEAT_OK" });
       }
-    }
-    const last = conv.messages?.[conv.messages.length - 1];
-    // `last` may be missing for ambient beats on quiet channels — that's fine,
-    // we still want the agent to see context and decide.
-    if (!last && trigger !== "ambient") return reply({ status: "HEARTBEAT_OK" });
 
-    const inDm = conv.conversationKind === "dm";
-    // DMs are 1:1 and private. Another agent being @-mentioned inside
-    // someone else's DM must not drag us in — drop any trigger where we
-    // aren't one of the two DM participants.
-    if (inDm) {
-      const dmMembers = Array.isArray(conv.conversationMembers) ? conv.conversationMembers : [];
-      const myMemberId = p.agent?.memberId;
-      if (myMemberId && !dmMembers.includes(myMemberId)) {
-        console.log(`[${entry.handle}] ${trigger} → skip (not a DM participant)`);
-        return reply({ status: "HEARTBEAT_OK" });
+      // Self-last guard: if the most recent message is from THIS agent and
+      // we have no tasks to push on, an ambient/scheduled wake has nothing
+      // to add. With pending tasks, fall through — the agent might do task
+      // work even though chat is quiet.
+      if (trigger === "ambient" || trigger === "scheduled") {
+        const lastMsg = conv.messages?.[conv.messages.length - 1];
+        if (lastMsg && lastMsg.memberHandle === entry.handle && !hasMyTasks) {
+          console.log(`[${entry.handle}] ${trigger} → skip (self was last to post)`);
+          return reply({ status: "HEARTBEAT_OK" });
+        }
       }
+      last = conv.messages?.[conv.messages.length - 1];
+      // `last` may be missing for ambient beats on quiet channels — that's fine.
+      if (!last && trigger !== "ambient" && !hasMyTasks) return reply({ status: "HEARTBEAT_OK" });
+
+      inDm = conv.conversationKind === "dm";
+      // DMs are 1:1 and private. Another agent being @-mentioned inside
+      // someone else's DM must not drag us in.
+      if (inDm) {
+        const dmMembers = Array.isArray(conv.conversationMembers) ? conv.conversationMembers : [];
+        const myMemberId = p.agent?.memberId;
+        if (myMemberId && !dmMembers.includes(myMemberId)) {
+          console.log(`[${entry.handle}] ${trigger} → skip (not a DM participant)`);
+          return reply({ status: "HEARTBEAT_OK" });
+        }
+      }
+      replyTo = inDm ? undefined : p.thread?.rootMessageId ?? undefined;
     }
-    const replyTo = inDm ? undefined : p.thread?.rootMessageId ?? undefined;
 
     console.log(
-      `[${entry.handle}] ${trigger} conv=${conv.conversationId} body="${String(last?.bodyMd ?? "(quiet)").slice(0, 50)}"`,
+      `[${entry.handle}] ${trigger} ${conv ? `conv=${conv.conversationId} body="${String(last?.bodyMd ?? "(quiet)").slice(0, 50)}"` : `task-only (${p.myTasks?.length ?? 0} open)`}`,
     );
 
     const prompt = buildPrompt(entry, p);
@@ -742,10 +779,12 @@ function connect(entry) {
       const attachments = afterAtt.attachments;
       const sideActions = afterActions.actions;
       const actions = [];
-      // Only emit a post_message if there's something to say. When the model
-      // returns just actions + empty text, skip the chat post entirely —
-      // tasks / reactions are enough.
-      if (body && body.trim()) {
+      // Only emit a post_message if there's something to say AND we have a
+      // conversation to post into. In task-only mode (scheduled wake with
+      // empty inbox + open tasks), conv is undefined — the agent's prose
+      // would have nowhere to land, so we drop it and let the side-actions
+      // (task_comment / share_to_task / update_task) carry the work.
+      if (body && body.trim() && conv) {
         actions.push({
           type: "post_message",
           conversation_id: conv.conversationId,
@@ -753,6 +792,8 @@ function connect(entry) {
           ...(replyTo ? { reply_to: replyTo } : {}),
           ...(attachments.length ? { attachments } : {}),
         });
+      } else if (body && body.trim() && !conv) {
+        console.log(`[${entry.handle}] task-only: dropping ${body.length}-char prose (no conv to post into)`);
       }
       for (const a of sideActions) actions.push(a);
       console.log(
@@ -765,15 +806,18 @@ function connect(entry) {
       });
     } catch (e) {
       console.error(`[${entry.handle}] error: ${e.message.split("\n")[0]}`);
+      // Without a conversation we have nowhere to post the error, just trace it.
       reply({
-        actions: [
-          {
-            type: "post_message",
-            conversation_id: conv.conversationId,
-            body_md: `⚠️ ${entry.name} error: \`${e.message.split("\n")[0].slice(0, 300)}\``,
-            ...(replyTo ? { reply_to: replyTo } : {}),
-          },
-        ],
+        actions: conv
+          ? [
+              {
+                type: "post_message",
+                conversation_id: conv.conversationId,
+                body_md: `⚠️ ${entry.name} error: \`${e.message.split("\n")[0].slice(0, 300)}\``,
+                ...(replyTo ? { reply_to: replyTo } : {}),
+              },
+            ]
+          : [],
         trace: [`${entry.handle} error: ${e.message.slice(0, 200)}`],
       });
     }

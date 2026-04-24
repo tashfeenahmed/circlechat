@@ -1551,20 +1551,20 @@ input, textarea { font: inherit; color: inherit; }
 }
 .tm-comments {
   list-style: none; padding: 0; margin: 0;
-  display: flex; flex-direction: column; gap: 10px;
+  display: flex; flex-direction: column;
 }
-.tm-comment {
-  display: flex; gap: 8px;
+/* Same rhythm as chat messages in the main shell — 36px gutter, 12px gap. */
+.tm-comment-msg {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 12px;
+  padding: 6px 4px;
+  border-radius: 4px;
 }
-.tm-comment-body { flex: 1; min-width: 0; }
-.tm-comment-head {
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: 2px;
-}
-.tm-comment-text {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--color-ink);
+.tm-comment-msg:hover { background: var(--color-hi); }
+.tm-comment-gutter { display: flex; justify-content: center; padding-top: 2px; }
+.tm-comment-body { min-width: 0; }
+.tm-comment-body .msg-body p {
   white-space: pre-wrap;
   word-break: break-word;
 }

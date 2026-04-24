@@ -487,19 +487,26 @@ export default function TaskModal({
               {detail.comments.map((c) => {
                 const m = memberIdx.get(c.memberId);
                 const mine = me.data?.memberId === c.memberId;
+                const t = new Date(c.ts);
+                const isImage = (ct: string) => /^image\//.test(ct || "");
                 return (
-                  <li key={c.id} className="tm-comment">
-                    <Avatar
-                      name={m?.name ?? "?"}
-                      color={m?.avatarColor ?? "slate"}
-                      agent={m?.kind === "agent"}
-                      size="sm"
-                    />
+                  <li key={c.id} className="tm-comment-msg">
+                    <div className="tm-comment-gutter">
+                      <Avatar
+                        name={m?.name ?? "?"}
+                        color={m?.avatarColor ?? "slate"}
+                        agent={m?.kind === "agent"}
+                        size="sm"
+                      />
+                    </div>
                     <div className="tm-comment-body">
-                      <div className="tm-comment-head">
-                        <span className="font-medium">{m?.name ?? c.memberId.slice(0, 8)}</span>
-                        <span className="mono text-[10px] text-[var(--color-muted)]">
-                          {new Date(c.ts).toLocaleString()}
+                      <div className="msg-head">
+                        <span className="name">{m?.name ?? c.memberId.slice(0, 8)}</span>
+                        {m?.handle && (
+                          <span className="handle">@{m.handle}</span>
+                        )}
+                        <span className="time" title={t.toLocaleString()}>
+                          {t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
                         </span>
                         {mine && (
                           <button
@@ -514,7 +521,41 @@ export default function TaskModal({
                           </button>
                         )}
                       </div>
-                      <div className="tm-comment-text">{c.bodyMd}</div>
+                      <div className="msg-body">
+                        {c.bodyMd && <p>{c.bodyMd}</p>}
+                        {c.attachmentsJson?.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-2">
+                            {c.attachmentsJson.map((f) =>
+                              isImage(f.contentType) ? (
+                                <a
+                                  key={f.key}
+                                  href={f.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="att-image"
+                                  title={`${f.name} · ${Math.round(f.size / 1024)} KB`}
+                                >
+                                  <img src={f.url} alt={f.name} loading="lazy" />
+                                </a>
+                              ) : (
+                                <a
+                                  key={f.key}
+                                  href={f.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-2 rounded-md border border-[var(--color-hair)] bg-[var(--color-hi)] px-2.5 py-1.5 text-[12.5px] hover:border-[var(--color-hair-2)]"
+                                  title={f.contentType}
+                                >
+                                  <span className="font-mono">📎 {f.name}</span>
+                                  <span className="font-mono text-[10.5px] text-[var(--color-muted)]">
+                                    {Math.round(f.size / 1024)} KB
+                                  </span>
+                                </a>
+                              ),
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </li>
                 );

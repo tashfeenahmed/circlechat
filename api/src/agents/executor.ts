@@ -65,7 +65,13 @@ export type AgentAction =
       archived?: boolean;
     }
   | { type: "assign_task"; task_id: string; member_id: string }
-  | { type: "task_comment"; task_id: string; body_md: string; mentions?: string[] }
+  | {
+      type: "task_comment";
+      task_id: string;
+      body_md: string;
+      mentions?: string[];
+      attachments?: AgentAttachment[];
+    }
   // Fetch one or more URLs server-side OR pick up files the agent wrote to
   // /tmp, then post them as attachments. Saves the agent from a six-step
   // shell ritual (urllib/tempfile/multipart/parse/<attachments> block) for
@@ -79,6 +85,16 @@ export type AgentAction =
       conversation_id: string;
       body_md?: string;
       reply_to?: string;
+      files: Array<{ url?: string; path?: string; name?: string }>;
+    }
+  // Same as share_files but posts as a task_comment on a task board card.
+  // Lets agents work on tasks during heartbeats — drop a progress note
+  // plus whatever artifacts they produced. Attachments show up in the
+  // comment AND in the workspace Files tab.
+  | {
+      type: "share_to_task";
+      task_id: string;
+      body_md?: string;
       files: Array<{ url?: string; path?: string; name?: string }>;
     };
 
@@ -414,18 +430,51 @@ async function applyOne(
         out.errors.push(`task_comment rejected: ${guard.reason}`);
         return;
       }
+      const safeAttachments = sanitizeAttachments(a.attachments);
       const r = await addComment(
         a.task_id,
         guard.bodyMd,
         Array.isArray(a.mentions) ? a.mentions : [],
         agentMemberId,
         ws,
+        safeAttachments,
       );
       if ("error" in r) {
         out.errors.push(`task_comment: ${r.error}`);
         return;
       }
-      out.trace.push(`task_comment on ${a.task_id}`);
+      out.trace.push(`task_comment on ${a.task_id}${safeAttachments.length ? ` (${safeAttachments.length} file${safeAttachments.length === 1 ? "" : "s"})` : ""}`);
+      return;
+    }
+    case "share_to_task": {
+      // Mirror of share_files but targets a task card. The file-fetching
+      // helper runs URL fetches / /tmp reads and uploads to storage; we
+      // then thread the attachments through addComment() so they show up
+      // both on the task and in the workspace Files tab.
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const rawBody = typeof a.body_md === "string" ? a.body_md : "";
+      const guard = checkReplyBody(rawBody || "(attachments)");
+      const bodyMd = guard.ok ? guard.bodyMd : rawBody;
+      const files = Array.isArray(a.files) ? a.files : [];
+      const fetched = await fetchAgentAttachments(files, out.trace, "share_to_task");
+      if (fetched.length === 0) {
+        out.errors.push(`share_to_task: no files fetched from ${files.length} source(s)`);
+        return;
+      }
+      const r = await addComment(
+        a.task_id,
+        bodyMd || `📎 attached ${fetched.length} file${fetched.length === 1 ? "" : "s"}`,
+        [],
+        agentMemberId,
+        ws,
+        fetched,
+      );
+      if ("error" in r) {
+        out.errors.push(`share_to_task: ${r.error}`);
+        return;
+      }
+      out.trace.push(`share_to_task on ${a.task_id} (${fetched.length} file${fetched.length === 1 ? "" : "s"})`);
       return;
     }
     case "share_files": {
@@ -445,88 +494,8 @@ async function applyOne(
         .limit(1);
       if (!mm) throw new Error("agent_not_in_conversation");
 
-      const MAX_FILES = 10;
-      const MAX_BYTES = 20 * 1024 * 1024;
-      const FETCH_TIMEOUT_MS = 15_000;
-      const files = Array.isArray(a.files) ? a.files.slice(0, MAX_FILES) : [];
-
-      const fetched: AgentAttachment[] = [];
-      for (const f of files) {
-        const rawUrl = typeof f?.url === "string" ? f.url : "";
-        const rawPath = typeof f?.path === "string" ? f.path : "";
-        const hasUrl = rawUrl.length > 0;
-        const hasPath = rawPath.length > 0;
-        if (hasUrl === hasPath) {
-          out.trace.push(`share_files skip: exactly one of {url,path} required`);
-          continue;
-        }
-        try {
-          let buf: Buffer;
-          let contentType = "application/octet-stream";
-          let nameHint = "";
-
-          if (hasUrl) {
-            if (!/^https?:\/\//i.test(rawUrl)) {
-              out.trace.push(`share_files skip: invalid url scheme`);
-              continue;
-            }
-            const controller = new AbortController();
-            const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-            const res = await fetch(rawUrl, { signal: controller.signal, redirect: "follow" });
-            clearTimeout(t);
-            if (!res.ok) {
-              out.trace.push(`share_files skip ${rawUrl}: HTTP ${res.status}`);
-              continue;
-            }
-            buf = Buffer.from(await res.arrayBuffer());
-            contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim() || contentType;
-            try { nameHint = new URL(rawUrl).pathname.split("/").pop() ?? ""; } catch { nameHint = ""; }
-          } else {
-            // Local path: restrict to /tmp/ to prevent arbitrary reads. The
-            // browser pdf/screenshot commands save here by convention, and
-            // agent-terminal shell blocks default to /tmp scratch space.
-            const { resolve: pResolve } = await import("node:path");
-            const { promises: fsp } = await import("node:fs");
-            const abs = pResolve(rawPath);
-            if (!abs.startsWith("/tmp/")) {
-              out.trace.push(`share_files skip: path must be under /tmp/ (got ${abs})`);
-              continue;
-            }
-            const stat = await fsp.stat(abs).catch(() => null);
-            if (!stat || !stat.isFile()) {
-              out.trace.push(`share_files skip ${abs}: not a regular file`);
-              continue;
-            }
-            if (stat.size > MAX_BYTES) {
-              out.trace.push(`share_files skip ${abs}: ${stat.size}B > ${MAX_BYTES}B`);
-              continue;
-            }
-            buf = await fsp.readFile(abs);
-            nameHint = abs.split("/").pop() ?? "";
-            const ext = (nameHint.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? "").toLowerCase();
-            const extMap: Record<string, string> = {
-              pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-              gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
-              txt: "text/plain", md: "text/markdown", csv: "text/csv",
-              json: "application/json", html: "text/html", xml: "application/xml",
-              zip: "application/zip",
-            };
-            if (extMap[ext]) contentType = extMap[ext];
-          }
-
-          if (buf.length > MAX_BYTES) {
-            out.trace.push(`share_files skip: ${buf.length}B > ${MAX_BYTES}B`);
-            continue;
-          }
-          const rawName = (typeof f?.name === "string" && f.name.trim()) || nameHint || "file";
-          const safeName = rawName.replace(/[^a-z0-9._-]/gi, "_").slice(0, 120) || "file";
-          const key = `u/${id("f").slice(2)}/${safeName}`;
-          await putObject(key, buf);
-          fetched.push({ key, name: safeName, contentType, size: buf.length, url: publicUrl(key) });
-        } catch (e) {
-          out.trace.push(`share_files source ${hasUrl ? rawUrl : rawPath} failed: ${(e as Error).message}`);
-        }
-      }
+      const files = Array.isArray(a.files) ? a.files : [];
+      const fetched = await fetchAgentAttachments(files, out.trace, "share_files");
 
       if (fetched.length === 0) {
         out.errors.push(`share_files: no files fetched from ${files.length} url(s)`);
@@ -611,6 +580,104 @@ async function loadAgentWorkspace(agentMemberId: string): Promise<string | null>
     .where(eq(members.id, agentMemberId))
     .limit(1);
   return row?.workspaceId ?? null;
+}
+
+// Server-side file ingest shared by share_files + share_to_task. Each source
+// is either a URL (fetched over HTTPS) or an absolute /tmp path (read from
+// disk). Output goes straight into storage under u/<id>/<name> and returns
+// descriptor shape ready to paste into a message or task comment.
+//
+// Limits: 10 files per call, 20 MB per file, 15s per URL fetch. Anything
+// that misses those just logs a trace line and is skipped — one bad source
+// doesn't kill the whole action.
+async function fetchAgentAttachments(
+  files: Array<{ url?: string; path?: string; name?: string }>,
+  trace: string[],
+  actionLabel: "share_files" | "share_to_task",
+): Promise<AgentAttachment[]> {
+  const MAX_FILES = 10;
+  const MAX_BYTES = 20 * 1024 * 1024;
+  const FETCH_TIMEOUT_MS = 15_000;
+  const slice = files.slice(0, MAX_FILES);
+
+  const fetched: AgentAttachment[] = [];
+  for (const f of slice) {
+    const rawUrl = typeof f?.url === "string" ? f.url : "";
+    const rawPath = typeof f?.path === "string" ? f.path : "";
+    const hasUrl = rawUrl.length > 0;
+    const hasPath = rawPath.length > 0;
+    if (hasUrl === hasPath) {
+      trace.push(`${actionLabel} skip: exactly one of {url,path} required`);
+      continue;
+    }
+    try {
+      let buf: Buffer;
+      let contentType = "application/octet-stream";
+      let nameHint = "";
+
+      if (hasUrl) {
+        if (!/^https?:\/\//i.test(rawUrl)) {
+          trace.push(`${actionLabel} skip: invalid url scheme`);
+          continue;
+        }
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+        const res = await fetch(rawUrl, { signal: controller.signal, redirect: "follow" });
+        clearTimeout(t);
+        if (!res.ok) {
+          trace.push(`${actionLabel} skip ${rawUrl}: HTTP ${res.status}`);
+          continue;
+        }
+        buf = Buffer.from(await res.arrayBuffer());
+        contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim() || contentType;
+        try { nameHint = new URL(rawUrl).pathname.split("/").pop() ?? ""; } catch { nameHint = ""; }
+      } else {
+        // Local path: restrict to /tmp/ to prevent arbitrary reads. The
+        // browser pdf/screenshot commands save here by convention, and
+        // agent-terminal shell blocks default to /tmp scratch space.
+        const { resolve: pResolve } = await import("node:path");
+        const { promises: fsp } = await import("node:fs");
+        const abs = pResolve(rawPath);
+        if (!abs.startsWith("/tmp/")) {
+          trace.push(`${actionLabel} skip: path must be under /tmp/ (got ${abs})`);
+          continue;
+        }
+        const stat = await fsp.stat(abs).catch(() => null);
+        if (!stat || !stat.isFile()) {
+          trace.push(`${actionLabel} skip ${abs}: not a regular file`);
+          continue;
+        }
+        if (stat.size > MAX_BYTES) {
+          trace.push(`${actionLabel} skip ${abs}: ${stat.size}B > ${MAX_BYTES}B`);
+          continue;
+        }
+        buf = await fsp.readFile(abs);
+        nameHint = abs.split("/").pop() ?? "";
+        const ext = (nameHint.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? "").toLowerCase();
+        const extMap: Record<string, string> = {
+          pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+          gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+          txt: "text/plain", md: "text/markdown", csv: "text/csv",
+          json: "application/json", html: "text/html", xml: "application/xml",
+          zip: "application/zip",
+        };
+        if (extMap[ext]) contentType = extMap[ext];
+      }
+
+      if (buf.length > MAX_BYTES) {
+        trace.push(`${actionLabel} skip: ${buf.length}B > ${MAX_BYTES}B`);
+        continue;
+      }
+      const rawName = (typeof f?.name === "string" && f.name.trim()) || nameHint || "file";
+      const safeName = rawName.replace(/[^a-z0-9._-]/gi, "_").slice(0, 120) || "file";
+      const key = `u/${id("f").slice(2)}/${safeName}`;
+      await putObject(key, buf);
+      fetched.push({ key, name: safeName, contentType, size: buf.length, url: publicUrl(key) });
+    } catch (e) {
+      trace.push(`${actionLabel} source ${hasUrl ? rawUrl : rawPath} failed: ${(e as Error).message}`);
+    }
+  }
+  return fetched;
 }
 
 // Agents may emit attachments via post_message. Require the file to have been

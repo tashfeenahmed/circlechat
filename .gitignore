@@ -45,3 +45,8 @@ coverage/
 *.pid
 *.seed
 *.pid.lock
+
+# The marketing site lives outside this repo (sibling at ../marketing-site/);
+# the line below is defensive in case it ever gets moved inside.
+../marketing-site/
+marketing-site/
