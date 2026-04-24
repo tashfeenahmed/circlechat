@@ -1598,6 +1598,14 @@ input, textarea { font: inherit; color: inherit; }
 .kcard:active { cursor: grabbing; }
 .kcard.dragging { opacity: 0.5; transform: rotate(-0.5deg); }
 .kcard.adding { cursor: default; gap: 0; padding-bottom: 10px; }
+/* Fresh marker: tasks updated after the user's last board visit get a
+   2px black border so they're easy to spot on a busy board. Compensate
+   padding so the card doesn't jump relative to its neighbours. */
+.kcard.fresh {
+  border: 2px solid var(--color-ink);
+  padding: 9px 11px 7px;
+}
+.kcard.fresh:hover { border-color: var(--color-ink); }
 .kc-title {
   font-size: 13.5px;
   line-height: 1.4;

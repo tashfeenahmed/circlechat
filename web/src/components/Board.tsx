@@ -31,6 +31,24 @@ export default function Board() {
   const [hoverCol, setHoverCol] = useState<TaskStatus | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Snapshot the board's last-seen timestamp at mount BEFORE Sidebar's effect
+  // overwrites it to "now." Cards updated after this threshold get a 2px
+  // black border so they're easy to spot on a busy board. Captured once per
+  // mount — doesn't shift as new tasks arrive during the session.
+  const workspaceId = me.data?.workspaceId ?? null;
+  const [highlightAfter] = useState<number>(() => {
+    if (typeof window === "undefined") return Date.now();
+    const wsId = me.data?.workspaceId;
+    if (!wsId) return 0;
+    const raw = localStorage.getItem(`cc:boardLastSeen:${wsId}`);
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) ? n : 0;
+  });
+  // Once a task has been highlighted and the user has looked, keep it
+  // highlighted for the session — it resets next time they visit /board
+  // from elsewhere. No additional state needed.
+  void workspaceId;
+
   // Only top-level tasks appear on the board; subtasks live inside their parent.
   const topLevel = useMemo(
     () => (q.data?.tasks ?? []).filter((t) => !t.parentId),
@@ -178,10 +196,13 @@ export default function Board() {
                     </div>
                   </div>
                 )}
-                {cards.map((c) => (
+                {cards.map((c) => {
+                  const isFresh =
+                    highlightAfter > 0 && Date.parse(c.updatedAt) > highlightAfter;
+                  return (
                   <div
                     key={c.id}
-                    className={`kcard ${dragId === c.id ? "dragging" : ""}`}
+                    className={`kcard ${dragId === c.id ? "dragging" : ""} ${isFresh ? "fresh" : ""}`}
                     draggable
                     onDragStart={() => {
                       dragIdRef.current = c.id;
@@ -270,7 +291,8 @@ export default function Board() {
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 <button className="kanban-col-add" onClick={() => setAddingIn(col.id)}>
                   <Plus size={12} strokeWidth={2} /> add task
                 </button>
