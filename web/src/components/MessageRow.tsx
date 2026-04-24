@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { Paperclip, MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
 import Avatar from "./Avatar";
 import MemberHoverCard from "./MemberHoverCard";
 import Tooltip from "./Tooltip";
+import Attachments from "./Attachments";
 import { renderMarkdown } from "../lib/md";
 import { api, type Message } from "../api/client";
 
@@ -123,32 +124,7 @@ export default function MessageRow({
           </div>
         )}
         {msg.attachmentsJson?.length > 0 && (
-          <div className="flex flex-wrap gap-2 mt-1">
-            {msg.attachmentsJson.map((f) =>
-              f.contentType.startsWith("image/") ? (
-                <a
-                  key={f.key}
-                  href={f.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="att-image"
-                  title={f.name}
-                >
-                  <img src={f.url} alt={f.name} loading="lazy" />
-                </a>
-              ) : (
-                <a
-                  key={f.key}
-                  href={f.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[12px] border border-[var(--color-hair-2)] rounded px-2 py-1 text-[var(--color-ink)] hover:bg-[var(--color-hi)] inline-flex items-center gap-1"
-                >
-                  <Paperclip size={12} strokeWidth={2} /> {f.name}
-                </a>
-              ),
-            )}
-          </div>
+          <Attachments files={msg.attachmentsJson} />
         )}
         {Object.keys(rxByEmoji).length > 0 && (
           <div className="reactions">

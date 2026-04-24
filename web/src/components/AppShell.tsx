@@ -2,6 +2,7 @@ import { Outlet, Link, useNavigate } from "react-router-dom";
 import { Users, Settings as SettingsIcon, LogOut } from "lucide-react";
 import Sidebar from "./Sidebar";
 import MemberDetailsPanel from "./MemberDetailsPanel";
+import FileViewer from "./FileViewer";
 import Menu from "./Menu";
 import TopSearch from "./TopSearch";
 import WorkspaceRail from "./WorkspaceRail";
@@ -70,6 +71,7 @@ export default function AppShell() {
         <Outlet />
         <MemberDetailsPanel />
       </div>
+      <FileViewer />
     </div>
   );
 }

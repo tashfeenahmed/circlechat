@@ -81,6 +81,21 @@ interface PresenceState {
   threadWidth: number;
   setDetailsWidth: (w: number) => void;
   setThreadWidth: (w: number) => void;
+  // File viewer — shown when a user clicks an attachment in chat, a task
+  // comment, the Files tab, or a board card. Holds the file being viewed
+  // plus an optional list of siblings so the viewer can page through them.
+  viewerFile: ViewerFile | null;
+  viewerSiblings: ViewerFile[] | null;
+  openViewer: (file: ViewerFile, siblings?: ViewerFile[]) => void;
+  closeViewer: () => void;
+}
+
+export interface ViewerFile {
+  key: string;
+  name: string;
+  contentType: string;
+  size: number;
+  url: string;
 }
 
 export const useBus = create<PresenceState>((set, get) => ({
@@ -225,6 +240,11 @@ export const useBus = create<PresenceState>((set, get) => ({
     } catch { /* ignore */ }
     set({ threadWidth: clamped });
   },
+  viewerFile: null,
+  viewerSiblings: null,
+  openViewer: (file, siblings) =>
+    set({ viewerFile: file, viewerSiblings: siblings ?? null }),
+  closeViewer: () => set({ viewerFile: null, viewerSiblings: null }),
 }));
 
 setInterval(() => useBus.getState().pruneTyping(), 2000);

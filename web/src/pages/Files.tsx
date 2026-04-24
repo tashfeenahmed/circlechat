@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, Hash, MessageSquare, Paperclip, ExternalLink, AlertTriangle, Search } from "lucide-react";
+import { FolderOpen, Hash, MessageSquare, Paperclip, Eye, AlertTriangle, Search } from "lucide-react";
 import { api } from "../api/client";
+import { useBus } from "../state/store";
 
 interface FileRow {
   key: string;
@@ -23,6 +24,7 @@ interface FileRow {
 
 export default function FilesPage() {
   const [q, setQ] = useState("");
+  const openViewer = useBus((s) => s.openViewer);
   const files = useQuery({
     queryKey: ["files"],
     queryFn: () => api.get<{ files: FileRow[] }>("/files"),
@@ -41,6 +43,19 @@ export default function FilesPage() {
         (f.conversationName ?? "").toLowerCase().includes(n),
     );
   }, [files.data, q]);
+  const viewerSiblings = useMemo(
+    () =>
+      rows
+        .filter((f) => f.exists)
+        .map((f) => ({
+          key: `${f.messageId}:${f.key}`,
+          name: f.name,
+          contentType: f.contentType,
+          size: f.size,
+          url: f.url,
+        })),
+    [rows],
+  );
 
   const missingCount = (files.data?.files ?? []).filter((f) => !f.exists).length;
 
@@ -89,6 +104,14 @@ export default function FilesPage() {
                 : f.conversationOtherMemberId
                   ? `/d/${f.conversationOtherMemberId}`
                   : null;
+            const viewerFile = {
+              key: `${f.messageId}:${f.key}`,
+              name: f.name,
+              contentType: f.contentType,
+              size: f.size,
+              url: f.url,
+            };
+            const onOpen = () => f.exists && openViewer(viewerFile, viewerSiblings);
             return (
               <li
                 key={`${f.messageId}:${f.key}`}
@@ -97,11 +120,10 @@ export default function FilesPage() {
                 }`}
               >
                 {f.exists && f.contentType.startsWith("image/") ? (
-                  <a
-                    href={f.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="w-10 h-10 rounded overflow-hidden border border-[var(--color-hair-2)] bg-[var(--color-bg-2)] shrink-0"
+                  <button
+                    type="button"
+                    onClick={onOpen}
+                    className="w-10 h-10 rounded-lg overflow-hidden border border-[var(--color-hair-2)] bg-[var(--color-bg-2)] shrink-0"
                     title={f.name}
                   >
                     <img
@@ -110,24 +132,23 @@ export default function FilesPage() {
                       loading="lazy"
                       className="w-full h-full object-cover"
                     />
-                  </a>
+                  </button>
                 ) : (
-                  <span className="w-10 h-10 rounded bg-[var(--color-bg-2)] border border-[var(--color-hair-2)] grid place-items-center text-[var(--color-muted)] shrink-0">
+                  <span className="w-10 h-10 rounded-lg bg-[var(--color-bg-2)] border border-[var(--color-hair-2)] grid place-items-center text-[var(--color-muted)] shrink-0">
                     <Paperclip size={14} strokeWidth={2} />
                   </span>
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-2 flex-wrap">
                     {f.exists ? (
-                      <a
-                        href={f.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[14px] font-medium text-[var(--color-ink)] hover:underline truncate"
+                      <button
+                        type="button"
+                        onClick={onOpen}
+                        className="text-[14px] font-medium text-[var(--color-ink)] hover:underline truncate text-left"
                         title={f.name}
                       >
                         {f.name}
-                      </a>
+                      </button>
                     ) : (
                       <span className="text-[14px] font-medium text-[var(--color-muted)] line-through" title={f.name}>
                         {f.name}
@@ -185,15 +206,14 @@ export default function FilesPage() {
                   </div>
                 </div>
                 {f.exists && (
-                  <a
-                    href={f.url}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={onOpen}
                     className="btn sm ghost inline-flex items-center gap-1"
-                    title="Open file"
+                    title="Preview file"
                   >
-                    <ExternalLink size={13} strokeWidth={2} /> Open
-                  </a>
+                    <Eye size={13} strokeWidth={2} /> Preview
+                  </button>
                 )}
               </li>
             );

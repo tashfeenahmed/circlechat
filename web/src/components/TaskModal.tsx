@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { X, Plus, Trash2, Paperclip, Bold, Italic, Code } from "lucide-react";
+import { X, Plus, Trash2, Paperclip, Bold, Italic, Code, ChevronDown } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTaskDetail, useMembersDirectory, useMe } from "../lib/hooks";
 import {
@@ -10,6 +10,7 @@ import {
   type TaskDetail,
 } from "../api/client";
 import Avatar from "./Avatar";
+import Attachments from "./Attachments";
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
   backlog: "Backlog",
@@ -41,6 +42,7 @@ export default function TaskModal({
   const [assignFilter, setAssignFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const composerTaRef = useRef<HTMLTextAreaElement>(null);
   const bodyTouched = useRef(false);
   const titleTouched = useRef(false);
@@ -239,23 +241,14 @@ export default function TaskModal({
         m.handle.toLowerCase().includes(assignFilter.toLowerCase()),
     );
 
+  const completedSubs = detail.subtasks.filter((s) => s.status === "done").length;
+
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
         <div className="task-modal-head">
           <span className="mono text-[11px] text-[var(--color-muted)]">{t.id}</span>
-          <span className="kc-sep" />
-          <span className="seg">
-            {ALL_STATUSES.map((s) => (
-              <button
-                key={s}
-                className={t.status === s ? "on" : ""}
-                onClick={() => patchTask({ status: s })}
-              >
-                {STATUS_LABELS[s]}
-              </button>
-            ))}
-          </span>
+          <span className="tm-head-spacer" />
           <button className="tb-btn" onClick={deleteTask} title="Delete task">
             <Trash2 size={14} />
           </button>
@@ -264,226 +257,67 @@ export default function TaskModal({
           </button>
         </div>
 
-        <div className="task-modal-body">
-          <input
-            className="tm-title"
-            value={titleDraft}
-            onChange={(e) => {
-              titleTouched.current = true;
-              setTitleDraft(e.target.value);
-            }}
-            onBlur={saveTitle}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-            }}
-          />
-          <textarea
-            className="tm-body"
-            placeholder="Add a description…"
-            rows={3}
-            value={bodyDraft}
-            onChange={(e) => {
-              bodyTouched.current = true;
-              setBodyDraft(e.target.value);
-            }}
-            onBlur={saveBody}
-          />
-
-          <div className="tm-grid">
-            <section className="tm-section">
-              <div className="tm-label">Assignees</div>
-              <div className="tm-av-row">
-                {t.assignees.map((mid) => {
-                  const m = memberIdx.get(mid);
-                  return (
-                    <span key={mid} className="tm-chip">
-                      <Avatar
-                        name={m?.name ?? "?"}
-                        color={m?.avatarColor ?? "slate"}
-                        agent={m?.kind === "agent"}
-                        size="sm"
-                      />
-                      <span className="tm-chip-label">{m?.handle ?? mid.slice(0, 8)}</span>
-                      <button
-                        className="tm-chip-x"
-                        onClick={() => removeAssignee(mid)}
-                        title="Unassign"
-                      >
-                        <X size={10} />
-                      </button>
-                    </span>
-                  );
-                })}
-                <div style={{ position: "relative" }}>
-                  <button
-                    className="tm-add-chip"
-                    onClick={() => setAssignPickerOpen((o) => !o)}
-                  >
-                    <Plus size={11} /> add
-                  </button>
-                  {assignPickerOpen && (
-                    <div className="tm-popover">
-                      <input
-                        autoFocus
-                        placeholder="Filter…"
-                        value={assignFilter}
-                        onChange={(e) => setAssignFilter(e.target.value)}
-                        className="tm-popover-input"
-                      />
-                      <ul className="tm-popover-list">
-                        {filteredMembers.slice(0, 20).map((m) => (
-                          <li key={m.memberId}>
-                            <button
-                              className="tm-popover-item"
-                              onClick={() => addAssignee(m.memberId)}
-                            >
-                              <Avatar
-                                name={m.name}
-                                color={m.color}
-                                agent={m.kind === "agent"}
-                                size="sm"
-                              />
-                              <span>{m.name}</span>
-                              <span className="mono text-[11px] text-[var(--color-muted)]">
-                                @{m.handle}
-                              </span>
-                            </button>
-                          </li>
-                        ))}
-                        {filteredMembers.length === 0 && (
-                          <li className="tm-popover-empty">no matches</li>
-                        )}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
+        <div className="task-modal-body tm-split">
+          <div className="tm-main">
+            <input
+              className="tm-title"
+              value={titleDraft}
+              onChange={(e) => {
+                titleTouched.current = true;
+                setTitleDraft(e.target.value);
+              }}
+              onBlur={saveTitle}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+            />
+            <textarea
+              className="tm-body"
+              placeholder="Add a description…"
+              rows={3}
+              value={bodyDraft}
+              onChange={(e) => {
+                bodyTouched.current = true;
+                setBodyDraft(e.target.value);
+              }}
+              onBlur={saveBody}
+            />
 
             <section className="tm-section">
-              <div className="tm-label">Labels</div>
-              <div className="tm-av-row">
-                {(t.labels ?? []).map((l) => (
-                  <span key={l} className="kc-label">
-                    {l}
-                    <button className="tm-chip-x" onClick={() => removeLabel(l)}>
-                      <X size={10} />
-                    </button>
+              <div className="tm-section-head">
+                <span className="tm-section-title">Subtasks</span>
+                {detail.subtasks.length > 0 && (
+                  <span className="tm-section-count">
+                    {completedSubs}/{detail.subtasks.length}
                   </span>
+                )}
+              </div>
+              <ul className="tm-sub-list">
+                {detail.subtasks.map((s) => (
+                  <li key={s.id} className="tm-sub-item">
+                    <input
+                      type="checkbox"
+                      checked={s.status === "done"}
+                      onChange={() => toggleSubStatus(s)}
+                    />
+                    <span className={s.status === "done" ? "tm-sub-done" : ""}>{s.title}</span>
+                  </li>
                 ))}
+              </ul>
+              <div className="tm-sub-add">
                 <input
-                  value={labelDraft}
-                  onChange={(e) => setLabelDraft(e.target.value)}
+                  value={subDraft}
+                  onChange={(e) => setSubDraft(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") addLabel();
+                    if (e.key === "Enter") createSubtask();
                   }}
-                  placeholder="+ label"
-                  className="tm-label-input"
+                  placeholder="+ subtask"
+                  className="tm-sub-input"
                 />
               </div>
             </section>
 
             <section className="tm-section">
-              <div className="tm-label">Due</div>
-              <input
-                type="date"
-                value={t.dueAt ? t.dueAt.slice(0, 10) : ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  patchTask({ dueAt: v ? new Date(v).toISOString() : null } as Partial<Task>);
-                }}
-                className="tm-date"
-              />
-            </section>
-
-            <section className="tm-section">
-              <div className="tm-label">Progress</div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={5}
-                value={t.progress}
-                onChange={(e) => patchTask({ progress: Number(e.target.value) })}
-                className="tm-slider"
-              />
-              <span className="mono text-[11px] text-[var(--color-muted)]">
-                {t.progress}%
-              </span>
-            </section>
-          </div>
-
-          <section className="tm-section">
-            <div className="tm-label">
-              Subtasks
-              {detail.subtasks.length > 0 && (
-                <span className="text-[var(--color-muted)]">
-                  {" "}
-                  ({detail.subtasks.filter((s) => s.status === "done").length}/
-                  {detail.subtasks.length})
-                </span>
-              )}
-            </div>
-            <ul className="tm-sub-list">
-              {detail.subtasks.map((s) => (
-                <li key={s.id} className="tm-sub-item">
-                  <input
-                    type="checkbox"
-                    checked={s.status === "done"}
-                    onChange={() => toggleSubStatus(s)}
-                  />
-                  <span className={s.status === "done" ? "tm-sub-done" : ""}>{s.title}</span>
-                </li>
-              ))}
-            </ul>
-            <div className="tm-sub-add">
-              <input
-                value={subDraft}
-                onChange={(e) => setSubDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") createSubtask();
-                }}
-                placeholder="+ subtask"
-                className="tm-sub-input"
-              />
-            </div>
-          </section>
-
-          <section className="tm-section">
-            <div className="tm-label">Linked tasks</div>
-            {detail.links.length === 0 && (
-              <div className="text-[12px] text-[var(--color-muted)]">No links.</div>
-            )}
-            <ul className="tm-link-list">
-              {detail.links.map((l) => (
-                <li key={l.id} className="tm-link-item">
-                  <span className="mono text-[11px] text-[var(--color-muted)]">{l.kind}</span>
-                  <span className="tm-link-title">
-                    {l.linked?.title ?? l.linkedTaskId}
-                  </span>
-                  <button className="tm-chip-x" onClick={() => removeLink(l.id)}>
-                    <X size={10} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="tm-link-add">
-              <input
-                value={linkDraft}
-                onChange={(e) => setLinkDraft(e.target.value)}
-                placeholder="task_id to link"
-                className="tm-sub-input"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") addLink();
-                }}
-              />
-              <button className="btn xs" onClick={addLink} disabled={!linkDraft.trim()}>
-                Link
-              </button>
-            </div>
-          </section>
-
-          <section className="tm-section">
             <div className="tm-section-head">
               <span className="tm-section-title">Comments</span>
               <span className="tm-section-count">{detail.comments.length}</span>
@@ -493,7 +327,6 @@ export default function TaskModal({
                 const m = memberIdx.get(c.memberId);
                 const mine = me.data?.memberId === c.memberId;
                 const t = new Date(c.ts);
-                const isImage = (ct: string) => /^image\//.test(ct || "");
                 return (
                   <li key={c.id} className="tm-comment-msg">
                     <div className="tm-comment-gutter">
@@ -529,36 +362,7 @@ export default function TaskModal({
                       <div className="msg-body">
                         {c.bodyMd && <p>{c.bodyMd}</p>}
                         {c.attachmentsJson?.length > 0 && (
-                          <div className="mt-1.5 flex flex-wrap gap-2">
-                            {c.attachmentsJson.map((f) =>
-                              isImage(f.contentType) ? (
-                                <a
-                                  key={f.key}
-                                  href={f.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="att-image"
-                                  title={`${f.name} · ${Math.round(f.size / 1024)} KB`}
-                                >
-                                  <img src={f.url} alt={f.name} loading="lazy" />
-                                </a>
-                              ) : (
-                                <a
-                                  key={f.key}
-                                  href={f.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-2 rounded-md border border-[var(--color-hair)] bg-[var(--color-hi)] px-2.5 py-1.5 text-[12.5px] hover:border-[var(--color-hair-2)]"
-                                  title={f.contentType}
-                                >
-                                  <span className="font-mono">📎 {f.name}</span>
-                                  <span className="font-mono text-[10.5px] text-[var(--color-muted)]">
-                                    {Math.round(f.size / 1024)} KB
-                                  </span>
-                                </a>
-                              ),
-                            )}
-                          </div>
+                          <Attachments files={c.attachmentsJson} />
                         )}
                       </div>
                     </div>
@@ -636,7 +440,9 @@ export default function TaskModal({
           </section>
 
           <section className="tm-section">
-            <div className="tm-label">Activity</div>
+            <div className="tm-section-head">
+              <span className="tm-section-title">Activity</span>
+            </div>
             <ul className="tm-activity">
               {detail.activity.slice(0, 8).map((a) => {
                 const who = memberIdx.get(a.actorMemberId);
@@ -652,6 +458,212 @@ export default function TaskModal({
               })}
             </ul>
           </section>
+          </div>
+
+          <aside className="tm-rail">
+            <div className="tm-rail-field">
+              <div className="tm-rail-label">Status</div>
+              <div className="tm-rail-status-wrap">
+                <button
+                  className={`tm-rail-status s-${t.status}`}
+                  onClick={() => setStatusMenuOpen((o) => !o)}
+                >
+                  <span className="tm-status-dot" />
+                  <span>{STATUS_LABELS[t.status]}</span>
+                  <ChevronDown size={12} strokeWidth={2.2} />
+                </button>
+                {statusMenuOpen && (
+                  <div className="tm-popover tm-status-popover">
+                    <ul className="tm-popover-list">
+                      {ALL_STATUSES.map((s) => (
+                        <li key={s}>
+                          <button
+                            className={`tm-popover-item tm-status-item s-${s} ${t.status === s ? "on" : ""}`}
+                            onClick={() => {
+                              patchTask({ status: s });
+                              setStatusMenuOpen(false);
+                            }}
+                          >
+                            <span className="tm-status-dot" />
+                            <span>{STATUS_LABELS[s]}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="tm-rail-field">
+              <div className="tm-rail-label">Assignees</div>
+              <div className="tm-av-row">
+                {t.assignees.map((mid) => {
+                  const m = memberIdx.get(mid);
+                  return (
+                    <span key={mid} className="tm-chip">
+                      <Avatar
+                        name={m?.name ?? "?"}
+                        color={m?.avatarColor ?? "slate"}
+                        agent={m?.kind === "agent"}
+                        size="sm"
+                      />
+                      <span className="tm-chip-label">{m?.handle ?? mid.slice(0, 8)}</span>
+                      <button
+                        className="tm-chip-x"
+                        onClick={() => removeAssignee(mid)}
+                        title="Unassign"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  );
+                })}
+                <div style={{ position: "relative" }}>
+                  <button
+                    className="tm-add-chip"
+                    onClick={() => setAssignPickerOpen((o) => !o)}
+                  >
+                    <Plus size={11} /> add
+                  </button>
+                  {assignPickerOpen && (
+                    <div className="tm-popover">
+                      <input
+                        autoFocus
+                        placeholder="Filter…"
+                        value={assignFilter}
+                        onChange={(e) => setAssignFilter(e.target.value)}
+                        className="tm-popover-input"
+                      />
+                      <ul className="tm-popover-list">
+                        {filteredMembers.slice(0, 20).map((m) => (
+                          <li key={m.memberId}>
+                            <button
+                              className="tm-popover-item"
+                              onClick={() => addAssignee(m.memberId)}
+                            >
+                              <Avatar
+                                name={m.name}
+                                color={m.color}
+                                agent={m.kind === "agent"}
+                                size="sm"
+                              />
+                              <span>{m.name}</span>
+                              <span className="mono text-[11px] text-[var(--color-muted)]">
+                                @{m.handle}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                        {filteredMembers.length === 0 && (
+                          <li className="tm-popover-empty">no matches</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="tm-rail-field">
+              <div className="tm-rail-label">Labels</div>
+              <div className="tm-av-row">
+                {(t.labels ?? []).map((l) => (
+                  <span key={l} className="kc-label">
+                    {l}
+                    <button className="tm-chip-x" onClick={() => removeLabel(l)}>
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  value={labelDraft}
+                  onChange={(e) => setLabelDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addLabel();
+                  }}
+                  placeholder="+ label"
+                  className="tm-label-input"
+                />
+              </div>
+            </div>
+
+            <div className="tm-rail-field">
+              <div className="tm-rail-label">Due date</div>
+              <input
+                type="date"
+                value={t.dueAt ? t.dueAt.slice(0, 10) : ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  patchTask({ dueAt: v ? new Date(v).toISOString() : null } as Partial<Task>);
+                }}
+                className="tm-date"
+              />
+            </div>
+
+            <div className="tm-rail-field">
+              <div className="tm-rail-label">Progress</div>
+              <div className="tm-rail-progress">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={t.progress}
+                  onChange={(e) => patchTask({ progress: Number(e.target.value) })}
+                  className="tm-slider"
+                />
+                <span className="tm-rail-progress-num">{t.progress}%</span>
+              </div>
+            </div>
+
+            <div className="tm-rail-field">
+              <div className="tm-rail-label">Linked tasks</div>
+              {detail.links.length === 0 && !linkDraft && (
+                <div className="tm-rail-empty">No links yet.</div>
+              )}
+              {detail.links.length > 0 && (
+                <ul className="tm-link-list">
+                  {detail.links.map((l) => (
+                    <li key={l.id} className="tm-link-item">
+                      <span className="mono text-[11px] text-[var(--color-muted)]">{l.kind}</span>
+                      <span className="tm-link-title">
+                        {l.linked?.title ?? l.linkedTaskId}
+                      </span>
+                      <button className="tm-chip-x" onClick={() => removeLink(l.id)}>
+                        <X size={10} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="tm-link-add">
+                <input
+                  value={linkDraft}
+                  onChange={(e) => setLinkDraft(e.target.value)}
+                  placeholder="task_id to link"
+                  className="tm-sub-input"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addLink();
+                  }}
+                />
+                <button className="btn xs" onClick={addLink} disabled={!linkDraft.trim()}>
+                  Link
+                </button>
+              </div>
+            </div>
+
+            <div className="tm-rail-field tm-rail-meta">
+              <div className="tm-rail-label">Created</div>
+              <div className="mono text-[11px] text-[var(--color-muted)]">
+                {new Date(t.createdAt).toLocaleDateString(undefined, {
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                })}
+              </div>
+            </div>
+          </aside>
         </div>
       </div>
     </div>
