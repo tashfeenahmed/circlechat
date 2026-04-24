@@ -2191,3 +2191,201 @@ input, textarea { font: inherit; color: inherit; }
 .composer .send { border-radius: 8px; padding: 6px 14px; font-weight: 500; }
 .menu-popover { border-radius: 10px; }
 
+/* ═══════════════════════════════════════════════════════════════════ */
+/*                             Mobile                                  */
+/* ═══════════════════════════════════════════════════════════════════ */
+
+/* The hamburger toggle is only visible on narrow viewports — desktop
+   users never see it. CSS-only toggling keeps the markup identical. */
+.shell-hamburger {
+  display: none;
+  width: 32px; height: 32px;
+  align-items: center; justify-content: center;
+  border-radius: var(--radius-xs);
+  color: var(--color-muted);
+  background: transparent;
+  flex-shrink: 0;
+}
+.shell-hamburger:hover { background: var(--color-hi); color: var(--color-ink); }
+.shell-scrim { display: none; }
+
+@media (max-width: 768px) {
+  /* ── layout grid ───────────────────────────────────────────────── */
+  /* Collapse to a single column. The rail + sidebar move into a
+     drawer that overlays content rather than taking grid columns. */
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 48px minmax(0, 1fr);
+    height: 100dvh; /* respect mobile browser chrome */
+  }
+  .shell-topbar {
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .shell-hamburger { display: inline-flex; }
+
+  /* ── workspace rail ────────────────────────────────────────────── */
+  /* Rail sits inside the drawer on mobile as a horizontal strip. */
+  .rail {
+    position: fixed;
+    top: 48px;
+    left: 0;
+    width: 100%;
+    height: 52px;
+    flex-direction: row;
+    padding: 6px 10px;
+    gap: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-hair);
+    z-index: 51;
+    transform: translateX(-100%);
+    transition: transform 220ms ease;
+    overflow-x: auto;
+  }
+  .drawer-open .rail { transform: translateX(0); }
+
+  /* ── sidebar drawer ────────────────────────────────────────────── */
+  .sidebar {
+    position: fixed;
+    top: 100px; /* topbar (48) + rail (52) */
+    left: 0;
+    width: min(86vw, 320px);
+    height: calc(100dvh - 100px);
+    z-index: 50;
+    border-right: 1px solid var(--color-hair-2);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+    transform: translateX(-100%);
+    transition: transform 220ms ease;
+    background: var(--color-paper);
+  }
+  .drawer-open .sidebar { transform: translateX(0); }
+
+  /* backdrop scrim behind the drawer */
+  .shell-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.32);
+    z-index: 49;
+    display: block;
+    border: 0;
+    cursor: pointer;
+    animation: scrim-fade 180ms ease forwards;
+  }
+  @keyframes scrim-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  /* ── main workspace ───────────────────────────────────────────── */
+  .workspace { min-width: 0; }
+  .chan-head {
+    padding: 10px 12px;
+    gap: 8px;
+    min-height: 48px;
+  }
+  .chan-head .ch-title { font-size: 14px; }
+  .chan-head .ch-meta {
+    padding-left: 8px;
+    font-size: 12px;
+    gap: 6px;
+  }
+  .chan-head .ch-right { gap: 2px; margin-left: auto; }
+  .chan-head .ch-btn { padding: 6px 8px; font-size: 12px; }
+  /* Hide the channel topic on mobile — there's no room alongside the
+     title + members count + menu. It's still visible in member details. */
+  .chan-head .ch-meta { display: none; }
+
+  /* ── messages list ────────────────────────────────────────────── */
+  .messages { padding: 4px 0 8px; }
+  .msg {
+    padding-left: 10px;
+    padding-right: 10px;
+    grid-template-columns: 30px 1fr;
+  }
+
+  /* ── composer ─────────────────────────────────────────────────── */
+  .composer-wrap { padding: 0 10px 10px; }
+  .composer textarea { font-size: 16px; /* avoid iOS zoom */ }
+
+  /* ── side panels ──────────────────────────────────────────────── */
+  /* Thread and member-details panels become full-viewport overlays
+     on mobile — they'd be unusable at 320/440px docked on a phone. */
+  .thread-pane,
+  .details-panel {
+    position: fixed;
+    top: 48px;
+    left: 0; right: 0;
+    width: 100% !important;
+    height: calc(100dvh - 48px);
+    border-left: 0;
+    z-index: 40;
+    background: var(--color-paper);
+  }
+  .pane-resize { display: none; }
+
+  /* ── board (kanban) ───────────────────────────────────────────── */
+  .kanban {
+    grid-auto-columns: 86vw;
+    gap: 10px;
+    padding: 10px;
+    scroll-snap-type: x mandatory;
+    scroll-padding: 10px;
+  }
+  .kanban-col { scroll-snap-align: start; }
+  .kanban-col-head { padding: 10px 12px; }
+  .kanban-col-body { padding: 6px 10px 10px; gap: 6px; }
+
+  /* ── modals ───────────────────────────────────────────────────── */
+  .modal-bg { padding: 0; }
+  .modal.task-modal {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: 0;
+  }
+  .task-modal-body.tm-split {
+    /* Main first, rail stacks below — main gets viewport scroll. */
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tm-main {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-hair);
+    padding: 14px 14px 16px;
+  }
+  .tm-rail { padding: 14px; }
+
+  /* File viewer overlay — remove outer padding and sidebar-width
+     modal so the preview uses the full viewport. The existing
+     <=780px rule handles most of it; tighten a little further. */
+  .fv-bg { padding: 0; }
+  .fv {
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+    border: 0;
+  }
+  .fv-head { padding: 10px 10px 10px 14px; }
+  .fv-scroll { padding: 14px; }
+  .fv-md { font-size: 14px; }
+
+  /* ── topbar search ────────────────────────────────────────────── */
+  /* Collapse the max-width so it can actually fit between hamburger
+     and the account menu at 320px. */
+  .topbar-search-wrap { margin: 0; max-width: none; }
+
+  /* ── popovers ─────────────────────────────────────────────────── */
+  /* On mobile the menu popover risks clipping off-screen. Pin it
+     to a sensible width relative to viewport. */
+  .menu-popover { max-width: calc(100vw - 20px); }
+}
+
+/* Extra-narrow phones (iPhone SE / old Androids at 320–375px). */
+@media (max-width: 380px) {
+  .shell-topbar { gap: 4px; }
+  .shell-topbar .brand { display: none; }
+  .chan-head { padding: 8px 10px; }
+  .kanban { grid-auto-columns: 90vw; }
+}
+

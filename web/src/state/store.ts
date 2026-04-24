@@ -88,6 +88,12 @@ interface PresenceState {
   viewerSiblings: ViewerFile[] | null;
   openViewer: (file: ViewerFile, siblings?: ViewerFile[]) => void;
   closeViewer: () => void;
+  // Mobile drawer for the sidebar. CSS hides the sidebar at <=768px and
+  // slides it in via transform when this is true. Any nav click closes it.
+  mobileDrawerOpen: boolean;
+  openMobileDrawer: () => void;
+  closeMobileDrawer: () => void;
+  toggleMobileDrawer: () => void;
 }
 
 export interface ViewerFile {
@@ -245,6 +251,10 @@ export const useBus = create<PresenceState>((set, get) => ({
   openViewer: (file, siblings) =>
     set({ viewerFile: file, viewerSiblings: siblings ?? null }),
   closeViewer: () => set({ viewerFile: null, viewerSiblings: null }),
+  mobileDrawerOpen: false,
+  openMobileDrawer: () => set({ mobileDrawerOpen: true }),
+  closeMobileDrawer: () => set({ mobileDrawerOpen: false }),
+  toggleMobileDrawer: () => set((s) => ({ mobileDrawerOpen: !s.mobileDrawerOpen })),
 }));
 
 setInterval(() => useBus.getState().pruneTyping(), 2000);
