@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { X, Plus, Trash2 } from "lucide-react";
+import { X, Plus, Trash2, Paperclip, Bold, Italic, Code } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTaskDetail, useMembersDirectory, useMe } from "../lib/hooks";
 import {
@@ -40,6 +40,8 @@ export default function TaskModal({
   const [assignPickerOpen, setAssignPickerOpen] = useState(false);
   const [assignFilter, setAssignFilter] = useState("");
   const [busy, setBusy] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const composerTaRef = useRef<HTMLTextAreaElement>(null);
   const bodyTouched = useRef(false);
   const titleTouched = useRef(false);
 
@@ -482,7 +484,10 @@ export default function TaskModal({
           </section>
 
           <section className="tm-section">
-            <div className="tm-label">Comments ({detail.comments.length})</div>
+            <div className="tm-section-head">
+              <span className="tm-section-title">Comments</span>
+              <span className="tm-section-count">{detail.comments.length}</span>
+            </div>
             <ul className="tm-comments">
               {detail.comments.map((c) => {
                 const m = memberIdx.get(c.memberId);
@@ -561,23 +566,72 @@ export default function TaskModal({
                 );
               })}
             </ul>
-            <div className="tm-compose">
-              <textarea
-                value={commentDraft}
-                onChange={(e) => setCommentDraft(e.target.value)}
-                placeholder="Add a comment…"
-                rows={2}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) postComment();
-                }}
-              />
-              <button
-                className="btn sm primary"
-                onClick={postComment}
-                disabled={!commentDraft.trim() || busy}
-              >
-                Post
-              </button>
+            <div className={`tm-composer ${composerOpen ? "open" : ""}`}>
+              <div className="tm-composer-gutter">
+                <Avatar
+                  name={me.data?.user?.name ?? "?"}
+                  color={(me.data?.user?.avatarColor as string) ?? "slate"}
+                  size="sm"
+                />
+              </div>
+              {!composerOpen ? (
+                <button
+                  type="button"
+                  className="tm-composer-prompt"
+                  onClick={() => {
+                    setComposerOpen(true);
+                    setTimeout(() => composerTaRef.current?.focus(), 0);
+                  }}
+                >
+                  Add a comment…
+                </button>
+              ) : (
+                <div className="tm-composer-editor">
+                  <div className="tm-composer-toolbar">
+                    <button type="button" title="Bold" className="tm-tool"><Bold size={12} strokeWidth={2.2} /></button>
+                    <button type="button" title="Italic" className="tm-tool"><Italic size={12} strokeWidth={2.2} /></button>
+                    <button type="button" title="Code" className="tm-tool"><Code size={12} strokeWidth={2.2} /></button>
+                    <span className="tm-tool-sep" />
+                    <button type="button" title="Attach" className="tm-tool"><Paperclip size={12} strokeWidth={2.2} /></button>
+                  </div>
+                  <textarea
+                    ref={composerTaRef}
+                    value={commentDraft}
+                    onChange={(e) => setCommentDraft(e.target.value)}
+                    placeholder="Write a comment — ⌘↵ to save, Esc to cancel"
+                    rows={4}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        postComment().then(() => setComposerOpen(false));
+                      } else if (e.key === "Escape") {
+                        setComposerOpen(false);
+                        setCommentDraft("");
+                      }
+                    }}
+                  />
+                  <div className="tm-composer-actions">
+                    <button
+                      className="btn sm primary"
+                      onClick={async () => {
+                        await postComment();
+                        setComposerOpen(false);
+                      }}
+                      disabled={!commentDraft.trim() || busy}
+                    >
+                      Save
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      onClick={() => {
+                        setComposerOpen(false);
+                        setCommentDraft("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
 

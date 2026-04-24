@@ -40,6 +40,15 @@ export function useConversations() {
     queryFn: () => api.get("/conversations"),
     staleTime: 15_000,
   });
+  // Subscribe to WS events for every conversation the user is a member of,
+  // not just the one they're viewing. Without this, message.new only fires
+  // for the active channel — unread dots in the sidebar for OTHER channels
+  // never update until a poll (15s) or a page refresh.
+  useEffect(() => {
+    for (const c of q.data?.conversations ?? []) {
+      bus.send({ type: "subscribe", conversationId: c.id });
+    }
+  }, [q.data?.conversations]);
   useEffect(() => {
     return bus.on((ev) => {
       if (ev.type === "message.new") {
