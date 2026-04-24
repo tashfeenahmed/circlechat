@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, Hash, MessageSquare, Paperclip, Eye, AlertTriangle, Search } from "lucide-react";
+import { FolderOpen, Hash, MessageSquare, Eye, AlertTriangle, Search } from "lucide-react";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
+import { kindFor, ICON_FOR, STYLE_FOR } from "../lib/fileKind";
 
 interface FileRow {
   key: string;
@@ -112,6 +113,9 @@ export default function FilesPage() {
               url: f.url,
             };
             const onOpen = () => f.exists && openViewer(viewerFile, viewerSiblings);
+            const kind = kindFor(f.contentType, f.name);
+            const Icon = ICON_FOR[kind];
+            const style = STYLE_FOR[kind];
             return (
               <li
                 key={`${f.messageId}:${f.key}`}
@@ -134,8 +138,11 @@ export default function FilesPage() {
                     />
                   </button>
                 ) : (
-                  <span className="w-10 h-10 rounded-lg bg-[var(--color-bg-2)] border border-[var(--color-hair-2)] grid place-items-center text-[var(--color-muted)] shrink-0">
-                    <Paperclip size={14} strokeWidth={2} />
+                  <span
+                    className={`w-10 h-10 rounded-lg grid place-items-center shrink-0 ${style.bg} ${style.fg}`}
+                    title={style.label}
+                  >
+                    <Icon size={16} strokeWidth={1.8} />
                   </span>
                 )}
                 <div className="min-w-0 flex-1">

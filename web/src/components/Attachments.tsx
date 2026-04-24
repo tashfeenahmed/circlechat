@@ -1,15 +1,6 @@
-import {
-  FileText,
-  FileSpreadsheet,
-  FileCode,
-  FileVideo,
-  FileAudio,
-  FileArchive,
-  File as FileIcon,
-  ArrowUpRight,
-  type LucideIcon,
-} from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { useBus } from "../state/store";
+import { kindFor, ICON_FOR, STYLE_FOR, formatSize } from "../lib/fileKind";
 
 export interface Attachment {
   key: string;
@@ -17,108 +8,6 @@ export interface Attachment {
   contentType: string;
   size: number;
   url: string;
-}
-
-type Kind = "pdf" | "doc" | "sheet" | "text" | "video" | "audio" | "archive" | "code" | "generic";
-
-function kindFor(ct: string, name: string): Kind {
-  const c = (ct || "").toLowerCase();
-  const ext = (name.match(/\.([^.]+)$/)?.[1] ?? "").toLowerCase();
-  if (c === "application/pdf" || ext === "pdf") return "pdf";
-  if (c.startsWith("video/")) return "video";
-  if (c.startsWith("audio/")) return "audio";
-  if (
-    c.includes("spreadsheet") ||
-    c === "text/csv" ||
-    c === "application/vnd.ms-excel" ||
-    ext === "csv" ||
-    ext === "xlsx" ||
-    ext === "xls" ||
-    ext === "ods"
-  )
-    return "sheet";
-  if (
-    c.includes("msword") ||
-    c.includes("officedocument.wordprocessing") ||
-    ext === "doc" ||
-    ext === "docx" ||
-    ext === "odt" ||
-    ext === "rtf"
-  )
-    return "doc";
-  if (
-    c === "application/zip" ||
-    c === "application/x-tar" ||
-    c === "application/gzip" ||
-    c === "application/x-7z-compressed" ||
-    ["zip", "tar", "gz", "7z", "rar"].includes(ext)
-  )
-    return "archive";
-  if (
-    c === "application/json" ||
-    c === "application/xml" ||
-    c === "text/xml" ||
-    c === "application/javascript" ||
-    c === "application/x-yaml" ||
-    [
-      "js",
-      "ts",
-      "tsx",
-      "jsx",
-      "json",
-      "yaml",
-      "yml",
-      "py",
-      "go",
-      "rs",
-      "sh",
-      "rb",
-      "java",
-      "c",
-      "cpp",
-      "h",
-      "hpp",
-      "toml",
-    ].includes(ext)
-  )
-    return "code";
-  if (c.startsWith("text/") || ["md", "txt", "log"].includes(ext)) return "text";
-  return "generic";
-}
-
-const ICON_FOR: Record<Kind, LucideIcon> = {
-  pdf: FileText,
-  doc: FileText,
-  text: FileText,
-  sheet: FileSpreadsheet,
-  video: FileVideo,
-  audio: FileAudio,
-  archive: FileArchive,
-  code: FileCode,
-  generic: FileIcon,
-};
-
-// Utility-class fragments keep the palette in one spot. Using tailwind
-// tokens means no new CSS and no new CSS vars — they compose with the
-// existing design system.
-const STYLE_FOR: Record<Kind, { bg: string; fg: string; label: string }> = {
-  pdf: { bg: "bg-red-50", fg: "text-red-600", label: "PDF" },
-  doc: { bg: "bg-blue-50", fg: "text-blue-600", label: "DOC" },
-  text: { bg: "bg-slate-100", fg: "text-slate-600", label: "TXT" },
-  sheet: { bg: "bg-emerald-50", fg: "text-emerald-600", label: "SHEET" },
-  video: { bg: "bg-pink-50", fg: "text-pink-600", label: "VIDEO" },
-  audio: { bg: "bg-amber-50", fg: "text-amber-600", label: "AUDIO" },
-  archive: { bg: "bg-stone-100", fg: "text-stone-600", label: "ARCHIVE" },
-  code: { bg: "bg-zinc-100", fg: "text-zinc-700", label: "CODE" },
-  generic: { bg: "bg-slate-100", fg: "text-slate-500", label: "FILE" },
-};
-
-function formatSize(bytes: number): string {
-  if (!bytes || bytes < 0) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  const mb = bytes / (1024 * 1024);
-  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
 }
 
 function isImage(ct: string): boolean {
