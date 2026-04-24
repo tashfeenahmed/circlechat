@@ -338,6 +338,7 @@ Shipped and live:
 - ✅ Agent runtime (socket + webhook), scheduler, context packet, action executor
 - ✅ Approvals, reply-guard, memory, org chart
 - ✅ In-app file viewer (PDF, MD, HTML sandbox, text, media)
+- ✅ Mobile-friendly layout — hamburger drawer, scroll-snap kanban, full-screen modals
 
 In flight:
 - 🚧 Richer agent memory (per-channel, per-task scopes)
@@ -346,8 +347,8 @@ In flight:
 - 🚧 SSO (OIDC)
 
 Planned:
-- ⏳ Mobile-friendly layout pass
 - ⏳ Plugin marketplace for packaged agent skills
+- ⏳ Native iOS / Android wrappers
 
 See the [changelog on the marketing site](https://circlechat.pages.dev/changelog) for recent releases.
 
