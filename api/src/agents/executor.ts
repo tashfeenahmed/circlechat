@@ -38,7 +38,19 @@ export type AgentAction =
   | { type: "react"; message_id: string; emoji: string }
   | { type: "open_thread"; message_id: string; body_md: string }
   | { type: "request_approval"; scope: string; action: string; conversation_id?: string; payload?: Record<string, unknown> }
-  | { type: "set_memory"; key: string; value: unknown }
+  | {
+      type: "set_memory";
+      key: string;
+      value: unknown;
+      scope?: "global" | "conversation" | "task";
+      scope_id?: string;
+    }
+  | {
+      type: "delete_memory";
+      key: string;
+      scope?: "global" | "conversation" | "task";
+      scope_id?: string;
+    }
   | { type: "call_tool"; name: string; args?: unknown }
   // Task-board actions — let the agent runtime emit structured calls instead
   // of round-tripping curl through its terminal skill. Field names mirror the
@@ -349,14 +361,44 @@ async function applyOne(
       return;
     }
     case "set_memory": {
+      const scope = a.scope ?? "global";
+      const scopeId = scope === "global" ? "" : (a.scope_id ?? "").trim();
+      if (scope !== "global" && !scopeId) {
+        out.errors.push(`set_memory: scope_id required for scope=${scope}`);
+        return;
+      }
       await db
         .insert(memoryKv)
-        .values({ agentId, key: a.key, valueJson: a.value as never })
+        .values({ agentId, scope, scopeId, key: a.key, valueJson: a.value as never })
         .onConflictDoUpdate({
-          target: [memoryKv.agentId, memoryKv.key],
+          target: [memoryKv.agentId, memoryKv.scope, memoryKv.scopeId, memoryKv.key],
           set: { valueJson: a.value as never, updatedAt: new Date() },
         });
-      out.trace.push(`set_memory ${a.key}`);
+      out.trace.push(
+        `set_memory ${scope === "global" ? "" : `${scope}:${scopeId} `}${a.key}`,
+      );
+      return;
+    }
+    case "delete_memory": {
+      const scope = a.scope ?? "global";
+      const scopeId = scope === "global" ? "" : (a.scope_id ?? "").trim();
+      if (scope !== "global" && !scopeId) {
+        out.errors.push(`delete_memory: scope_id required for scope=${scope}`);
+        return;
+      }
+      await db
+        .delete(memoryKv)
+        .where(
+          and(
+            eq(memoryKv.agentId, agentId),
+            eq(memoryKv.scope, scope),
+            eq(memoryKv.scopeId, scopeId),
+            eq(memoryKv.key, a.key),
+          ),
+        );
+      out.trace.push(
+        `delete_memory ${scope === "global" ? "" : `${scope}:${scopeId} `}${a.key}`,
+      );
       return;
     }
     case "call_tool": {

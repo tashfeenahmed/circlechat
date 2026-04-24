@@ -88,7 +88,17 @@ export interface ContextPacket {
     status: string;
     createdAt: string;
   }>;
-  memory: Record<string, unknown>;
+  // Scoped agent memory. `global` is workspace-wide and always present.
+  // `byConversation` is keyed by conversationId — only includes scopes for
+  // conversations that appear in this packet's inbox or trigger conversation.
+  // `byTask` is keyed by taskId — only includes scopes for tasks in `myTasks`
+  // or the active task. Old code reading the flat shape can fall back to
+  // `global`.
+  memory: {
+    global: Record<string, unknown>;
+    byConversation: Record<string, Record<string, unknown>>;
+    byTask: Record<string, Record<string, unknown>>;
+  };
   reporting: ReportingBundle;
   // Open tasks assigned to this agent, freshest first. Present on every
   // trigger so heartbeats have a "what am I working on?" list — the agent
@@ -314,9 +324,22 @@ export async function buildContext(opts: {
     .where(and(eq(approvals.agentId, opts.agentId), eq(approvals.status, "pending")))
     .limit(50);
 
+  // Bucket memory by scope. We load everything in one query and filter in
+  // memory — the volume is per-agent and small. byConversation/byTask are
+  // pruned later to only include scopes actually relevant to this packet.
   const memRows = await db.select().from(memoryKv).where(eq(memoryKv.agentId, opts.agentId));
-  const memory: Record<string, unknown> = {};
-  for (const r of memRows) memory[r.key] = r.valueJson;
+  const memGlobal: Record<string, unknown> = {};
+  const memByConv: Record<string, Record<string, unknown>> = {};
+  const memByTask: Record<string, Record<string, unknown>> = {};
+  for (const r of memRows) {
+    if (r.scope === "global") {
+      memGlobal[r.key] = r.valueJson;
+    } else if (r.scope === "conversation") {
+      (memByConv[r.scopeId] ??= {})[r.key] = r.valueJson;
+    } else if (r.scope === "task") {
+      (memByTask[r.scopeId] ??= {})[r.key] = r.valueJson;
+    }
+  }
 
   // If the triggering message is inside (or is the root of) a thread, pull the
   // whole thread regardless of age so the agent has the full local context.
@@ -650,9 +673,36 @@ export async function buildContext(opts: {
       status: o.status,
       createdAt: o.createdAt.toISOString(),
     })),
-    memory,
+    memory: {
+      global: memGlobal,
+      byConversation: pickKeys(memByConv, [
+        ...inbox.map((c) => c.conversationId),
+        ...(opts.conversationId ? [opts.conversationId] : []),
+      ]),
+      byTask: pickKeys(memByTask, [
+        ...myTasks.map((t) => t.id),
+        ...(taskCtx ? [taskCtx.id] : []),
+      ]),
+    },
     reporting,
     myTasks,
     task: taskCtx,
   };
+}
+
+// Prune a record-of-records to only include the requested keys. Used to
+// strip per-scope memory down to scopes the agent actually needs in this
+// packet (active inbox conversations, open tasks).
+function pickKeys<V>(
+  src: Record<string, V>,
+  keys: string[],
+): Record<string, V> {
+  const out: Record<string, V> = {};
+  const seen = new Set<string>();
+  for (const k of keys) {
+    if (seen.has(k)) continue;
+    seen.add(k);
+    if (src[k]) out[k] = src[k];
+  }
+  return out;
 }

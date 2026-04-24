@@ -252,15 +252,23 @@ export const invites = pgTable(
 );
 
 // ───────────────── memory_kv (per-agent scratch memory) ─────────────────
+// scope: 'global' | 'conversation' | 'task'. scopeId is the conversationId
+// or taskId for the latter two; '' (empty string, NOT null) for global so
+// the composite primary key stays well-defined.
 export const memoryKv = pgTable(
   "memory_kv",
   {
     agentId: varchar("agent_id", { length: 32 }).notNull(),
+    scope: varchar("scope", { length: 20 }).notNull().default("global"),
+    scopeId: varchar("scope_id", { length: 32 }).notNull().default(""),
     key: varchar("key", { length: 100 }).notNull(),
     valueJson: jsonb("value_json").$type<unknown>().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => ({ pk: primaryKey({ columns: [t.agentId, t.key] }) }),
+  (t) => ({
+    pk: primaryKey({ columns: [t.agentId, t.scope, t.scopeId, t.key] }),
+    scopeIdx: index("memory_kv_scope_idx").on(t.agentId, t.scope, t.scopeId),
+  }),
 );
 
 // ───────────────── presence (in-memory shadow; table kept for audit of last_seen) ─────────────────

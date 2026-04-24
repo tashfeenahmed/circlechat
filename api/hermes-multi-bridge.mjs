@@ -349,6 +349,7 @@ const ALLOWED_ACTION_TYPES = new Set([
   "open_thread",
   "request_approval",
   "set_memory",
+  "delete_memory",
   "create_task",
   "update_task",
   "assign_task",
@@ -550,6 +551,10 @@ function buildPrompt(entry, packet) {
     `  {"type":"share_to_task","task_id":"task_…","body_md":"progress note","files":[{"url":"https://…","name":"snapshot.png"},{"path":"/tmp/report.pdf","name":"Q3.pdf"}]}`,
     `                                                                — mirror of share_files but attaches to a task card. Use this to drop progress updates + artifacts (screenshots, PDFs, data files) on tasks you're working on during heartbeats. Files show up on the task AND in the workspace Files tab.`,
     `  {"type":"open_thread","message_id":"<id>","body_md":"…"}      — start a thread reply on a specific message`,
+    `  {"type":"set_memory","key":"<short_snake_case>","value":<any JSON>,"scope":"global|conversation|task","scope_id":"<c_… or task_… (omit for global)>"}`,
+    `                                                                — store a fact across runs. Three scopes: "global" (workspace-wide, e.g. {"reply_style":"terse"}), "conversation" (channel/DM-specific, e.g. tone, glossary, who's in this channel and their preferences), "task" (deliverable-specific, e.g. what you've ruled out, blockers, links). Default is global. Pick the NARROWEST scope that still applies — global memory leaks across unrelated channels and bloats every prompt. Keys are yours; pick descriptive ones (e.g. "ben_prefers_async_updates", "ruled_out_dns_cache"). Read your existing memory in the YOUR MEMORY block above.`,
+    `  {"type":"delete_memory","key":"<key>","scope":"global|conversation|task","scope_id":"<…>"}`,
+    `                                                                — remove a memory entry that's no longer true. Same scope rules as set_memory. Use this when a fact you stored is wrong or stale; keeping bad memory around will mislead future runs.`,
     `  {"type":"request_approval","scope":"<scope>","action":"<one-line human summary of what you want to do>","conversation_id":"<optional — the conv the request is tied to>","payload":{<optional structured details a human reviewer will inspect>}}`,
     `                                                                — pause and ask a human before doing something the team hasn't explicitly authorised. Creates a row on the /approvals page; on approve/deny you get woken with trigger:"approval_response" and should then proceed (or back out). Use this BEFORE, not AFTER, the risky step.`,
     `                                                                  When to request approval: (1) sending email, SMS, or any outbound message that leaves this workspace; (2) spending money / triggering a paid API or charge; (3) writing to a system outside CircleChat (booking a meeting, creating a ticket in Linear/Jira, posting to Slack, pushing to a repo, editing shared docs); (4) sharing information OUT of the workspace to an external recipient; (5) taking a one-way/irreversible action (deleting a resource, cancelling a subscription, making a public announcement). Chat messages, task board edits, reactions, and file shares INSIDE the workspace do NOT need approval.`,
@@ -652,12 +657,73 @@ function buildPrompt(entry, packet) {
     ].join("\n");
   }
 
+  // Memory block: render scoped memory the agent has previously written.
+  // Global is always shown. Per-conversation memory appears only for
+  // conversations in this packet's inbox; per-task memory only for tasks
+  // in YOUR OPEN TASKS or the active task. Empty buckets are omitted.
+  let memoryBlock = "";
+  const mem = packet.memory || {};
+  // Tolerate the legacy flat shape {key: value} from older API versions —
+  // treat it as global so a downgraded API doesn't break agent operation.
+  const memGlobal =
+    mem && typeof mem === "object" && "global" in mem
+      ? mem.global || {}
+      : (mem && typeof mem === "object" ? mem : {});
+  const memByConv = (mem && mem.byConversation) || {};
+  const memByTask = (mem && mem.byTask) || {};
+  const fmtKv = (obj) => {
+    const keys = Object.keys(obj || {});
+    if (!keys.length) return null;
+    return keys
+      .slice(0, 30)
+      .map((k) => {
+        let v;
+        try { v = JSON.stringify(obj[k]); } catch { v = String(obj[k]); }
+        if (v && v.length > 200) v = v.slice(0, 197) + "…";
+        return `    ${k} = ${v}`;
+      })
+      .join("\n");
+  };
+  const memLines = [];
+  const globalLines = fmtKv(memGlobal);
+  if (globalLines) {
+    memLines.push(`  global:`, globalLines);
+  }
+  for (const [cid, kv] of Object.entries(memByConv)) {
+    const lines = fmtKv(kv);
+    if (!lines) continue;
+    const conv = (packet.inbox || []).find((c) => c.conversationId === cid);
+    const label = conv
+      ? conv.conversationKind === "dm"
+        ? `DM ${cid}`
+        : `#${conv.conversationName || cid}`
+      : cid;
+    memLines.push(`  conversation:${label}`, lines);
+  }
+  for (const [tid, kv] of Object.entries(memByTask)) {
+    const lines = fmtKv(kv);
+    if (!lines) continue;
+    const t = (packet.myTasks || []).find((x) => x.id === tid);
+    const label = t ? `${tid} — ${t.title}` : tid;
+    memLines.push(`  task:${label}`, lines);
+  }
+  if (memLines.length) {
+    memoryBlock = [
+      ``,
+      `YOUR MEMORY (notes you've written previously — keys are yours to define):`,
+      ...memLines,
+      ``,
+      `Use set_memory to store new facts and delete_memory to clear ones that are no longer true. Three scopes: "global" (workspace-wide, e.g. style preferences), "conversation" (channel-specific, e.g. tone, glossary), "task" (deliverable-specific, e.g. what you've ruled out, blockers, links). Pick the narrowest scope that still applies — global memory leaks across unrelated channels.`,
+    ].join("\n");
+  }
+
   const sections = taskOnly
     ? [
         identity,
         ``,
         `You are currently in ${convLabel}.${colleaguesLine}${reportingLine}${memberIdBlock}`,
         myTasksBlock,
+        memoryBlock,
         ``,
         triggerLine,
         toolBlock,
@@ -671,6 +737,7 @@ function buildPrompt(entry, packet) {
         threadBlock,
         taskBlock,
         myTasksBlock,
+        memoryBlock,
         ``,
         `Recent messages in this conversation (most recent last):`,
         history || "(no prior messages)",
