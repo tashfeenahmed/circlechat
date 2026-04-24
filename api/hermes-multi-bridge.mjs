@@ -551,14 +551,9 @@ function buildPrompt(entry, packet) {
     `  {"type":"share_to_task","task_id":"task_…","body_md":"progress note","files":[{"url":"https://…","name":"snapshot.png"},{"path":"/tmp/report.pdf","name":"Q3.pdf"}]}`,
     `                                                                — mirror of share_files but attaches to a task card. Use this to drop progress updates + artifacts (screenshots, PDFs, data files) on tasks you're working on during heartbeats. Files show up on the task AND in the workspace Files tab.`,
     `  {"type":"open_thread","message_id":"<id>","body_md":"…"}      — start a thread reply on a specific message`,
-    `  {"type":"set_memory","key":"<short_snake_case>","value":<any JSON>,"scope":"global|conversation|task","scope_id":"<c_… or task_… (omit for global)>"}`,
-    `                                                                — store a fact across runs. Three scopes: "global" (workspace-wide, e.g. {"reply_style":"terse"}), "conversation" (channel/DM-specific, e.g. tone, glossary, who's in this channel and their preferences), "task" (deliverable-specific, e.g. what you've ruled out, blockers, links). Default is global. Pick the NARROWEST scope that still applies — global memory leaks across unrelated channels and bloats every prompt. Keys are yours; pick descriptive ones (e.g. "ben_prefers_async_updates", "ruled_out_dns_cache"). Read your existing memory in the YOUR MEMORY block above.`,
-    `  {"type":"delete_memory","key":"<key>","scope":"global|conversation|task","scope_id":"<…>"}`,
-    `                                                                — remove a memory entry that's no longer true. Same scope rules as set_memory. Use this when a fact you stored is wrong or stale; keeping bad memory around will mislead future runs.`,
-    `  {"type":"request_approval","scope":"<scope>","action":"<one-line human summary of what you want to do>","conversation_id":"<optional — the conv the request is tied to>","payload":{<optional structured details a human reviewer will inspect>}}`,
-    `                                                                — pause and ask a human before doing something the team hasn't explicitly authorised. Creates a row on the /approvals page; on approve/deny you get woken with trigger:"approval_response" and should then proceed (or back out). Use this BEFORE, not AFTER, the risky step.`,
-    `                                                                  When to request approval: (1) sending email, SMS, or any outbound message that leaves this workspace; (2) spending money / triggering a paid API or charge; (3) writing to a system outside CircleChat (booking a meeting, creating a ticket in Linear/Jira, posting to Slack, pushing to a repo, editing shared docs); (4) sharing information OUT of the workspace to an external recipient; (5) taking a one-way/irreversible action (deleting a resource, cancelling a subscription, making a public announcement). Chat messages, task board edits, reactions, and file shares INSIDE the workspace do NOT need approval.`,
-    `                                                                  The "scope" is a short machine tag for grouping (e.g. "email", "outbound", "billing", "external_api"). The "action" is a short human sentence ("Send the Q3 summary email to ben@acme.com"). Put the actual details the reviewer needs in "payload".`,
+    `  {"type":"set_memory","key":"<snake_case>","value":<any JSON>,"scope":"global|conversation|task","scope_id":"<c_… or task_… (omit for global)>"}  — persist a note across runs. Pick the narrowest scope that applies; existing values are in YOUR MEMORY above.`,
+    `  {"type":"delete_memory","key":"<key>","scope":"…","scope_id":"…"}  — remove a memory entry that's no longer true.`,
+    `  {"type":"request_approval","scope":"<tag>","action":"<human sentence>","conversation_id":"<optional>","payload":{…}}  — pre-flight gate. Use BEFORE actions that leave the workspace (email, paid APIs, external tickets, public posts) or are one-way (delete, cancel). Emit, stop, wait for trigger:"approval_response". In-workspace chat/task/file actions DO NOT need approval.`,
     ``,
     `Use the Member IDs block above to fill assignees / mentions / member_id fields — those fields take memberIds (m_…), NOT handles.`,
     `Emit as many actions as needed in one block. If a user asks for 5 tasks, create 5 create_task entries.`,
@@ -710,10 +705,8 @@ function buildPrompt(entry, packet) {
   if (memLines.length) {
     memoryBlock = [
       ``,
-      `YOUR MEMORY (notes you've written previously — keys are yours to define):`,
+      `YOUR MEMORY (your notes from prior runs — see set_memory/delete_memory in action types):`,
       ...memLines,
-      ``,
-      `Use set_memory to store new facts and delete_memory to clear ones that are no longer true. Three scopes: "global" (workspace-wide, e.g. style preferences), "conversation" (channel-specific, e.g. tone, glossary), "task" (deliverable-specific, e.g. what you've ruled out, blockers, links). Pick the narrowest scope that still applies — global memory leaks across unrelated channels.`,
     ].join("\n");
   }
 
