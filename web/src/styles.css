@@ -3,25 +3,25 @@
 @theme {
   --color-paper: #ffffff;
   --color-bg: #ffffff;
-  --color-bg-2: #f7f6f3;
-  --color-ink: rgb(55, 53, 47);
-  --color-muted: rgba(55, 53, 47, 0.65);
-  --color-muted-2: rgba(55, 53, 47, 0.5);
-  --color-hair: rgba(55, 53, 47, 0.09);
-  --color-hair-2: rgba(55, 53, 47, 0.16);
-  --color-hi: rgba(55, 53, 47, 0.06);
-  --color-hi-2: rgba(55, 53, 47, 0.08);
+  --color-bg-2: #fafafa;
+  --color-ink: #000000;
+  --color-muted: #666666;
+  --color-muted-2: #999999;
+  --color-hair: #eaeaea;
+  --color-hair-2: #d4d4d4;
+  --color-hi: #fafafa;
+  --color-hi-2: #f0f0f0;
   --color-warn: rgb(203, 145, 47);
   --color-ok: rgb(68, 131, 97);
   --color-err: rgb(212, 76, 71);
-  --color-accent-blue: rgb(35, 131, 226);
-  --color-rail: rgb(247, 246, 243);
-  --color-sidebar: rgb(251, 251, 250);
-  --font-sans: "Inter", ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --color-accent-blue: #000000;
+  --color-rail: #fafafa;
+  --color-sidebar: #ffffff;
+  --font-sans: "Geist", "Inter", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --font-serif: "Lora", "Iowan Old Style", "Apple Garamond", Georgia, serif;
-  --radius-xs: 3px;
-  --radius-sm: 4px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
   --shadow-pop: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px, rgba(15, 15, 15, 0.1) 0px 3px 6px,
     rgba(15, 15, 15, 0.2) 0px 9px 24px;
 }
@@ -46,10 +46,17 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 input, textarea { font: inherit; color: inherit; }
 
 .brand {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-mono);
+  font-style: normal;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.04em;
+  color: var(--color-ink);
+  text-transform: lowercase;
+}
+.brand::before {
+  content: "● ";
+  font-size: 0.75em;
+  vertical-align: 1px;
 }
 
 /* ─── app shell ─── */
@@ -705,17 +712,19 @@ input, textarea { font: inherit; color: inherit; }
 .msg-body code {
   font-family: var(--font-mono);
   font-size: 85%;
-  background: rgba(135, 131, 120, 0.15);
-  color: rgb(235, 87, 87);
+  background: var(--color-hi-2);
+  color: var(--color-ink);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 .msg-body pre {
-  background: #1f1e1b; color: #f4ede2;
-  padding: 10px 12px; border-radius: 4px;
+  background: #000; color: #eaeaea;
+  padding: 12px 14px; border-radius: 6px;
   overflow-x: auto;
   font-family: var(--font-mono); font-size: 12.5px;
+  border: 1px solid var(--color-hair);
 }
+.msg-body pre code { background: transparent; color: inherit; padding: 0; }
 .msg-body a {
   color: var(--color-accent-blue);
   text-decoration: underline;
@@ -1203,7 +1212,7 @@ input, textarea { font: inherit; color: inherit; }
   transition: box-shadow 120ms;
 }
 .kanban-col.drag-over {
-  box-shadow: 0 0 0 2px rgb(35, 131, 226);
+  box-shadow: 0 0 0 2px var(--color-ink);
 }
 .kanban-col-head {
   display: flex;
@@ -1219,13 +1228,17 @@ input, textarea { font: inherit; color: inherit; }
   font-family: var(--font-mono);
 }
 .kh-glyph { color: var(--color-ink); }
-.kh-title { flex: 1 0 auto; }
+.kh-title { flex: 0 0 auto; }
 .kh-count {
-  padding: 0 6px;
-  background: var(--color-hi);
-  border-radius: 10px;
+  min-width: 18px;
+  padding: 1px 6px;
+  background: var(--color-hi-2);
+  border-radius: 4px;
   font-family: var(--font-mono);
+  font-size: 10.5px;
   color: var(--color-muted);
+  text-align: center;
+  letter-spacing: 0;
 }
 .kh-spacer { flex: 1; }
 .kh-menu {
@@ -1258,63 +1271,77 @@ input, textarea { font: inherit; color: inherit; }
 
 .kcard {
   background: var(--color-paper);
-  border: 1px solid var(--color-hair-2);
-  border-radius: 4px;
-  padding: 8px 10px 10px;
+  border: 1px solid var(--color-hair);
+  border-radius: 6px;
+  padding: 10px 12px 8px;
   cursor: grab;
-  transition: box-shadow 120ms, transform 120ms;
+  transition: border-color 120ms, box-shadow 120ms, transform 60ms;
   user-select: none;
+  display: flex; flex-direction: column; gap: 8px;
 }
-.kcard:hover { box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.kcard:hover {
+  border-color: var(--color-hair-2);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 6px rgba(0, 0, 0, 0.04);
+}
 .kcard:active { cursor: grabbing; }
-.kcard.dragging { opacity: 0.5; }
-.kcard.adding { cursor: default; }
-.kc-id {
-  display: flex; align-items: center; gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--color-muted);
-}
+.kcard.dragging { opacity: 0.5; transform: rotate(-0.5deg); }
+.kcard.adding { cursor: default; gap: 0; padding-bottom: 10px; }
 .kc-title {
   font-size: 13.5px;
-  line-height: 1.35;
+  line-height: 1.4;
+  font-weight: 500;
   color: var(--color-ink);
-  margin: 4px 0 0;
   word-break: break-word;
+  letter-spacing: -0.005em;
 }
 .kc-labels {
   display: flex; gap: 4px; flex-wrap: wrap;
-  margin-top: 6px;
 }
 .kc-label {
-  display: inline-flex; align-items: center; gap: 3px;
+  display: inline-flex; align-items: center;
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 3px;
-  background: var(--color-hi);
+  background: var(--color-hi-2);
   color: var(--color-muted);
   font-family: var(--font-mono);
+  letter-spacing: 0;
 }
 .kc-foot {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 10px;
   font-size: 11px;
   color: var(--color-muted);
-  margin-top: 8px;
   font-family: var(--font-mono);
+  min-height: 22px;
 }
 .kc-avs { display: flex; }
-.kc-avs > * + * { margin-left: -3px; }
+.kc-avs > * + * { margin-left: -4px; }
+.kc-avs .av.sm {
+  box-shadow: 0 0 0 1.5px var(--color-paper);
+}
 .kc-sep { flex: 1; }
+.kc-meta { display: inline-flex; align-items: center; gap: 3px; }
+.kc-due {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--color-hi-2);
+  color: var(--color-muted);
+}
+.kc-due.overdue {
+  background: rgba(212, 76, 71, 0.1);
+  color: var(--color-err);
+}
 .kc-progress {
   height: 3px;
   background: var(--color-hair);
   border-radius: 2px;
-  margin-top: 6px;
   overflow: hidden;
 }
 .kc-bar {
   height: 100%;
   background: var(--color-ink);
+  transition: width 160ms ease-out;
 }
 .kadd-input {
   width: 100%;
@@ -1571,7 +1598,7 @@ input, textarea { font: inherit; color: inherit; }
   -webkit-appearance: none;
   -moz-appearance: none;
   background-color: var(--color-bg);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgb(55,53,47)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
   background-repeat: no-repeat;
   background-position: right 10px center;
   background-size: 12px 12px;
@@ -1649,3 +1676,38 @@ input, textarea { font: inherit; color: inherit; }
   color: var(--color-ink);
   background: var(--color-hi);
 }
+
+/* ─── base type + surface flourishes ───────────────────────────────────
+   Mono metadata and inverted black/white active states. Keeps the UI
+   feeling crisp and developer-flavored without going brutalist. */
+.sb-item { font-family: var(--font-mono); font-size: 12.5px; margin: 1px 8px; }
+.sb-item.active { background: var(--color-ink); color: var(--color-paper); font-weight: 500; }
+.sb-item.active .sb-glyph,
+.sb-item.active .sb-name,
+.sb-item.active .sb-suffix { color: var(--color-paper); }
+.sb-group-head {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-muted);
+}
+.sb-badge.mention { background: var(--color-ink); color: var(--color-paper); }
+.chan-head .ch-title { letter-spacing: -0.015em; }
+.chan-head .ch-meta { font-family: var(--font-mono); font-size: 12px; }
+.msg-head .name { font-weight: 600; }
+.msg-head .handle { font-family: var(--font-mono); font-size: 12px; }
+.msg-head .time { font-family: var(--font-mono); }
+.rx { font-family: var(--font-mono); border-radius: 6px; }
+.rx.me {
+  background: var(--color-ink);
+  color: var(--color-paper);
+  border-color: var(--color-ink);
+}
+.tb-btn { font-family: var(--font-mono); font-size: 12.5px; border-radius: 6px; }
+.ch-btn { border-radius: 6px; }
+.composer { border-radius: 8px; }
+.composer .send { border-radius: 6px; padding: 6px 14px; font-weight: 500; }
+.menu-popover { border-radius: 8px; }
+

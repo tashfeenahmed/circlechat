@@ -229,6 +229,13 @@ function looksLikeTraceback(text) {
   return /^\s*Traceback \(most recent call last\):/m.test(text);
 }
 
+// FreeLLMAPI / OpenRouter-style gateway error strings that Hermes streams
+// back as if they were the model's answer. Same treatment as a traceback
+// — the agent didn't actually reply, stay silent.
+function looksLikeGatewayError(text) {
+  return /^\s*API call failed after \d+ retries|^\s*Provider error \([^)]+\):\s*[A-Za-z]+ API error \d{3}/m.test(text);
+}
+
 // Hermes' built-in "clarify" feature emits this placeholder to stdout when
 // its internal clarification prompt times out. It's scaffolding text, not
 // something the agent decided to say — strip it.
@@ -241,6 +248,7 @@ function stripClarifyNoise(text) {
 function extractReply(raw) {
   const stripAnsi = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
   if (looksLikeTraceback(stripAnsi)) return "";
+  if (looksLikeGatewayError(stripAnsi)) return "";
   const lines = stripAnsi.split("\n");
   const out = [];
   let inside = false;

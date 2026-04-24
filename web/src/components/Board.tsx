@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, MessageSquare, GitBranch, Link2, Calendar } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTasks, useMembersDirectory, useMe } from "../lib/hooks";
 import { api, type Task, type TaskStatus } from "../api/client";
@@ -12,6 +12,11 @@ const COLUMNS: Array<{ id: TaskStatus; title: string; glyph: string }> = [
   { id: "review", title: "Review", glyph: "◐" },
   { id: "done", title: "Done", glyph: "✓" },
 ];
+
+function isOverdue(dueAt: string, status: TaskStatus): boolean {
+  if (status === "done") return false;
+  return new Date(dueAt).getTime() < Date.now();
+}
 
 export default function Board() {
   const q = useTasks();
@@ -203,18 +208,8 @@ export default function Board() {
                       moveTask(id, col.id, c.id);
                     }}
                     onClick={() => setOpenTaskId(c.id)}
+                    title={c.id}
                   >
-                    <div className="kc-id">
-                      <span className="mono">{c.id.slice(0, 10)}</span>
-                      {c.dueAt && (
-                        <span style={{ marginLeft: "auto" }}>
-                          {new Date(c.dueAt).toLocaleDateString(undefined, {
-                            month: "short",
-                            day: "numeric",
-                          })}
-                        </span>
-                      )}
-                    </div>
                     <div className="kc-title">{c.title}</div>
                     {c.labels.length > 0 && (
                       <div className="kc-labels">
@@ -223,6 +218,11 @@ export default function Board() {
                             {l}
                           </span>
                         ))}
+                      </div>
+                    )}
+                    {c.progress > 0 && (
+                      <div className="kc-progress">
+                        <div className="kc-bar" style={{ width: c.progress + "%" }} />
                       </div>
                     )}
                     <div className="kc-foot">
@@ -241,15 +241,34 @@ export default function Board() {
                         })}
                       </div>
                       <span className="kc-sep" />
-                      {c.subtaskCount > 0 && <span title="Subtasks">◌ {c.subtaskCount}</span>}
-                      {c.commentCount > 0 && <span title="Comments">💬 {c.commentCount}</span>}
-                      {c.linkCount > 0 && <span title="Links">⇄ {c.linkCount}</span>}
+                      {c.dueAt && (
+                        <span className={`kc-due${isOverdue(c.dueAt, c.status) ? " overdue" : ""}`}>
+                          <Calendar size={11} strokeWidth={2} />
+                          {new Date(c.dueAt).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                      )}
+                      {c.subtaskCount > 0 && (
+                        <span className="kc-meta" title="Subtasks">
+                          <GitBranch size={11} strokeWidth={2} />
+                          {c.subtaskCount}
+                        </span>
+                      )}
+                      {c.commentCount > 0 && (
+                        <span className="kc-meta" title="Comments">
+                          <MessageSquare size={11} strokeWidth={2} />
+                          {c.commentCount}
+                        </span>
+                      )}
+                      {c.linkCount > 0 && (
+                        <span className="kc-meta" title="Links">
+                          <Link2 size={11} strokeWidth={2} />
+                          {c.linkCount}
+                        </span>
+                      )}
                     </div>
-                    {c.progress > 0 && (
-                      <div className="kc-progress">
-                        <div className="kc-bar" style={{ width: c.progress + "%" }} />
-                      </div>
-                    )}
                   </div>
                 ))}
                 <button className="kanban-col-add" onClick={() => setAddingIn(col.id)}>

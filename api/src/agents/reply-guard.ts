@@ -27,12 +27,30 @@ const TRACEBACK_RE = /^\s*Traceback \(most recent call last\):/m;
 // tag families — Hermes / OpenClaw sometimes emit only the closing `</invoke>`
 // at the tail of a botched JSON tool call.
 const TOOL_USE_RE = /<\/?tool_use\b|<\/?function_calls\b|<\/?invoke\b/i;
-// JSON-shaped tool call, fenced or bare. The fingerprint is a `"tool"` key
-// paired with `"input"|"arguments"|"parameters"` somewhere nearby in the same
-// JSON blob. Catches both `{ "tool": "...", "input": {...} }` and the
-// fenced-then-keyed legacy variant.
-const TOOL_CALL_JSON_RE = /\{[\s\S]{0,1200}["“]tool["”]\s*:\s*["“][^"”]+["”][\s\S]{0,1200}["“](?:input|arguments|parameters)["”]\s*:/i;
+// JSON-shaped tool call, fenced or bare. Two fingerprints:
+//   (a) legacy tool call: `{ "tool": "...", "input|arguments|parameters": ... }`
+//   (b) <actions> entry emitted outside its block: `{ "type": "<action>", ... }`
+//       where <action> is one of our known action types. Models sometimes
+//       wrap a valid-looking action in a ```json``` fence as prose instead
+//       of the literal <actions>[…]</actions> envelope.
+const TOOL_CALL_JSON_RE =
+  /\{[\s\S]{0,1200}["“]tool["”]\s*:\s*["“][^"”]+["”][\s\S]{0,1200}["“](?:input|arguments|parameters)["”]\s*:/i;
+const ACTION_JSON_RE =
+  /\{[\s\S]{0,400}["“]type["”]\s*:\s*["“](?:post_message|react|open_thread|request_approval|set_memory|call_tool|create_task|update_task|assign_task|task_comment|share_files)["”]/i;
 const CURL_BLOCK_RE = /```[^`]*?\bcurl\s+-[^`]{0,500}```/s;
+// Upstream LLM-gateway error strings that Hermes streams back as if they
+// were model output. These are diagnostics, not a reply — reject.
+//   "API call failed after 3 retries: HTTP 502: Provider error …"
+//   "Provider error (<model>): <provider> API error NNN: …"
+const GATEWAY_ERROR_RE =
+  /(?:API call failed after \d+ retries|Provider error \([^)]+\):\s*[A-Za-z]+ API error \d{3})/i;
+// Boilerplate assistant refusal phrases. Models sometimes slip into
+// "helpful-assistant" mode and refuse instead of using their tools. None
+// of these phrases appear in organic agent output; they're pure chat-ui
+// hallucinations. Narrow patterns only — we don't want to reject a real
+// reply that happens to start with "I'm sorry".
+const ASSISTANT_REFUSAL_RE =
+  /\bI (?:don't|do not) have access to the (?:necessary|required|tools|needed)\b|\bIf you have (?:any )?other questions,? or need help with something else\b|\bI(?:'m| am) (?:sorry,? but I|unable to|not able to)(?:[^.]{0,60})?(?:assist|help|access|capability|tools)\b/i;
 // The prompt feeds conversation history as `[m_<id>] @handle: body` lines.
 // Smaller models occasionally echo that format directly into their reply,
 // usually as the start of a runaway repetition loop. A real reply never
@@ -75,6 +93,9 @@ export function checkReplyBody(bodyMd: string): GuardResult {
   if (TRACEBACK_RE.test(trimmed)) return { ok: false, reason: "python_traceback" };
   if (TOOL_USE_RE.test(trimmed)) return { ok: false, reason: "tool_use_markup" };
   if (TOOL_CALL_JSON_RE.test(trimmed)) return { ok: false, reason: "tool_call_json" };
+  if (ACTION_JSON_RE.test(trimmed)) return { ok: false, reason: "action_json_leaked" };
+  if (GATEWAY_ERROR_RE.test(trimmed)) return { ok: false, reason: "gateway_error_echo" };
+  if (ASSISTANT_REFUSAL_RE.test(trimmed)) return { ok: false, reason: "assistant_refusal" };
   if (HISTORY_ECHO_RE.test(trimmed)) return { ok: false, reason: "history_format_echo" };
   if (hasRunawayRepetition(trimmed)) return { ok: false, reason: "runaway_repetition" };
   if (CURL_BLOCK_RE.test(trimmed)) return { ok: false, reason: "curl_transcript" };
