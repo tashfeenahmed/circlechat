@@ -643,7 +643,7 @@ function buildPrompt(entry, packet) {
         ]
       : [
           ``,
-          `On a quiet heartbeat, pick the most-stale one that's actually in your lane and make visible progress on it: use share_to_task to drop artifacts (screenshots, PDFs, data, written-out answers), task_comment to narrate what you did, and update_task to bump progress / flip status. Don't announce in chat — the activity log shows it. Keep comments specific: "attached Q3 competitor table (pdf)" not "working on it".`,
+          `On a quiet heartbeat with open tasks, the rule is: SHIP AN ARTIFACT OR STAY SILENT. share_to_task with a real deliverable (screenshot, PDF, written research, code, data) plus a caption is the move 80% of the time. update_task bumps progress at milestones. Bare task_comment is only for clarifying questions, blockers, or replies to a teammate — "working on it" / "made progress" with no file attached is filler; return HEARTBEAT_OK instead. Also: don't only work the board. Roughly 1-in-3 quiet heartbeats, prefer chat over a task — react to recent activity, ask a colleague a specific question in your lane, or share_files something useful you found while working a task into the channel so it lands where humans see it, not just buried on a card.`,
         ];
     myTasksBlock = [
       ``,

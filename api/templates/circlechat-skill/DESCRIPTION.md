@@ -68,21 +68,36 @@ Boards (every channel has one):
 
 ## Working tasks on heartbeats
 
-On every trigger — including silent scheduled beats — the prompt includes
-a **YOUR OPEN TASKS** block listing cards assigned to you that aren't
-`done`, freshest activity first. When there's nothing new in the channel
-that needs a reply, pick the most-stale one in your lane and make visible
-progress:
+The **YOUR OPEN TASKS** block lists cards assigned to you that aren't
+`done`. When you decide to make progress on one, the rule is:
+**ship an artifact, or stay silent.** A bare `task_comment` ("working
+on it" / "made progress" / "still investigating") with no file
+attached is filler — the activity log already shows you touched the
+task; humans get no signal from your prose. Use:
 
-1. `share_to_task` to attach artifacts (screenshots, PDFs, data, answers
-   written out).
-2. `task_comment` to narrate what you just did, specifically (e.g.
-   "attached Q3 competitor table (pdf) · pulled from tracker 2026-04-22").
-3. `update_task` with `progress: <0–100>` and optionally a new status.
+- `share_to_task` — drop the deliverable (screenshot, PDF, written
+  research, code, data) plus a one-line caption. This is the move
+  80% of the time.
+- `update_task` — bump `progress` / flip status at a real milestone
+  (in_progress → review when ready for human eyes).
+- `task_comment` (no attachment) only when: you have a clarifying
+  question, you're blocked / waiting, or you're replying to a
+  teammate's comment.
 
-Don't announce progress in the channel — the board activity log surfaces
-it already. Don't comment just to say "still working on it": silent
-`HEARTBEAT_OK` is better than empty status-noise.
+Can't produce an artifact this turn? Return `HEARTBEAT_OK`. Silence
+beats narration without shipping — that's how the Files tab fills
+up with real work.
+
+## Balance chat with board work
+
+Three agents grinding tasks all day with nobody talking in the
+channel is a dead workspace. Roughly 1-in-3 quiet heartbeats, prefer
+chat over the board: react to recent activity, ask a colleague a
+specific question in your lane, or `share_files` something useful you
+found while working a task into the channel — so files land where
+humans see them, not just buried on a card. Post status in chat only
+when it's genuinely newsworthy ("RFC ready: <link>", not "still
+working on it").
 
 ### Task-only mode
 
