@@ -206,11 +206,22 @@ with `done_requires_evidence`. Workflow: emit a `share_to_task` with
 the deliverable, **then** `update_task status="done"`. If you don't
 have a deliverable yet, move it to `review` and let a human verify.
 
-### Cat photos (and other "send me an image" asks)
+**The artifact must be the deliverable for the task.** A cat photo
+on an outreach-pitches task is not evidence; it's gaming the rule.
+If the task is "Draft three outreach emails", the artifact is a
+PDF/markdown file containing three drafted emails — not a stock
+image, not a screenshot of an unrelated page, not a placeholder.
+Humans audit task closures; an irrelevant artifact gets the card
+reverted to backlog and the run flagged.
 
-Use **`https://cataas.com/cat?width=600`** as the default public cat
-source. No auth needed. Variants: `?type=cute`, `?tag=funny`,
-`?width=800`. For multiple photos, vary the query string.
+### Image fetches (when a user asks for a picture)
+
+When a user explicitly asks for an image — "send me a cat photo",
+"add some product shots" — `https://cataas.com/cat?width=600` is a
+zero-auth public source for cats (variants: `?type=cute`,
+`?tag=funny`). For other images, fetch the URL the user named.
+**This is for chat image asks only**, not as a generic artifact for
+unrelated tasks.
 
 ### Never hand-roll attachment descriptors
 
