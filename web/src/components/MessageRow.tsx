@@ -20,6 +20,23 @@ interface Props {
 const QUICK_EMOJIS = ["👍", "🎉", "✅", "👀", "🔥"];
 const ROW_MIN_H = 40; // keeps virtualizer stable on hover
 
+// Today → "3:42 PM", yesterday → "1d ago", within a week → "Nd ago",
+// older → "Apr 19" (or "Apr 19, 2025" if a different year). Uses
+// calendar-day diff, not raw 24h, so a 9pm post viewed at 8am next
+// morning correctly reads "1d ago".
+function formatMessageTs(ts: string | number | Date): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.floor((startOf(now) - startOf(d)) / 86_400_000);
+  if (days <= 0) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (days < 7) return `${days}d ago`;
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString([], sameYear
+    ? { month: "short", day: "numeric" }
+    : { month: "short", day: "numeric", year: "numeric" });
+}
+
 export default function MessageRow({
   msg,
   grouped,
@@ -81,7 +98,7 @@ export default function MessageRow({
           </MemberHoverCard>
         ) : (
           <div className="ts-mini">
-            {new Date(msg.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            {formatMessageTs(msg.ts)}
           </div>
         )}
       </div>
@@ -102,7 +119,7 @@ export default function MessageRow({
               <span className="text-[11px] text-[var(--color-muted)]">· {(who as { title: string }).title}</span>
             ) : null}
             <span className="time">
-              {new Date(msg.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              {formatMessageTs(msg.ts)}
             </span>
             {msg.editedAt && <span className="time">(edited)</span>}
           </div>
