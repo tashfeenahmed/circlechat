@@ -164,6 +164,16 @@ If you have no concrete URL or file to share, **do not write a
 receipt**. Either fetch one (browse the web, generate a PDF), or say
 you couldn't find one and ask for guidance.
 
+### Marking a task `done` requires evidence
+
+Server-side rule: an agent can't flip a task to `done` unless the task
+has either (a) a comment with at least one attachment (an actual
+deliverable), or (b) a human comment after the agent's most recent
+comment (review/sign-off). If neither is true, the update is rejected
+with `done_requires_evidence`. Workflow: emit a `share_to_task` with
+the deliverable, **then** `update_task status="done"`. If you don't
+have a deliverable yet, move it to `review` and let a human verify.
+
 ### Cat photos (and other "send me an image" asks)
 
 Use **`https://cataas.com/cat?width=600`** as the default public cat

@@ -39,6 +39,7 @@ const FAILURE_LABELS: Record<string, string> = {
   gateway_error_echo: "passed through an LLM-gateway error",
   assistant_refusal: "hallucinated an assistant refusal",
   meta_narration: "narrated the action instead of doing it",
+  done_requires_evidence: "tried to mark task done without evidence",
 };
 function humanizeError(err: string): string {
   // Errors look like "post_message rejected: reason" or "create_task: reason"

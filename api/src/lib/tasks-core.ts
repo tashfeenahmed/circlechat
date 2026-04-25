@@ -280,6 +280,18 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
   const t = await loadTask(taskId);
   const g = guard(t, workspaceId);
   if (!g.ok) return { error: g.error! };
+  // Done-requires-evidence: an agent can't move a task to `done` without
+  // either an attached deliverable on a task comment OR a human reviewer
+  // having weighed in after the agent's most recent comment. Humans can
+  // mark anything done freely — they're the verifier.
+  if (
+    input.status === "done" &&
+    t!.status !== "done" &&
+    !input.archived
+  ) {
+    const denial = await assertDoneEvidence(taskId, actorMemberId);
+    if (denial) return { error: denial };
+  }
   const patch: Partial<typeof tasks.$inferInsert> = { updatedAt: new Date() };
   if (input.title !== undefined) patch.title = input.title;
   if (input.bodyMd !== undefined) patch.bodyMd = input.bodyMd;
@@ -531,4 +543,88 @@ export async function deleteComment(taskId: string, commentId: string, actorMemb
     commentId,
   });
   return { ok: true as const };
+}
+
+// ───── done-requires-evidence ─────
+//
+// Returns an error code if the actor (an agent) is trying to flip a task to
+// `done` without sufficient evidence; null if the move is allowed.
+//
+// Agents trigger this; humans bypass — they're the verifier of last resort
+// and can mark anything done freely.
+//
+// Evidence is one of:
+//   1. Any task comment carries at least one attachment (an actual artifact).
+//   2. A human-authored comment exists AFTER this agent's most recent comment
+//      on the task (i.e. a human reviewer signed off after the agent's work).
+//   3. A human (not the calling agent) is among the task's assignees and has
+//      added a comment at all (lighter human-in-the-loop case).
+//
+// If none of those, we refuse and let the agent know to attach an artifact
+// or wait for human review.
+async function assertDoneEvidence(
+  taskId: string,
+  actorMemberId: string,
+): Promise<"done_requires_evidence" | null> {
+  const [actor] = await db
+    .select({ kind: members.kind })
+    .from(members)
+    .where(eq(members.id, actorMemberId))
+    .limit(1);
+  if (!actor || actor.kind !== "agent") return null;
+
+  const comments = await db
+    .select({
+      id: taskComments.id,
+      memberId: taskComments.memberId,
+      ts: taskComments.ts,
+      attachmentsJson: taskComments.attachmentsJson,
+    })
+    .from(taskComments)
+    .where(and(eq(taskComments.taskId, taskId), dsql`${taskComments.deletedAt} is null` as never))
+    .orderBy(asc(taskComments.ts));
+
+  // Rule 1: any comment carries attachments.
+  const hasArtifact = comments.some((c) => {
+    const att = c.attachmentsJson as unknown[] | null | undefined;
+    return Array.isArray(att) && att.length > 0;
+  });
+  if (hasArtifact) return null;
+
+  // Bucket comment authors by kind in one lookup.
+  const memberIds = Array.from(new Set(comments.map((c) => c.memberId)));
+  if (!memberIds.length) return "done_requires_evidence";
+  const memberRows = await db
+    .select({ id: members.id, kind: members.kind })
+    .from(members)
+    .where(inArray(members.id, memberIds));
+  const kindByMember = new Map(memberRows.map((m) => [m.id, m.kind]));
+
+  // Rule 2: a human commented after this agent's most recent comment.
+  const lastByActor = [...comments].reverse().find((c) => c.memberId === actorMemberId);
+  if (lastByActor) {
+    const humanAfter = comments.some(
+      (c) => c.ts > lastByActor.ts && kindByMember.get(c.memberId) === "user",
+    );
+    if (humanAfter) return null;
+  }
+
+  // Rule 3: any human commented AND the task has a human assignee (lighter
+  // sign-off case for collaborative tasks).
+  const anyHumanComment = comments.some((c) => kindByMember.get(c.memberId) === "user");
+  if (anyHumanComment) {
+    const assigneeRows = await db
+      .select({ memberId: taskAssignees.memberId })
+      .from(taskAssignees)
+      .where(eq(taskAssignees.taskId, taskId));
+    if (assigneeRows.length) {
+      const assigneeKinds = await db
+        .select({ id: members.id, kind: members.kind })
+        .from(members)
+        .where(inArray(members.id, assigneeRows.map((r) => r.memberId)));
+      if (assigneeKinds.some((m) => m.kind === "user")) return null;
+    }
+  }
+
+  return "done_requires_evidence";
 }
