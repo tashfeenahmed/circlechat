@@ -11,6 +11,9 @@ import {
 } from "../api/client";
 import Avatar from "./Avatar";
 import Attachments from "./Attachments";
+import { useMentionPicker, resolveMentionIds } from "../lib/useMentionPicker";
+import { renderMarkdown } from "../lib/md";
+import { useBus } from "../state/store";
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
   backlog: "Backlog",
@@ -31,6 +34,9 @@ export default function TaskModal({
   const me = useMe();
   const qc = useQueryClient();
   const dir = useMembersDirectory();
+  // Bus directory keyed by memberId — used by the @-mention picker and to
+  // resolve picked handles back to memberIds before submitting a comment.
+  const busDir = useBus((s) => s.directory);
 
   const [titleDraft, setTitleDraft] = useState("");
   const [bodyDraft, setBodyDraft] = useState("");
@@ -46,6 +52,16 @@ export default function TaskModal({
   const composerTaRef = useRef<HTMLTextAreaElement>(null);
   const bodyTouched = useRef(false);
   const titleTouched = useRef(false);
+
+  // @-mention autocomplete for the comment composer (parity with chat
+  // Composer). Drops `everyone` from the picker — task comments don't have
+  // an "all subscribers" semantic.
+  const mentionPicker = useMentionPicker({
+    textareaRef: composerTaRef,
+    body: commentDraft,
+    setBody: setCommentDraft,
+    includeEveryone: false,
+  });
 
   const detail = q.data;
 
@@ -122,7 +138,11 @@ export default function TaskModal({
     if (!body || busy) return;
     setBusy(true);
     try {
-      await api.post(`/tasks/${taskId}/comments`, { bodyMd: body });
+      // Server wakes any mentioned agents (and assignees) once they're in
+      // the mentions array. Resolve @handles in the body to memberIds via
+      // the workspace directory before posting.
+      const mentions = resolveMentionIds(body, busDir as unknown as Record<string, { handle?: string; memberId?: string }>);
+      await api.post(`/tasks/${taskId}/comments`, { bodyMd: body, mentions });
       setCommentDraft("");
     } catch (e) {
       alert(`Comment failed: ${(e as Error).message}`);
@@ -360,7 +380,18 @@ export default function TaskModal({
                         )}
                       </div>
                       <div className="msg-body">
-                        {c.bodyMd && <p>{c.bodyMd}</p>}
+                        {c.bodyMd && (
+                          <div
+                            dangerouslySetInnerHTML={{
+                              __html: renderMarkdown(c.bodyMd, (h) => {
+                                const m = Object.values(busDir).find(
+                                  (x) => (x as { handle?: string })?.handle?.toLowerCase() === h.toLowerCase(),
+                                );
+                                return (m as { kind?: string } | undefined)?.kind === "agent";
+                              }),
+                            }}
+                          />
+                        )}
                         {c.attachmentsJson?.length > 0 && (
                           <Attachments files={c.attachmentsJson} />
                         )}
@@ -398,21 +429,40 @@ export default function TaskModal({
                     <span className="tm-tool-sep" />
                     <button type="button" title="Attach" className="tm-tool"><Paperclip size={12} strokeWidth={2.2} /></button>
                   </div>
-                  <textarea
-                    ref={composerTaRef}
-                    value={commentDraft}
-                    onChange={(e) => setCommentDraft(e.target.value)}
-                    placeholder="Write a comment — ⌘↵ to save, Esc to cancel"
-                    rows={4}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                        postComment().then(() => setComposerOpen(false));
-                      } else if (e.key === "Escape") {
-                        setComposerOpen(false);
-                        setCommentDraft("");
-                      }
-                    }}
-                  />
+                  <div className="relative">
+                    {mentionPicker.open && mentionPicker.matches.length > 0 && (
+                      <div className="mention-menu" style={{ bottom: "100%", top: "auto" }}>
+                        {mentionPicker.matches.map((m, i) => (
+                          <button
+                            key={m.memberId}
+                            onMouseDown={(e) => { e.preventDefault(); mentionPicker.pick(m.handle); }}
+                            onMouseEnter={() => mentionPicker.setIdx(i)}
+                            className={`mention-item ${i === mentionPicker.idx ? "focus" : ""}`}
+                          >
+                            <span className="mi-handle">@{m.handle}</span>
+                            <span>{m.name}</span>
+                            {m.kind === "agent" && <span className="mi-tag">agent</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <textarea
+                      ref={composerTaRef}
+                      value={commentDraft}
+                      onChange={(e) => mentionPicker.onChangeText(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+                      placeholder="Write a comment. ⌘↵ to save, Esc to cancel. @ to mention."
+                      rows={4}
+                      onKeyDown={(e) => {
+                        if (mentionPicker.handleKeyDown(e)) return;
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                          postComment().then(() => setComposerOpen(false));
+                        } else if (e.key === "Escape") {
+                          setComposerOpen(false);
+                          setCommentDraft("");
+                        }
+                      }}
+                    />
+                  </div>
                   <div className="tm-composer-actions">
                     <button
                       className="btn sm primary"
