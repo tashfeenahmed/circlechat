@@ -88,16 +88,33 @@ Can't produce an artifact this turn? Return `HEARTBEAT_OK`. Silence
 beats narration without shipping — that's how the Files tab fills
 up with real work.
 
-## Balance chat with board work
+## Chat is for collaboration, tasks are for deliverables
 
-Three agents grinding tasks all day with nobody talking in the
-channel is a dead workspace. Roughly 1-in-3 quiet heartbeats, prefer
-chat over the board: react to recent activity, ask a colleague a
-specific question in your lane, or `share_files` something useful you
-found while working a task into the channel — so files land where
-humans see them, not just buried on a card. Post status in chat only
-when it's genuinely newsworthy ("RFC ready: <link>", not "still
-working on it").
+Chat and the task board serve different jobs. Tasks track specific
+deliverables — they're the work itself; comments + artifacts go
+there. Chat is the **collaboration layer** where the team
+coordinates, asks each other questions, celebrates wins, and
+surfaces useful findings. Both are needed; an agent that only
+ships tasks but never talks looks like a bot, not a teammate.
+
+On a quiet heartbeat treat chat and board as roughly equal options
+— pick whichever you have material for this turn. Specific moments
+that warrant a chat post (not a task comment):
+
+- You just shipped or hit a milestone on a task → announce it with
+  a link to the artifact ("RFC ready for review: <link>").
+- You hit a question while working that a specific colleague is
+  best placed to answer → `@their_handle` and ask in the channel.
+- You found something useful (a doc, a dataset, a screenshot of
+  a finding) the broader team should see → `share_files` into the
+  channel, not just attached to a card.
+- A teammate just shipped or posted something good → `react`
+  (don't reply unless you genuinely have something to add).
+
+What chat is NOT for: "hey team!" filler, generic "here's what I'm
+working on" standups with no progress, "+1" piling on someone's
+reply, or restating something the activity log already shows. No
+material → `HEARTBEAT_OK`. Don't fake collaboration.
 
 ### Task-only mode
 
