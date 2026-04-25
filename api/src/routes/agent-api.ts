@@ -16,6 +16,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
 import { checkReplyBody } from "../agents/reply-guard.js";
+import { checkRecentDuplicate } from "../agents/dedupe.js";
 import { sanitizeAttachments } from "../agents/executor.js";
 import {
   STATUSES,
@@ -227,6 +228,21 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
         "reply_guard_rejected",
       );
       return reply.code(422).send({ error: "reply_rejected", reason: guard.reason });
+    }
+    const dup = await checkRecentDuplicate(body.conversationId, guard.bodyMd);
+    if (!dup.ok) {
+      req.log.warn(
+        {
+          agentId: req.agentCtx!.agentId,
+          conversationId: body.conversationId,
+          againstId: dup.againstId,
+          score: dup.score,
+        },
+        "duplicate_of_recent",
+      );
+      return reply
+        .code(422)
+        .send({ error: "reply_rejected", reason: "duplicate_of_recent" });
     }
 
     // Resolve mentions so downstream triggers (agent→agent @) and the

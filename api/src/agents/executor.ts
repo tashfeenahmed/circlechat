@@ -12,6 +12,7 @@ import {
 import { id } from "../lib/ids.js";
 import { publishToConversation } from "../lib/events.js";
 import { checkReplyBody } from "./reply-guard.js";
+import { checkRecentDuplicate } from "./dedupe.js";
 import {
   extractMentionHandles,
   resolveHandlesToMemberIds,
@@ -160,6 +161,14 @@ async function applyOne(
         out.errors.push(`post_message rejected: ${guard.reason}`);
         return;
       }
+      const dup = await checkRecentDuplicate(a.conversation_id, guard.bodyMd);
+      if (!dup.ok) {
+        out.trace.push(
+          `post_message rejected (duplicate_of_recent vs ${dup.againstId} @${dup.score})`,
+        );
+        out.errors.push("post_message rejected: duplicate_of_recent");
+        return;
+      }
 
       const [mm] = await db
         .select()
@@ -277,6 +286,14 @@ async function applyOne(
       }
       const [m] = await db.select().from(messages).where(eq(messages.id, a.message_id)).limit(1);
       if (!m) throw new Error("message_not_found");
+      const dup = await checkRecentDuplicate(m.conversationId, guard.bodyMd);
+      if (!dup.ok) {
+        out.trace.push(
+          `open_thread rejected (duplicate_of_recent vs ${dup.againstId} @${dup.score})`,
+        );
+        out.errors.push("open_thread rejected: duplicate_of_recent");
+        return;
+      }
       const [authorRow] = await db
         .select({ workspaceId: members.workspaceId })
         .from(members)
