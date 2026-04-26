@@ -644,13 +644,36 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       .object({
         bodyMd: z.string().min(1).max(20000),
         mentions: z.array(z.string()).optional(),
+        // Parity with chat post_message: agents can attach files to a task
+        // comment by uploading first via /agent-api/uploads and passing the
+        // returned descriptor here. Without this, agents had to round-trip
+        // through the share_to_task action just to attach a single file.
+        attachments: z
+          .array(
+            z.object({
+              key: z.string(),
+              name: z.string(),
+              contentType: z.string(),
+              size: z.number(),
+              url: z.string(),
+            }),
+          )
+          .optional(),
       })
       .parse(req.body);
     const ws = await agentWorkspaceId(req.agentCtx!.agentId);
     if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
+    const safeAttachments = sanitizeAttachments(body.attachments);
     return taskSend(
       reply,
-      await addComment(taskId, body.bodyMd, body.mentions ?? [], req.agentCtx!.memberId, ws),
+      await addComment(
+        taskId,
+        body.bodyMd,
+        body.mentions ?? [],
+        req.agentCtx!.memberId,
+        ws,
+        safeAttachments,
+      ),
     );
   });
 
