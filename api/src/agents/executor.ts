@@ -24,6 +24,7 @@ import {
   updateTask,
   addAssignee,
   addComment,
+  loadTask,
 } from "../lib/tasks-core.js";
 import { putObject, publicUrl } from "../lib/storage.js";
 
@@ -549,6 +550,20 @@ async function applyOne(
       // both on the task and in the workspace Files tab.
       const ws = await loadAgentWorkspace(agentMemberId);
       if (!ws) throw new Error("agent_workspace_missing");
+      // Validate the task exists in this workspace BEFORE uploading anything.
+      // Otherwise a wrong/hallucinated task_id leaves the file in storage as
+      // an orphan and the agent's "I shipped X" claim silently disappears.
+      const targetTask = await loadTask(a.task_id);
+      if (!targetTask) {
+        out.errors.push(
+          `share_to_task: task_id ${a.task_id} not found. Check the MY TASKS block — use one of those exact ids, not a guess.`,
+        );
+        return;
+      }
+      if (targetTask.workspaceId !== ws) {
+        out.errors.push(`share_to_task: task ${a.task_id} is in a different workspace.`);
+        return;
+      }
       const rawBody = typeof a.body_md === "string" ? a.body_md : "";
       const guard = checkReplyBody(rawBody || "(attachments)");
       const bodyMd = guard.ok ? guard.bodyMd : rawBody;
