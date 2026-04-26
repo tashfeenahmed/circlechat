@@ -86,6 +86,14 @@ const RAW_BOT_TOKEN_RE = /\bcc_[a-z0-9]{20,}\b/gi;
 // Wrapper-only JSON: a body that is nothing but a fenced JSON blob. Allows
 // humans (and agents) to legitimately quote a snippet in the middle of prose.
 const PURE_JSON_FENCE_RE = /^\s*```(?:json)?\s*\n\s*[\[{][\s\S]*?[\]}]\s*\n\s*```\s*$/;
+// Phrases that explicitly claim a file is attached to this very message. If
+// the body matches one of these but no actual attachment is bundled with the
+// action, the agent has hallucinated the deliverable — reject so its next
+// turn either ships the file via share_to_task / share_files or rewrites
+// the prose to drop the claim. Narrow patterns only: "the file shows" or
+// "I compiled a list" must NOT trigger; only literal attachment promises do.
+const ATTACHMENT_CLAIM_RE =
+  /\b(?:see\s+(?:the\s+)?attached|attached\s+(?:please\s+find|is\s+(?:the|a|my)|herewith|file|files|document|doc|list|report|pdf|spreadsheet|csv|json|markdown)|please\s+find\s+attached|find\s+attached|I(?:'ve|\s+have)\s+attached|attaching\s+(?:the|a|my)|file\s+attached|📎\s*attached)\b/i;
 
 function scrubSecrets(s: string): string {
   return s
@@ -93,7 +101,10 @@ function scrubSecrets(s: string): string {
     .replace(RAW_BOT_TOKEN_RE, "cc_***");
 }
 
-export function checkReplyBody(bodyMd: string): GuardResult {
+export function checkReplyBody(
+  bodyMd: string,
+  opts?: { hasAttachments?: boolean },
+): GuardResult {
   const scrubbed = scrubSecrets(bodyMd);
   const trimmed = scrubbed.trim();
   if (!trimmed) return { ok: false, reason: "empty_body" };
@@ -110,6 +121,9 @@ export function checkReplyBody(bodyMd: string): GuardResult {
   if (CURL_BLOCK_RE.test(trimmed)) return { ok: false, reason: "curl_transcript" };
   if (PURE_JSON_FENCE_RE.test(trimmed) && trimmed.length > 400) {
     return { ok: false, reason: "pure_json_dump" };
+  }
+  if (opts && opts.hasAttachments === false && ATTACHMENT_CLAIM_RE.test(trimmed)) {
+    return { ok: false, reason: "attachment_claim_no_file" };
   }
   return { ok: true, bodyMd: scrubbed };
 }

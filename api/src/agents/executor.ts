@@ -156,10 +156,15 @@ async function applyOne(
 ): Promise<void> {
   switch (a.type) {
     case "post_message": {
-      const guard = checkReplyBody(a.body_md);
+      const hasAttachments = Array.isArray(a.attachments) && a.attachments.length > 0;
+      const guard = checkReplyBody(a.body_md, { hasAttachments });
       if (!guard.ok) {
         out.trace.push(`post_message rejected (${guard.reason})`);
-        out.errors.push(`post_message rejected: ${guard.reason}`);
+        out.errors.push(
+          guard.reason === "attachment_claim_no_file"
+            ? `post_message rejected: ${guard.reason}. Your prose claims a file is attached but no attachment was sent. Either include the file via share_files in this turn, or rewrite to remove the attachment claim.`
+            : `post_message rejected: ${guard.reason}`,
+        );
         return;
       }
       const dup = await checkRecentDuplicate(a.conversation_id, guard.bodyMd);
@@ -511,9 +516,14 @@ async function applyOne(
     case "task_comment": {
       const ws = await loadAgentWorkspace(agentMemberId);
       if (!ws) throw new Error("agent_workspace_missing");
-      const guard = checkReplyBody(a.body_md);
+      const hasAttachments = Array.isArray(a.attachments) && a.attachments.length > 0;
+      const guard = checkReplyBody(a.body_md, { hasAttachments });
       if (!guard.ok) {
-        out.errors.push(`task_comment rejected: ${guard.reason}`);
+        out.errors.push(
+          guard.reason === "attachment_claim_no_file"
+            ? `task_comment rejected: ${guard.reason}. Your prose claims a file is attached but no attachment was sent. Use share_to_task to ship the file in the same turn, or rewrite to drop the claim.`
+            : `task_comment rejected: ${guard.reason}`,
+        );
         return;
       }
       const safeAttachments = sanitizeAttachments(a.attachments);

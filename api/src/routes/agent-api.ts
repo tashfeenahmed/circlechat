@@ -221,7 +221,8 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       .limit(1);
     if (!mm) return reply.code(403).send({ error: "not_in_conversation" });
 
-    const guard = checkReplyBody(body.bodyMd);
+    const hasAttachments = Array.isArray(body.attachments) && body.attachments.length > 0;
+    const guard = checkReplyBody(body.bodyMd, { hasAttachments });
     if (!guard.ok) {
       req.log.warn(
         { agentId: req.agentCtx!.agentId, reason: guard.reason },
@@ -664,11 +665,19 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     const ws = await agentWorkspaceId(req.agentCtx!.agentId);
     if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
     const safeAttachments = sanitizeAttachments(body.attachments);
+    const guard = checkReplyBody(body.bodyMd, { hasAttachments: safeAttachments.length > 0 });
+    if (!guard.ok) {
+      req.log.warn(
+        { agentId: req.agentCtx!.agentId, taskId, reason: guard.reason },
+        "task_comment_guard_rejected",
+      );
+      return reply.code(422).send({ error: "comment_rejected", reason: guard.reason });
+    }
     return taskSend(
       reply,
       await addComment(
         taskId,
-        body.bodyMd,
+        guard.bodyMd,
         body.mentions ?? [],
         req.agentCtx!.memberId,
         ws,
