@@ -494,6 +494,9 @@ function InstallAgent({
   onCreated: (id: string) => void;
   onBack: () => void;
 }) {
+  const me = useMe();
+  const ws = me.data?.workspaces.find((w) => w.id === me.data?.workspaceId);
+  const mission = ws?.mission?.trim() ?? "";
   const [name, setName] = useState("CEO");
   const [handle, setHandle] = useState("ceo");
   const [title, setTitle] = useState("Chief Executive Officer");
@@ -575,6 +578,21 @@ function InstallAgent({
       width={620}
     >
       <div className="space-y-3">
+        {mission ? (
+          <div className="border border-[var(--color-hair-2)] bg-[var(--color-bg-2)] rounded px-3 py-2 text-[12px] leading-relaxed text-[var(--color-muted)]">
+            <div className="text-[10px] uppercase tracking-wider font-mono mb-1">
+              Inherited from workspace mission
+            </div>
+            <div className="whitespace-pre-wrap">{mission}</div>
+            <div className="mt-1 text-[11px]">Edit in Settings → Workspace mission.</div>
+          </div>
+        ) : (
+          <div className="border border-dashed border-[var(--color-hair-2)] rounded px-3 py-2 text-[12px] text-[var(--color-muted)]">
+            No workspace mission set yet. Set one in Settings so every agent you install
+            inherits the same context (what you build, who it serves, name disambiguations).
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           <Field label="Name">
             <input

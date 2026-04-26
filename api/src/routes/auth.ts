@@ -170,6 +170,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         id: workspaces.id,
         name: workspaces.name,
         handle: workspaces.handle,
+        mission: workspaces.mission,
         role: workspaceMembers.role,
       })
       .from(workspaceMembers)

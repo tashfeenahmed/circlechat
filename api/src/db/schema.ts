@@ -21,6 +21,9 @@ export const workspaces = pgTable(
     handle: varchar("handle", { length: 40 }).notNull(),
     createdBy: varchar("created_by", { length: 32 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // Workspace-level "what we build" prose, inherited by every agent's
+    // runtime prompt. Set once per workspace; new agents auto-pick it up.
+    mission: text("mission").notNull().default(""),
   },
   (t) => ({
     handleIdx: uniqueIndex("workspaces_handle_key").on(t.handle),

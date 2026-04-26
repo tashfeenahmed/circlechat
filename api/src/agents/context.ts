@@ -14,6 +14,7 @@ import {
   taskAssignees,
   taskLabels,
   taskComments,
+  workspaces,
 } from "../db/schema.js";
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
 
@@ -61,6 +62,15 @@ export interface ContextPacket {
     model: string;
     scopes: string[];
     brief: string;
+  };
+  // Workspace-level context shared by every agent in this workspace.
+  // The mission is injected into the runtime prompt so all agents agree on
+  // "what we build" without needing it repeated in each agent's brief.
+  workspace: {
+    id: string;
+    name: string;
+    handle: string;
+    mission: string;
   };
   trigger: string;
   triggerConversationId?: string | null;
@@ -150,6 +160,9 @@ export async function buildContext(opts: {
 }): Promise<ContextPacket> {
   const [a] = await db.select().from(agents).where(eq(agents.id, opts.agentId)).limit(1);
   if (!a) throw new Error("agent_not_found");
+
+  const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, a.workspaceId)).limit(1);
+  if (!ws) throw new Error("workspace_not_found");
 
   const [agentMember] = await db
     .select()
@@ -659,6 +672,12 @@ export async function buildContext(opts: {
       model: a.model,
       scopes: a.scopes,
       brief: a.brief,
+    },
+    workspace: {
+      id: ws.id,
+      name: ws.name,
+      handle: ws.handle,
+      mission: ws.mission,
     },
     trigger: opts.trigger,
     triggerConversationId: opts.conversationId ?? null,

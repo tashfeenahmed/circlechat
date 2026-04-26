@@ -59,6 +59,7 @@ export interface Workspace {
   id: string;
   name: string;
   handle: string;
+  mission: string;
   role: string;
 }
 

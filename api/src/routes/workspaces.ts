@@ -15,6 +15,11 @@ import { deriveUniqueWorkspaceHandle } from "../lib/workspace-handle.js";
 
 const CreateBody = z.object({
   name: z.string().min(1).max(100),
+  mission: z.string().max(2000).optional(),
+});
+
+const PatchBody = z.object({
+  mission: z.string().max(2000).optional(),
 });
 
 export default async function workspaceRoutes(app: FastifyInstance): Promise<void> {
@@ -28,12 +33,48 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
         id: workspaces.id,
         name: workspaces.name,
         handle: workspaces.handle,
+        mission: workspaces.mission,
         role: workspaceMembers.role,
       })
       .from(workspaceMembers)
       .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
       .where(eq(workspaceMembers.userId, user.id));
     return { workspaces: rows, currentWorkspaceId: workspaceId };
+  });
+
+  // Update workspace settings — admin only. Currently just `mission`, the
+  // shared "what we build" prose every agent in this workspace inherits.
+  app.patch("/workspaces/:id", async (req, reply) => {
+    const targetId = (req.params as { id: string }).id;
+    const { user } = req.auth!;
+    const body = PatchBody.parse(req.body);
+
+    const [wm] = await db
+      .select({ role: workspaceMembers.role })
+      .from(workspaceMembers)
+      .where(
+        and(eq(workspaceMembers.userId, user.id), eq(workspaceMembers.workspaceId, targetId)),
+      )
+      .limit(1);
+    if (!wm) return reply.code(403).send({ error: "not_a_member" });
+    if (wm.role !== "admin") return reply.code(403).send({ error: "admin_only" });
+
+    const patch: Record<string, unknown> = {};
+    if (body.mission !== undefined) patch.mission = body.mission;
+    if (Object.keys(patch).length === 0) return { ok: true, unchanged: true };
+
+    await db.update(workspaces).set(patch).where(eq(workspaces.id, targetId));
+    const [updated] = await db
+      .select({
+        id: workspaces.id,
+        name: workspaces.name,
+        handle: workspaces.handle,
+        mission: workspaces.mission,
+      })
+      .from(workspaces)
+      .where(eq(workspaces.id, targetId))
+      .limit(1);
+    return { ok: true, workspace: updated };
   });
 
   // Create a new workspace and switch into it.
@@ -51,6 +92,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       name: body.name,
       handle,
       createdBy: user.id,
+      mission: body.mission ?? "",
     });
     await db
       .insert(workspaceMembers)

@@ -519,8 +519,10 @@ function buildPrompt(entry, packet) {
                     ? `A new comment landed on a task you're involved with. Read the recent comments in the TASK block. Reply by adding a comment on the task (POST /agent-api/tasks/<id>/comments), not by posting in the channel. If the comment is a question for you, answer concretely. If it's an ack or thanks, respond with "HEARTBEAT_OK" — silence is fine on the task thread too.`
                     : `Trigger: ${packet.trigger}.`;
 
+  const workspace = packet.workspace || {};
   const identity = [
-    `You are ${agent.name}${entry.title ? ` (${entry.title})` : ""} — an agent in CircleChat.`,
+    workspace.mission ? `Workspace mission (shared by all agents in ${workspace.name || "this workspace"}): ${workspace.mission}` : null,
+    `You are ${agent.name}${entry.title ? ` (${entry.title})` : ""} — an agent in CircleChat${workspace.name ? `, working in the ${workspace.name} workspace` : ""}.`,
     `Your CircleChat handle is @${agent.handle}.`,
     entry.title ? `Your role: ${entry.title}.` : null,
     agent.brief ? `Brief: ${agent.brief}` : null,
