@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Message } from "../api/client";
 import MessageRow from "./MessageRow";
@@ -24,17 +24,33 @@ export default function MessageList({ messages, meMemberId, onOpenThread, inThre
 
   const prevCount = useRef(0);
   const didInitialScroll = useRef(false);
+
+  // Pin to bottom on first paint after messages arrive. The virtualizer
+  // estimates row heights with `estimateSize: 60` and only learns real heights
+  // after items mount and `measureElement` runs — which can shift totalSize
+  // (and therefore the real bottom) over several frames. Pin every frame for
+  // ~10 frames so we converge on the actual bottom regardless of channel size,
+  // image loads, or markdown height variance. Cancelled if the component
+  // unmounts (channel switch).
+  useLayoutEffect(() => {
+    if (didInitialScroll.current || visible.length === 0 || !parentRef.current) return;
+    didInitialScroll.current = true;
+    prevCount.current = visible.length;
+    parentRef.current.scrollTop = parentRef.current.scrollHeight;
+    let frame = 0;
+    let raf = 0;
+    const pin = () => {
+      if (!parentRef.current) return;
+      parentRef.current.scrollTop = parentRef.current.scrollHeight;
+      if (++frame < 12) raf = requestAnimationFrame(pin);
+    };
+    raf = requestAnimationFrame(pin);
+    return () => cancelAnimationFrame(raf);
+  }, [visible.length]);
+
   useEffect(() => {
-    if (!parentRef.current) return;
+    if (!parentRef.current || !didInitialScroll.current) return;
     const el = parentRef.current;
-    // First time we have messages after mount, jump to the latest unconditionally
-    // — opening a channel should land you at "now", not the top of history.
-    if (!didInitialScroll.current && visible.length > 0) {
-      virtualizer.scrollToIndex(visible.length - 1, { align: "end" });
-      didInitialScroll.current = true;
-      prevCount.current = visible.length;
-      return;
-    }
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     const grew = visible.length > prevCount.current;
     const latest = visible[visible.length - 1];

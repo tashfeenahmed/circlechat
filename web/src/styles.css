@@ -904,7 +904,7 @@ input, textarea { font: inherit; color: inherit; }
   min-height: 0;
   overflow: hidden auto;
   padding: 8px 0 12px;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 /* message row */
