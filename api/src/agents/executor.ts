@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   messages,
@@ -8,6 +8,7 @@ import {
   conversations,
   conversationMembers,
   memoryKv,
+  tasks,
 } from "../db/schema.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation } from "../lib/events.js";
@@ -426,6 +427,32 @@ async function applyOne(
     case "create_task": {
       const ws = await loadAgentWorkspace(agentMemberId);
       if (!ws) throw new Error("agent_workspace_missing");
+
+      // Cross-heartbeat dedup: refuse to create a task whose title closely
+      // matches one we created in the last 24h. Agents heartbeating into
+      // quiet periods kept spawning the same "draft voiceover script" /
+      // "provision DNS" task over and over because they had no way to know
+      // it already existed.
+      const dup = await db
+        .select({ id: tasks.id, title: tasks.title, status: tasks.status })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.workspaceId, ws),
+            gt(tasks.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
+            sql`similarity(${tasks.title}, ${a.title}) > 0.7`,
+          ),
+        )
+        .orderBy(sql`similarity(${tasks.title}, ${a.title}) desc`)
+        .limit(1);
+      if (dup.length > 0) {
+        out.errors.push(
+          `create_task blocked: near-duplicate of ${dup[0].id} ("${dup[0].title}", status=${dup[0].status}) created in the last 24h. Update or comment on that task instead.`,
+        );
+        out.trace.push(`create_task_dedupe ${dup[0].id}`);
+        return;
+      }
+
       const r = await createTask(
         {
           title: a.title,

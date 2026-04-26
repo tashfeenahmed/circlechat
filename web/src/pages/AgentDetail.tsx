@@ -144,7 +144,11 @@ export default function AgentDetailPage() {
           </section>
           <section>
             <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Heartbeat</h2>
-            <p className="text-[14px] mt-1">every {agent.heartbeatIntervalSec}s</p>
+            <HeartbeatControl
+              agentId={agent.id}
+              currentSec={agent.heartbeatIntervalSec}
+              onSaved={refresh}
+            />
           </section>
         </div>
 
@@ -222,5 +226,100 @@ export default function AgentDetailPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+// Heartbeat cadence picker. Maps presets to seconds; "Custom" reveals a
+// number input for explicit values. Saves via PATCH /agents/:id which
+// reschedules the BullMQ repeat job.
+const PRESETS: Array<{ label: string; sec: number }> = [
+  { label: "Fast (30s)", sec: 30 },
+  { label: "Normal (3 min)", sec: 180 },
+  { label: "Slow (15 min)", sec: 900 },
+  { label: "Hourly", sec: 3600 },
+];
+
+function HeartbeatControl({
+  agentId,
+  currentSec,
+  onSaved,
+}: {
+  agentId: string;
+  currentSec: number;
+  onSaved: () => void;
+}) {
+  const matchedPreset = PRESETS.find((p) => p.sec === currentSec);
+  const [mode, setMode] = useState<string>(matchedPreset ? String(matchedPreset.sec) : "custom");
+  const [customSec, setCustomSec] = useState<number>(currentSec);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save(nextSec: number) {
+    if (nextSec < 5 || nextSec > 3600) {
+      setErr("Must be between 5 and 3600 seconds.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.patch(`/agents/${agentId}`, { heartbeatIntervalSec: nextSec });
+      onSaved();
+    } catch (e) {
+      setErr((e as Error).message ?? "save_failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-1 space-y-2">
+      <div className="flex items-center gap-2">
+        <select
+          value={mode}
+          disabled={busy}
+          onChange={(e) => {
+            const v = e.target.value;
+            setMode(v);
+            if (v !== "custom") {
+              const sec = parseInt(v, 10);
+              setCustomSec(sec);
+              save(sec);
+            }
+          }}
+          className="border border-[var(--color-hair-2)] rounded px-2 py-1 text-[13px]"
+        >
+          {PRESETS.map((p) => (
+            <option key={p.sec} value={String(p.sec)}>{p.label}</option>
+          ))}
+          <option value="custom">Custom…</option>
+        </select>
+        {mode === "custom" && (
+          <>
+            <input
+              type="number"
+              value={customSec}
+              min={5}
+              max={3600}
+              disabled={busy}
+              onChange={(e) => setCustomSec(parseInt(e.target.value, 10) || 0)}
+              className="w-24 border border-[var(--color-hair-2)] rounded px-2 py-1 text-[13px] font-mono"
+            />
+            <span className="text-[12px] text-[var(--color-muted)]">sec</span>
+            <button
+              onClick={() => save(customSec)}
+              disabled={busy || customSec === currentSec}
+              className="btn sm primary disabled:opacity-40"
+            >
+              {busy ? "…" : "Save"}
+            </button>
+          </>
+        )}
+      </div>
+      <p className="text-[12px] text-[var(--color-muted)]">
+        Heartbeats only fire when there's new activity in the agent's channels or open tasks.
+        Quiet periods skip the LLM call entirely.
+      </p>
+      {err && <p className="text-[12px] text-red-600">{err}</p>}
+    </div>
   );
 }

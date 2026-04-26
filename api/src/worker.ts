@@ -1,9 +1,18 @@
 import { Worker } from "bullmq";
-import { eq, desc, and, ne } from "drizzle-orm";
+import { eq, desc, and, ne, gt, sql, inArray } from "drizzle-orm";
 import { AGENT_QUEUE, type AgentJobPayload } from "./agents/queue.js";
 import { redis } from "./lib/redis.js";
 import { db } from "./db/index.js";
-import { agents, agentRuns } from "./db/schema.js";
+import {
+  agents,
+  agentRuns,
+  members,
+  conversationMembers,
+  messages,
+  tasks,
+  taskComments,
+  taskAssignees,
+} from "./db/schema.js";
 import { buildContext } from "./agents/context.js";
 import { callAgent } from "./agents/adapters/dispatch.js";
 import { applyActions, type AgentAction } from "./agents/executor.js";
@@ -82,6 +91,27 @@ const worker = new Worker<AgentJobPayload>(
       .limit(1);
     const sinceTs =
       prevRuns[0]?.finishedAt ?? prevRuns[0]?.startedAt ?? new Date(Date.now() - 1000 * 60 * 60);
+
+    // Activity gate for scheduled heartbeats: if nothing has changed in the
+    // agent's channels or open tasks since their last run, skip the LLM call
+    // entirely. Most scheduled runs fire into a quiet workspace and produce
+    // filler — this is the cheapest, highest-impact way to cut that noise.
+    if (payload.trigger === "scheduled") {
+      const idle = await isWorkspaceIdleForAgent(agent.id, sinceTs);
+      if (idle) {
+        await db
+          .update(agentRuns)
+          .set({
+            status: "ok",
+            resultJson: { skipped: "no_activity" },
+            finishedAt: new Date(),
+          })
+          .where(eq(agentRuns.id, runId));
+        await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
+        await emitFinished(agent.id, runId, "ok", payload.conversationId);
+        return;
+      }
+    }
 
     const packet = await buildContext({
       agentId: agent.id,
@@ -165,6 +195,63 @@ async function emitFinished(
   } else {
     await publishGlobal({ ...base, conversationId: null });
   }
+}
+
+// True when nothing the agent could plausibly act on has changed since their
+// last run: no new messages in their channels, no new task comments on their
+// open tasks, no new task assignments to them. Cheap because it's just three
+// EXISTS queries against indexed columns. Safe to be lossy — if we miss an
+// edge case the agent will catch up on the next non-idle wake.
+async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<boolean> {
+  const [agentMember] = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.kind, "agent"), eq(members.refId, agentId)))
+    .limit(1);
+  if (!agentMember) return false;
+
+  const memberConvs = await db
+    .select({ conversationId: conversationMembers.conversationId })
+    .from(conversationMembers)
+    .where(eq(conversationMembers.memberId, agentMember.id));
+  const convIds = memberConvs.map((c) => c.conversationId);
+
+  if (convIds.length > 0) {
+    const [{ n }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(messages)
+      .where(and(inArray(messages.conversationId, convIds), gt(messages.ts, sinceTs)));
+    if (n > 0) return false;
+  }
+
+  const myTaskRows = await db
+    .select({ taskId: taskAssignees.taskId })
+    .from(taskAssignees)
+    .where(eq(taskAssignees.memberId, agentMember.id));
+  const myTaskIds = myTaskRows.map((r) => r.taskId);
+
+  if (myTaskIds.length > 0) {
+    const [{ n }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(taskComments)
+      .where(and(inArray(taskComments.taskId, myTaskIds), gt(taskComments.ts, sinceTs)));
+    if (n > 0) return false;
+
+    const [{ n: tn }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(tasks)
+      .where(and(inArray(tasks.id, myTaskIds), gt(tasks.updatedAt, sinceTs)));
+    if (tn > 0) return false;
+  }
+
+  // New assignments to this agent are also activity worth waking for.
+  const [{ n: na }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(taskAssignees)
+    .where(and(eq(taskAssignees.memberId, agentMember.id), gt(taskAssignees.assignedAt, sinceTs)));
+  if (na > 0) return false;
+
+  return true;
 }
 
 worker.on("error", (e) => console.error("[worker] error", e));
