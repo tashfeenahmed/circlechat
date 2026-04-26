@@ -197,11 +197,17 @@ async function emitFinished(
   }
 }
 
-// True when nothing the agent could plausibly act on has changed since their
-// last run: no new messages in their channels, no new task comments on their
-// open tasks, no new task assignments to them. Cheap because it's just three
-// EXISTS queries against indexed columns. Safe to be lossy — if we miss an
-// edge case the agent will catch up on the next non-idle wake.
+// Decide whether to skip a scheduled heartbeat. The bar is "this agent has
+// nothing they could plausibly work on right now" — which means BOTH:
+//   1. No new external activity since their last run (msgs/comments/assignments), AND
+//   2. No open assigned tasks that are stale (task they own, status not done/cancelled,
+//      no comment from them in the last STALE_TASK_MS).
+//
+// Open assigned tasks are work-in-progress and the whole point of heartbeats
+// is for agents to iterate on them proactively — never skip a heartbeat just
+// because no human pinged them, if they have a task that needs the next step.
+const STALE_TASK_MS = 10 * 60 * 1000; // 10 min: time without agent's own comment that re-qualifies the task as "needs a progress beat"
+
 async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<boolean> {
   const [agentMember] = await db
     .select({ id: members.id })
@@ -224,27 +230,45 @@ async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<
     if (n > 0) return false;
   }
 
-  const myTaskRows = await db
-    .select({ taskId: taskAssignees.taskId })
-    .from(taskAssignees)
-    .where(eq(taskAssignees.memberId, agentMember.id));
-  const myTaskIds = myTaskRows.map((r) => r.taskId);
+  // Open tasks assigned to me — these are the "proactive work" reason to fire.
+  const myOpenTasks = await db
+    .select({ taskId: tasks.id, status: tasks.status, updatedAt: tasks.updatedAt })
+    .from(tasks)
+    .innerJoin(taskAssignees, eq(taskAssignees.taskId, tasks.id))
+    .where(
+      and(
+        eq(taskAssignees.memberId, agentMember.id),
+        eq(tasks.archived, false),
+        sql`${tasks.status} NOT IN ('done', 'cancelled')`,
+      ),
+    );
 
-  if (myTaskIds.length > 0) {
+  if (myOpenTasks.length > 0) {
+    const myTaskIds = myOpenTasks.map((t) => t.taskId);
+
+    // Any new external comment on these tasks since last run? Wake.
     const [{ n }] = await db
       .select({ n: sql<number>`count(*)::int` })
       .from(taskComments)
       .where(and(inArray(taskComments.taskId, myTaskIds), gt(taskComments.ts, sinceTs)));
     if (n > 0) return false;
 
-    const [{ n: tn }] = await db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(tasks)
-      .where(and(inArray(tasks.id, myTaskIds), gt(tasks.updatedAt, sinceTs)));
-    if (tn > 0) return false;
+    // Any task I own where MY OWN last comment is older than STALE_TASK_MS
+    // (or I've never commented)? Wake — time to ship progress.
+    const cutoff = new Date(Date.now() - STALE_TASK_MS);
+    for (const t of myOpenTasks) {
+      const [latestMine] = await db
+        .select({ ts: taskComments.ts })
+        .from(taskComments)
+        .where(and(eq(taskComments.taskId, t.taskId), eq(taskComments.memberId, agentMember.id)))
+        .orderBy(desc(taskComments.ts))
+        .limit(1);
+      const lastTouch = latestMine?.ts ?? t.updatedAt;
+      if (lastTouch < cutoff) return false;
+    }
   }
 
-  // New assignments to this agent are also activity worth waking for.
+  // New assignments to this agent (since last run) are activity worth waking for.
   const [{ n: na }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(taskAssignees)

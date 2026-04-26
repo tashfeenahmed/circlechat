@@ -510,7 +510,21 @@ function buildPrompt(entry, packet) {
           : packet.trigger === "channel_post"
             ? `A human posted in this channel without @-mentioning anyone. Read it and decide for yourself: if you can add something useful AND in your lane (a specific answer, a pointer, a concrete offer to help, a kudos if genuinely warranted) then reply in 1–2 sentences. Otherwise respond with exactly "HEARTBEAT_OK". Do NOT acknowledge, "+1", or echo — silence is fine. If another agent has already replied with the same point you'd make, react with an emoji instead of posting. If the post is broad ("team, anyone can…"), only chime in if it genuinely lands in YOUR role; don't pile on generically.`
             : packet.trigger === "scheduled"
-              ? `Scheduled heartbeat — chat is the team's collaboration layer; task comments are for specific deliverables. Two valid chat moves: (A) Reply to a recent question only if ALL hold — it's a direct question, the asker did NOT @-mention a colleague who already answered, AND it's clearly in YOUR lane. Don't pile on with "+1" or elaborate on someone else's reply. (B) Make a proactive collaboration contribution — announce a task you just shipped with a link to the artifact, @-mention a specific colleague to ask a question you hit while working, share_files something useful you found that the broader team should see, or react to recent teammate activity. Don't post filler ("hey team", generic standups, fake enthusiasm) — those are HEARTBEAT_OK. If you have no proactive material AND no question to answer, HEARTBEAT_OK.`
+              ? `Scheduled heartbeat — your job here is to MAKE PROGRESS on real work, not wait to be pinged. Priority order:
+
+(1) **OPEN ASSIGNED TASKS COME FIRST.** Look at the MY TASKS block below. For every task assigned to you that isn't done/cancelled, you owe the team forward motion every wake — pick the freshest or most-overdue one and ship the next concrete step:
+  - If you can do another step now → do it (research, draft, code, decision) and post the artifact via share_to_task with a 1-line caption summarizing what changed.
+  - If you finished it → share_to_task with the deliverable, then update_task status="review" (or "done" only if the evidence rule is satisfied).
+  - If you're blocked → task_comment explaining the specific blocker and @-mention the person who can unblock you. "Blocked" must be a real blocker, not "I haven't started."
+  - Never let a task you own go a full heartbeat without a comment from you or a status change. Stale assigned tasks are the #1 way agents look like they're not working.
+
+(2) **THEN consider chat moves** if you have remaining capacity this turn:
+  (A) Reply to a recent question only if ALL hold — direct question, asker did NOT @-mention a colleague who already answered, AND it's in YOUR lane.
+  (B) Proactive collaboration — announce something you shipped with a link, @-mention a colleague with a real question, share_files something useful, or react to recent activity.
+
+(3) **HEARTBEAT_OK** is for the rare case where you have NO open assigned tasks AND nothing substantive to add to chat. Don't post filler ("hey team", generic standups, fake enthusiasm) — those are HEARTBEAT_OK. If you DO have an open task, HEARTBEAT_OK is wrong — ship a step instead, even a small one.
+
+Don't repeat yourself across heartbeats: if your last task_comment said "I'll draft X next," your next wake should attach the draft, not say it again.`
               : packet.trigger === "ambient"
                 ? `Ambient window — the channel's been quiet and the team wants to keep it feeling alive. You're allowed (not required) to post a short, in-character contribution: continue the last thread of thought, ask a specific colleague something in your role's lane (@-mention them), share what you're working on, or react to a recent message. ONE message only, 1–2 sentences, no fake enthusiasm. If you genuinely have nothing to add right now, respond with exactly "HEARTBEAT_OK" — don't post filler.`
                 : packet.trigger === "task_assigned"
