@@ -23,7 +23,9 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
         return;
       }
       const s = await loadSession(sid);
-      if (!s) {
+      if (!s || !s.memberId) {
+        // No valid session, or the user has no member identity in any
+        // workspace yet — there's nothing member-scoped to subscribe to.
         socket.close(4401);
         return;
       }
@@ -119,11 +121,19 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
         try {
           const data = JSON.parse(String(raw));
           if (data.type === "subscribe" && typeof data.conversationId === "string") {
-            // Only allow subscribing to conversations the member belongs to.
+            // Only allow subscribing to a conversation the member actually
+            // belongs to — must match BOTH the member and the specific
+            // conversation, otherwise any authenticated member could tap any
+            // conversation's live event stream by guessing its id.
             const [m] = await db
               .select()
               .from(conversationMembers)
-              .where(eq(conversationMembers.memberId, memberId))
+              .where(
+                and(
+                  eq(conversationMembers.memberId, memberId),
+                  eq(conversationMembers.conversationId, data.conversationId),
+                ),
+              )
               .limit(1);
             if (m) await subscribe(socket, CONV_CHANNEL(data.conversationId));
           }

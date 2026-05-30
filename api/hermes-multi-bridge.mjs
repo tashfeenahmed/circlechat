@@ -510,19 +510,33 @@ function buildPrompt(entry, packet) {
           : packet.trigger === "channel_post"
             ? `A human posted in this channel without @-mentioning anyone. Read it and decide for yourself: if you can add something useful AND in your lane (a specific answer, a pointer, a concrete offer to help, a kudos if genuinely warranted) then reply in 1–2 sentences. Otherwise respond with exactly "HEARTBEAT_OK". Do NOT acknowledge, "+1", or echo — silence is fine. If another agent has already replied with the same point you'd make, react with an emoji instead of posting. If the post is broad ("team, anyone can…"), only chime in if it genuinely lands in YOUR role; don't pile on generically.`
             : packet.trigger === "scheduled"
-              ? `Scheduled heartbeat — your job here is to MAKE PROGRESS on real work, not wait to be pinged. Priority order:
+              ? `Scheduled heartbeat — your job here is to MAKE PROGRESS on real work, not wait to be pinged.
+
+**FORMAT (CRITICAL):** every reply must end with an <actions> JSON block. Plain prose without <actions> is dropped. Copy this template and fill it in:
+
+<actions>[
+  {"type":"task_comment","task_id":"<one of the task_ids in MY TASKS below>","body_md":"<the concrete next step you just took or are about to take>"}
+]</actions>
+
+If you have a real artifact (text, code, list, screenshot) to ship, use share_to_task instead so the file lands on the task card:
+
+<actions>[
+  {"type":"share_to_task","task_id":"<...>","body_md":"<1-line caption>","files":[{"path":"/tmp/result.md","name":"result.md"}]}
+]</actions>
+
+Priority order:
 
 (1) **OPEN ASSIGNED TASKS COME FIRST.** Look at the MY TASKS block below. For every task assigned to you that isn't done/cancelled, you owe the team forward motion every wake — pick the freshest or most-overdue one and ship the next concrete step:
   - If you can do another step now → do it (research, draft, code, decision) and post the artifact via share_to_task with a 1-line caption summarizing what changed.
   - If you finished it → share_to_task with the deliverable, then update_task status="review" (or "done" only if the evidence rule is satisfied).
   - If you're blocked → task_comment explaining the specific blocker and @-mention the person who can unblock you. "Blocked" must be a real blocker, not "I haven't started."
-  - Never let a task you own go a full heartbeat without a comment from you or a status change. Stale assigned tasks are the #1 way agents look like they're not working.
+  - Never let a task you own go a full heartbeat without a comment from you or a status change.
 
-(2) **THEN consider chat moves** if you have remaining capacity this turn:
+(2) **THEN consider chat moves** if you have remaining capacity this turn (only when you ARE in a conversation — task-only heartbeats have no channel):
   (A) Reply to a recent question only if ALL hold — direct question, asker did NOT @-mention a colleague who already answered, AND it's in YOUR lane.
-  (B) Proactive collaboration — announce something you shipped with a link, @-mention a colleague with a real question, share_files something useful, or react to recent activity.
+  (B) Proactive collaboration — announce something you shipped with a link, @-mention a colleague with a real question, share_files something useful.
 
-(3) **HEARTBEAT_OK** is for the rare case where you have NO open assigned tasks AND nothing substantive to add to chat. Don't post filler ("hey team", generic standups, fake enthusiasm) — those are HEARTBEAT_OK. If you DO have an open task, HEARTBEAT_OK is wrong — ship a step instead, even a small one.
+(3) **HEARTBEAT_OK** is ONLY for the rare case where you have NO open assigned tasks AND nothing substantive to add to chat. If you DO have an open task, HEARTBEAT_OK is wrong — ship a step instead, even a small one.
 
 Don't repeat yourself across heartbeats: if your last task_comment said "I'll draft X next," your next wake should attach the draft, not say it again.`
               : packet.trigger === "ambient"
@@ -912,7 +926,25 @@ function connect(entry) {
           ...(attachments.length ? { attachments } : {}),
         });
       } else if (body && body.trim() && !conv) {
-        console.log(`[${entry.handle}] task-only: dropping ${body.length}-char prose (no conv to post into)`);
+        // Task-only mode and the agent wrote prose but no actions block.
+        // Don't drop the work — auto-wrap as a task_comment on the agent's
+        // most-stale assigned task so the prose lands SOMEWHERE useful. If
+        // the agent already emitted any task-targeting side action, the
+        // prose probably belongs alongside it, so attach to that task.
+        const targetTaskId =
+          sideActions.find((sa) => sa && typeof sa.task_id === "string")?.task_id ||
+          (Array.isArray(p.myTasks) && p.myTasks[0]?.id) ||
+          null;
+        if (targetTaskId) {
+          console.log(`[${entry.handle}] task-only: auto-wrapping ${body.length}-char prose into task_comment on ${targetTaskId}`);
+          actions.push({
+            type: "task_comment",
+            task_id: targetTaskId,
+            body_md: body,
+          });
+        } else {
+          console.log(`[${entry.handle}] task-only: dropping ${body.length}-char prose (no conv and no task to wrap into)`);
+        }
       }
       for (const a of sideActions) actions.push(a);
       console.log(

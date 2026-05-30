@@ -50,6 +50,27 @@
       "when": 1777090000000,
       "tag": "0006_tasks_workspace",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1777100000000,
+      "tag": "0007_memory_scopes",
+      "breakpoints": false
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777110000000,
+      "tag": "0008_workspace_mission",
+      "breakpoints": false
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777120000000,
+      "tag": "0009_tasks_title_trgm",
+      "breakpoints": false
     }
   ]
 }

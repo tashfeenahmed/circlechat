@@ -80,41 +80,50 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     const workspaceHandle = await deriveUniqueWorkspaceHandle(body.workspaceName);
 
     const uid = id("u");
-    await db.insert(users).values({
-      id: uid,
-      email: body.email,
-      name: body.name,
-      handle: body.handle,
-      passwordHash: await hashPassword(body.password),
-      avatarColor: pickColor(body.handle),
-    });
-
     const wsId = id("w");
-    await db.insert(workspaces).values({
-      id: wsId,
-      name: body.workspaceName,
-      handle: workspaceHandle,
-      createdBy: uid,
-    });
-    await db
-      .insert(workspaceMembers)
-      .values({ workspaceId: wsId, userId: uid, role: "admin" });
-
-    const memberId = await ensureUserMember(wsId, uid);
-
-    // Bootstrap a #general channel in the new workspace.
+    const memberId = id("m");
     const convId = id("c");
-    await db.insert(conversations).values({
-      id: convId,
-      workspaceId: wsId,
-      kind: "channel",
-      name: "general",
-      topic: "Everything and the kitchen sink.",
-      createdBy: memberId,
+    const passwordHash = await hashPassword(body.password);
+
+    // All-or-nothing: a partial failure here must not leave an orphaned user
+    // row, which would otherwise block re-signup with email_in_use. The member
+    // insert is inlined (rather than calling ensureUserMember) so it runs on
+    // the transaction connection.
+    await db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id: uid,
+        email: body.email,
+        name: body.name,
+        handle: body.handle,
+        passwordHash,
+        avatarColor: pickColor(body.handle),
+      });
+      await tx.insert(workspaces).values({
+        id: wsId,
+        name: body.workspaceName,
+        handle: workspaceHandle,
+        createdBy: uid,
+      });
+      await tx
+        .insert(workspaceMembers)
+        .values({ workspaceId: wsId, userId: uid, role: "admin" });
+      await tx
+        .insert(members)
+        .values({ id: memberId, workspaceId: wsId, kind: "user", refId: uid });
+
+      // Bootstrap a #general channel in the new workspace.
+      await tx.insert(conversations).values({
+        id: convId,
+        workspaceId: wsId,
+        kind: "channel",
+        name: "general",
+        topic: "Everything and the kitchen sink.",
+        createdBy: memberId,
+      });
+      await tx
+        .insert(conversationMembers)
+        .values({ conversationId: convId, memberId, role: "admin" });
     });
-    await db
-      .insert(conversationMembers)
-      .values({ conversationId: convId, memberId, role: "admin" });
 
     const sid = await createSession(uid, wsId);
     setSessionCookie(reply, sid);

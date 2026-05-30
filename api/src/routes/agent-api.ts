@@ -502,17 +502,39 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     return { matches: rows.map(resolver) };
   });
 
-  // GET /agent-api/members — full workspace directory (for @mention construction)
-  app.get("/agent-api/members", async () => {
-    const u = await db.select().from(users);
-    const a = await db.select().from(agents);
-    const uMembers = await db.select().from(members).where(eq(members.kind, "user"));
-    const aMembers = await db.select().from(members).where(eq(members.kind, "agent"));
-    const uM = new Map(uMembers.map((m) => [m.refId, m.id]));
-    const aM = new Map(aMembers.map((m) => [m.refId, m.id]));
+  // GET /agent-api/members — workspace directory (for @mention construction).
+  // Strictly scoped to the calling agent's workspace so an agent token can
+  // never enumerate users/agents from other workspaces in a multi-tenant deploy.
+  app.get("/agent-api/members", async (req) => {
+    const wsId = await agentWorkspaceId(req.agentCtx!.agentId);
+    if (!wsId) return { humans: [], agents: [] };
+    const uMembers = await db
+      .select()
+      .from(members)
+      .where(and(eq(members.kind, "user"), eq(members.workspaceId, wsId)));
+    const aMembers = await db
+      .select()
+      .from(members)
+      .where(and(eq(members.kind, "agent"), eq(members.workspaceId, wsId)));
+    const userIds = uMembers.map((m) => m.refId);
+    const agentIds = aMembers.map((m) => m.refId);
+    const u = userIds.length
+      ? await db.select().from(users).where(inArray(users.id, userIds))
+      : [];
+    const a = agentIds.length
+      ? await db.select().from(agents).where(inArray(agents.id, agentIds))
+      : [];
+    const uById = new Map(u.map((x) => [x.id, x]));
+    const aById = new Map(a.map((x) => [x.id, x]));
     return {
-      humans: u.map((x) => ({ memberId: uM.get(x.id), handle: x.handle, name: x.name })),
-      agents: a.map((x) => ({ memberId: aM.get(x.id), handle: x.handle, name: x.name })),
+      humans: uMembers.flatMap((m) => {
+        const x = uById.get(m.refId);
+        return x ? [{ memberId: m.id, handle: x.handle, name: x.name }] : [];
+      }),
+      agents: aMembers.flatMap((m) => {
+        const x = aById.get(m.refId);
+        return x ? [{ memberId: m.id, handle: x.handle, name: x.name }] : [];
+      }),
     };
   });
 

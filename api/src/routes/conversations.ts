@@ -43,7 +43,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
   app.addHook("preHandler", requireWorkspace);
 
   app.get("/conversations", async (req) => {
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const rows = await db
       .select({
         id: conversations.id,
@@ -139,9 +139,9 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
 
   app.post("/conversations", async (req, reply) => {
     const body = CreateBody.parse(req.body);
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
 
-    const { workspaceId } = req.auth!;
+    const workspaceId = req.auth!.workspaceId!;
 
     if (body.kind === "channel") {
       if (!body.name) return reply.code(400).send({ error: "name_required" });
@@ -224,7 +224,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
 
   app.get("/conversations/:id", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const [membership] = await db
       .select()
       .from(conversationMembers)
@@ -251,7 +251,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
   app.post("/conversations/:id/members", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
     const body = AddMembersBody.parse(req.body);
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
 
     const [membership] = await db
       .select()
@@ -276,7 +276,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
 
   app.post("/conversations/:id/read", async (req) => {
     const convId = (req.params as { id: string }).id;
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     await db
       .update(conversationMembers)
       .set({ lastReadAt: new Date() })
@@ -291,7 +291,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
 
   app.post("/conversations/:id/archive", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const [m] = await db
       .select()
       .from(conversationMembers)
@@ -311,7 +311,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
   app.patch("/conversations/:id", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
     const body = UpdateBody.parse(req.body);
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const [mem] = await db
       .select()
       .from(conversationMembers)
@@ -339,7 +339,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
   // channels. Only channels — DMs can't be deleted this way.
   app.delete("/conversations/:id", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const [mem] = await db
       .select()
       .from(conversationMembers)
@@ -375,7 +375,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
   app.delete("/conversations/:id/members/:memberId", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
     const target = (req.params as { memberId: string }).memberId;
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     if (target === memberId) return reply.code(400).send({ error: "cannot_remove_self" });
     const [mem] = await db
       .select()
@@ -401,7 +401,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
 
   app.get("/members", async (req) => {
     // Combined directory: humans + agents of the CURRENT workspace only.
-    const { workspaceId } = req.auth!;
+    const workspaceId = req.auth!.workspaceId!;
     const u = await db
       .select({
         memberId: members.id,

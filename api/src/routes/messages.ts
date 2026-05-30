@@ -43,7 +43,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
   app.get("/conversations/:id/messages", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
     const q = req.query as { parent_id?: string; before?: string; limit?: string };
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
 
     const [mm] = await db
       .select()
@@ -105,7 +105,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
   app.post("/conversations/:id/messages", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
     const body = PostBody.parse(req.body);
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
 
     const [mm] = await db
       .select()
@@ -303,7 +303,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
   app.patch("/messages/:id", async (req, reply) => {
     const mId = (req.params as { id: string }).id;
     const body = EditBody.parse(req.body);
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
     if (!m) return reply.code(404).send({ error: "not_found" });
     if (m.memberId !== memberId) return reply.code(403).send({ error: "not_author" });
@@ -321,7 +321,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
 
   app.delete("/messages/:id", async (req, reply) => {
     const mId = (req.params as { id: string }).id;
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
     if (!m) return reply.code(404).send({ error: "not_found" });
     if (m.memberId !== memberId) return reply.code(403).send({ error: "not_author" });
@@ -337,7 +337,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
   app.post("/messages/:id/reactions", async (req, reply) => {
     const mId = (req.params as { id: string }).id;
     const body = ReactBody.parse(req.body);
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
     if (!m) return reply.code(404).send({ error: "not_found" });
 
@@ -382,7 +382,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
 
   app.post("/conversations/:id/typing", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const [mm] = await db
       .select()
       .from(conversationMembers)

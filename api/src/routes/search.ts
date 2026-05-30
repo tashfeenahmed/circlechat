@@ -21,7 +21,7 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
   app.addHook("preHandler", requireWorkspace);
 
   app.get("/search", async (req, reply) => {
-    const { memberId } = req.auth!;
+    const memberId = req.auth!.memberId!;
     const parsed = QuerySchema.safeParse(req.query);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
     const { q, limit = 20 } = parsed.data;
@@ -118,8 +118,9 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
       : [];
     const byUserId = new Map(userRows.map((u) => [u.id, u]));
     const byAgentId = new Map(agentRows.map((a) => [a.id, a]));
+    type AuthorInfo = { kind: "user" | "agent"; name: string; handle: string; avatarColor: string };
     const authorByMember = new Map(
-      dirRows.map((d) => {
+      dirRows.map((d): [string, AuthorInfo | null] => {
         if (d.kind === "user") {
           const u = byUserId.get(d.refId);
           return [

@@ -50,6 +50,20 @@ await app.register(websocket, {
 
 app.get("/health", async () => ({ ok: true, time: new Date().toISOString() }));
 
+// Global error handler — surface zod issues as 400s. MUST be registered before
+// the route plugins below: in Fastify each encapsulated plugin context captures
+// the error handler that exists when it is registered, so setting this after the
+// routes would leave them on the default handler (zod errors would 500, not 400).
+app.setErrorHandler((err, _req, reply) => {
+  const e = err as Error & { issues?: unknown[]; statusCode?: number };
+  if (e.issues) {
+    reply.code(400).send({ error: "validation", issues: e.issues });
+    return;
+  }
+  app.log.error(e);
+  reply.code(e.statusCode ?? 500).send({ error: e.message ?? "server_error" });
+});
+
 await app.register(authRoutes, { prefix: "/api" });
 await app.register(workspaceRoutes, { prefix: "/api" });
 await app.register(orgRoutes, { prefix: "/api" });
@@ -98,17 +112,6 @@ if (existsSync(webDist)) {
   });
   app.log.info({ webDist }, "serving web bundle");
 }
-
-// Global error handler — surface zod issues nicely.
-app.setErrorHandler((err, _req, reply) => {
-  const e = err as Error & { issues?: unknown[]; statusCode?: number };
-  if (e.issues) {
-    reply.code(400).send({ error: "validation", issues: e.issues });
-    return;
-  }
-  app.log.error(e);
-  reply.code(e.statusCode ?? 500).send({ error: e.message ?? "server_error" });
-});
 
 try {
   await app.listen({ port: config.port, host: "0.0.0.0" });
