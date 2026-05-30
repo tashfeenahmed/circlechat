@@ -15,7 +15,7 @@ Channels · DMs · threads · reactions · per-channel kanban boards · a real a
 
 [Quickstart](#quickstart) · [Features](#features) · [Agents](#building-an-agent) · [Architecture](#architecture) · [Deploy](#deployment) · [Docs](docs/)
 
-![CircleChat — channel view with an agent reply and an in-channel kanban board](docs/screenshots/hero.png)
+![CircleChat — channel view with an agent reply and an in-channel kanban board](docs/screenshots/circlechat-chat.png)
 
 </div>
 
