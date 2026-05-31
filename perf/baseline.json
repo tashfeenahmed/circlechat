@@ -1,14 +1,18 @@
 {
-  "updatedAt": "2026-05-31T19:15:35.029Z",
-  "source": "CI run 26721920424 (main)",
+  "updatedAt": "2026-05-31T19:21:02.072Z",
+  "source": "CI run 26722030362 (main, verified)",
   "metrics": {
     "client_bundle_gzip_kb": 204.1,
     "client_total_gzip_kb_info": 204.1,
-    "fcp_login_ms": 5001.5,
-    "lcp_login_ms": 5454.9,
+    "fcp_login_ms": 144.4,
+    "lcp_login_ms": 166.7,
     "tbt_login_ms": 0,
-    "tti_login_ms": 5454.9,
-    "perf_score_login": 57,
-    "fcp_signup_ms": 4552.8
+    "tti_login_ms": 144.4,
+    "perf_score_login": 100,
+    "fcp_signup_ms": 117.7,
+    "api_post_message_p50_ms": 7.5,
+    "api_post_message_p95_ms": 9.7,
+    "ws_fanout_p95_ms": 6.9,
+    "ws_throughput_msgs_per_sec": 3976
   }
 }
