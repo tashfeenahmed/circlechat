@@ -281,6 +281,39 @@ export const presence = pgTable("presence", {
   lastSeen: timestamp("last_seen", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// ───────────────── notifications (per-member inbox) ─────────────────
+// One row per thing a member should be told about: a mention, a DM, a task
+// assignment, an approval decision. Written by the same code paths that fire
+// agent triggers / publish events, read by the notification-center routes.
+// `kind` drives the icon/copy in the UI; `link` is a client route to deep-link
+// to (e.g. /c/<conv> or /board?task=<id>). readAt null = unread.
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    // Recipient member (the user who should see this), always a user member.
+    memberId: varchar("member_id", { length: 32 }).notNull(),
+    kind: varchar("kind", { length: 30 }).notNull(), // mention | dm | task_assigned | task_comment | approval | system
+    // Who/what caused it — a member id when there's an actor, else null.
+    actorMemberId: varchar("actor_member_id", { length: 32 }),
+    title: varchar("title", { length: 200 }).notNull().default(""),
+    body: text("body").notNull().default(""),
+    // Client-side deep link, e.g. "/c/<conversationId>" or "/board?task=<id>".
+    link: text("link").notNull().default(""),
+    // Loose references for grouping/dedup — populated per-kind, all optional.
+    conversationId: varchar("conversation_id", { length: 32 }),
+    messageId: varchar("message_id", { length: 32 }),
+    taskId: varchar("task_id", { length: 32 }),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    memberCreatedIdx: index("notifications_member_created_idx").on(t.memberId, t.createdAt),
+    memberUnreadIdx: index("notifications_member_unread_idx").on(t.memberId, t.readAt),
+  }),
+);
+
 // ───────────────── tasks (workspace-scoped kanban board) ─────────────────
 export const tasks = pgTable(
   "tasks",

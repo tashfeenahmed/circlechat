@@ -18,7 +18,9 @@ export type Event =
   | { type: "task.assigned"; workspaceId: string; taskId: string; memberId: string; assignedBy: string }
   | { type: "task.unassigned"; workspaceId: string; taskId: string; memberId: string }
   | { type: "task.comment.new"; workspaceId: string; taskId: string; comment: unknown }
-  | { type: "task.comment.deleted"; workspaceId: string; taskId: string; commentId: string };
+  | { type: "task.comment.deleted"; workspaceId: string; taskId: string; commentId: string }
+  | { type: "notification.new"; memberId: string; notification: unknown }
+  | { type: "notification.read"; memberId: string; notificationId: string | null };
 
 const CONV_CHANNEL = (conversationId: string): string => `cc:conv:${conversationId}`;
 const WORKSPACE_CHANNEL = (workspaceId: string): string => `cc:workspace:${workspaceId}`;

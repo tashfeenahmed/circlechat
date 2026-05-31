@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { and, eq, inArray, desc, isNull, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -12,7 +13,8 @@ import {
   tasks,
 } from "../db/schema.js";
 import { requireAuth, requireWorkspace, loadSession } from "../auth/session.js";
-import { statObject, streamObject } from "../lib/storage.js";
+import { statObject, streamObject, deleteObject } from "../lib/storage.js";
+import { workspaceMembers } from "../db/schema.js";
 
 interface AttachmentRow {
   key: string;
@@ -292,6 +294,104 @@ export async function fileDirectoryRoutes(app: FastifyInstance): Promise<void> {
     expanded.sort((a, b) => b.ts.localeCompare(a.ts));
     return { files: expanded };
   });
+
+  // Delete an attachment. The key identifies the file; we find the message OR
+  // task-comment that references it (scoped to the caller's workspace), check
+  // the caller is the author or a workspace admin, strip the entry from that
+  // row's attachments_json, and unlink the blob from storage once no row in
+  // the workspace still references it.
+  //
+  // Body: { key, source: "message"|"task_comment", id } where id is the
+  // messageId or commentId. We re-derive ownership from the DB — the client
+  // can't authorize itself by claiming a different author.
+  app.post("/files/delete", async (req, reply) => {
+    const memberId = req.auth!.memberId!;
+    const userId = req.auth!.userId;
+    const workspaceId = req.auth!.workspaceId!;
+    const Body = z.object({
+      key: z.string().min(1),
+      source: z.enum(["message", "task_comment"]),
+      id: z.string().min(1),
+    });
+    const body = Body.parse(req.body);
+
+    // Is the caller a workspace admin? (Admins can delete anyone's file.)
+    const [wm] = await db
+      .select({ role: workspaceMembers.role })
+      .from(workspaceMembers)
+      .where(
+        and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)),
+      )
+      .limit(1);
+    const isAdmin = wm?.role === "admin";
+
+    if (body.source === "message") {
+      const [m] = await db.select().from(messages).where(eq(messages.id, body.id)).limit(1);
+      if (!m) return reply.code(404).send({ error: "not_found" });
+      // Scope: the message's conversation must be in the caller's workspace.
+      const [conv] = await db
+        .select({ workspaceId: conversations.workspaceId })
+        .from(conversations)
+        .where(eq(conversations.id, m.conversationId))
+        .limit(1);
+      if (!conv || conv.workspaceId !== workspaceId)
+        return reply.code(404).send({ error: "not_found" });
+      if (m.memberId !== memberId && !isAdmin)
+        return reply.code(403).send({ error: "not_author" });
+
+      const before = (m.attachmentsJson as AttachmentRow[]) ?? [];
+      if (!before.some((a) => a.key === body.key))
+        return reply.code(404).send({ error: "attachment_not_found" });
+      const after = before.filter((a) => a.key !== body.key);
+      await db.update(messages).set({ attachmentsJson: after }).where(eq(messages.id, m.id));
+    } else {
+      const [c] = await db.select().from(taskComments).where(eq(taskComments.id, body.id)).limit(1);
+      if (!c) return reply.code(404).send({ error: "not_found" });
+      const [t] = await db
+        .select({ workspaceId: tasks.workspaceId })
+        .from(tasks)
+        .where(eq(tasks.id, c.taskId))
+        .limit(1);
+      if (!t || t.workspaceId !== workspaceId)
+        return reply.code(404).send({ error: "not_found" });
+      if (c.memberId !== memberId && !isAdmin)
+        return reply.code(403).send({ error: "not_author" });
+
+      const before = (c.attachmentsJson as unknown as AttachmentRow[]) ?? [];
+      if (!before.some((a) => a.key === body.key))
+        return reply.code(404).send({ error: "attachment_not_found" });
+      const after = before.filter((a) => a.key !== body.key);
+      await db
+        .update(taskComments)
+        .set({ attachmentsJson: after as never })
+        .where(eq(taskComments.id, c.id));
+    }
+
+    // Only unlink the underlying blob if nothing else still references this
+    // key — the same uploaded file could (in principle) be attached twice.
+    const stillUsed = await keyStillReferenced(body.key);
+    if (!stillUsed) await deleteObject(body.key);
+
+    return { ok: true, blobDeleted: !stillUsed };
+  });
+}
+
+// True if any message or task-comment row still references this storage key in
+// its attachments_json. Uses a jsonb containment check on each table.
+async function keyStillReferenced(key: string): Promise<boolean> {
+  const probe = JSON.stringify([{ key }]);
+  const [msg] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(dsql`${messages.attachmentsJson} @> ${probe}::jsonb` as never)
+    .limit(1);
+  if (msg) return true;
+  const [tc] = await db
+    .select({ id: taskComments.id })
+    .from(taskComments)
+    .where(dsql`${taskComments.attachmentsJson} @> ${probe}::jsonb` as never)
+    .limit(1);
+  return !!tc;
 }
 
 function guessContentType(key: string): string {

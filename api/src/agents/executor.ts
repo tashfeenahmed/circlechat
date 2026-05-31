@@ -9,6 +9,7 @@ import {
   conversationMembers,
   memoryKv,
   tasks,
+  agents,
 } from "../db/schema.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation } from "../lib/events.js";
@@ -27,6 +28,7 @@ import {
   loadTask,
 } from "../lib/tasks-core.js";
 import { putObject, publicUrl } from "../lib/storage.js";
+import { notifyForMessage } from "../lib/notifications.js";
 
 export interface AgentAttachment {
   key: string;
@@ -119,6 +121,69 @@ export interface ExecOutcome {
   trace: string[];
 }
 
+// ───────────────── scope enforcement ─────────────────
+// Each action type maps to the scope an agent must hold to perform it without
+// approval. The vocabulary matches the docs + install defaults
+// (channels.read / channels.reply) and extends naturally to tasks.* and the
+// agent meta-actions. Actions absent from this map (e.g. set_memory, call_tool,
+// request_approval) are always allowed — they're either internal bookkeeping
+// or are themselves the approval mechanism.
+const ACTION_SCOPE: Partial<Record<AgentAction["type"], string>> = {
+  post_message: "channels.reply",
+  open_thread: "channels.reply",
+  share_files: "channels.reply",
+  react: "channels.reply",
+  create_task: "tasks.write",
+  update_task: "tasks.write",
+  assign_task: "tasks.write",
+  task_comment: "tasks.write",
+  share_to_task: "tasks.write",
+};
+
+// Enforcement is OFF unless ENFORCE_AGENT_SCOPES is truthy — deploying this
+// code changes nothing for existing agents until the operator opts in. When
+// on: an agent with empty scopes, or a "*" wildcard, is unrestricted (back-
+// compat); otherwise an action whose required scope is absent is converted
+// into an approval request instead of executing. The human approves/denies
+// from the approvals UI, exactly as the README promises.
+function scopeEnforcementOn(): boolean {
+  const v = (process.env.ENFORCE_AGENT_SCOPES ?? "").toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+function actionAllowedByScopes(actionType: AgentAction["type"], scopes: string[]): boolean {
+  if (!scopes || scopes.length === 0) return true; // unrestricted (back-compat)
+  if (scopes.includes("*")) return true;
+  const required = ACTION_SCOPE[actionType];
+  if (!required) return true; // unmapped actions are always allowed
+  return scopes.includes(required);
+}
+
+// Pull a short, human-readable summary + the gating conversation id out of an
+// action, used to populate the approval card when an action is gated.
+function describeForApproval(a: AgentAction): { action: string; conversationId: string | null; payload: Record<string, unknown> } {
+  switch (a.type) {
+    case "post_message":
+    case "share_files":
+      return { action: `${a.type} in ${a.conversation_id}`, conversationId: a.conversation_id, payload: { ...a } };
+    case "open_thread":
+      return { action: `open_thread on ${a.message_id}`, conversationId: null, payload: { ...a } };
+    case "react":
+      return { action: `react ${a.emoji}`, conversationId: null, payload: { ...a } };
+    case "create_task":
+      return { action: `create_task "${a.title}"`, conversationId: a.conversation_id ?? null, payload: { ...a } };
+    case "update_task":
+      return { action: `update_task ${a.task_id}`, conversationId: null, payload: { ...a } };
+    case "assign_task":
+      return { action: `assign_task ${a.task_id}`, conversationId: null, payload: { ...a } };
+    case "task_comment":
+    case "share_to_task":
+      return { action: `${a.type} on ${a.task_id}`, conversationId: null, payload: { ...a } };
+    default:
+      return { action: a.type, conversationId: null, payload: {} };
+  }
+}
+
 export async function applyActions(params: {
   agentId: string;
   runId: string;
@@ -137,8 +202,53 @@ export async function applyActions(params: {
     return out;
   }
 
+  // Load the agent's scopes once for the run. Only needed when enforcement is
+  // enabled; skip the query entirely otherwise.
+  let scopes: string[] = [];
+  const enforce = scopeEnforcementOn();
+  if (enforce) {
+    const [agentRow] = await db
+      .select({ scopes: agents.scopes })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .limit(1);
+    scopes = agentRow?.scopes ?? [];
+  }
+
   for (const a of params.actions) {
     try {
+      if (enforce && !actionAllowedByScopes(a.type, scopes)) {
+        // Out of scope → open an approval card instead of executing. This is
+        // the documented behavior: anything outside an agent's scopes gates
+        // on a human. The action payload is preserved so it can (in future)
+        // be replayed on approval.
+        const d = describeForApproval(a);
+        const required = ACTION_SCOPE[a.type] ?? a.type;
+        const apId = id("ap");
+        await db.insert(approvals).values({
+          id: apId,
+          agentRunId: runId,
+          agentId,
+          conversationId: d.conversationId,
+          scope: required,
+          action: d.action,
+          payloadJson: d.payload,
+          status: "pending",
+        });
+        if (d.conversationId) {
+          await publishToConversation(d.conversationId, {
+            type: "approval.new",
+            approvalId: apId,
+            agentId,
+            scope: required,
+            action: d.action,
+            conversationId: d.conversationId,
+          });
+        }
+        out.trace.push(`scope_gated ${a.type} → approval ${apId} (needs ${required})`);
+        out.errors.push(`${a.type} requires scope "${required}" — opened approval ${apId}`);
+        continue;
+      }
       await applyOne(agentId, runId, agentMember.id, a, out);
       out.actionsApplied++;
     } catch (e) {
@@ -262,6 +372,17 @@ async function applyOne(
         }).catch(() => {
           // trigger dispatch is fire-and-forget — the post itself landed
         });
+        // Inbox notifications for human recipients (agent DM'd a user, or
+        // @-mentioned one). Mirrors the human post path. Fire-and-forget.
+        notifyForMessage({
+          workspaceId,
+          conversationId: a.conversation_id,
+          messageId: mid,
+          authorMemberId: agentMemberId,
+          bodyMd: guard.bodyMd,
+          directMentionIds,
+          isDm: await isDmConversation(a.conversation_id),
+        }).catch(() => {});
       }
       out.trace.push(`post_message ${mid} in ${a.conversation_id}`);
       return;
@@ -675,6 +796,15 @@ async function applyOne(
           directMentionIds,
           isBroadcast,
         }).catch(() => {});
+        notifyForMessage({
+          workspaceId,
+          conversationId: a.conversation_id,
+          messageId: mid,
+          authorMemberId: agentMemberId,
+          bodyMd,
+          directMentionIds,
+          isDm: await isDmConversation(a.conversation_id),
+        }).catch(() => {});
       }
       out.trace.push(`share_files ${mid} (${fetched.length} file(s))`);
       return;
@@ -691,6 +821,15 @@ async function loadAgentWorkspace(agentMemberId: string): Promise<string | null>
     .where(eq(members.id, agentMemberId))
     .limit(1);
   return row?.workspaceId ?? null;
+}
+
+async function isDmConversation(conversationId: string): Promise<boolean> {
+  const [c] = await db
+    .select({ kind: conversations.kind })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+  return c?.kind === "dm";
 }
 
 // Server-side file ingest shared by share_files + share_to_task. Each source

@@ -12,6 +12,7 @@ import {
 import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
+import { notify } from "./notifications.js";
 
 export const STATUSES = ["backlog", "in_progress", "review", "done"] as const;
 export type Status = (typeof STATUSES)[number];
@@ -378,6 +379,19 @@ export async function addAssignee(taskId: string, target: string, actorMemberId:
     task: hydrated,
   });
   await maybeFireAgentTrigger(target, taskId, t!.conversationId, "task_assigned");
+  // Inbox notification if the assignee is a human (agents get the trigger
+  // above). notify() itself no-ops on agent members, so this is safe to call
+  // unconditionally. Fire-and-forget.
+  notify({
+    workspaceId,
+    memberId: target,
+    kind: "task_assigned",
+    actorMemberId,
+    title: `You were assigned a task`,
+    body: t!.title,
+    link: `/board?task=${taskId}`,
+    taskId,
+  }).catch(() => {});
   return { task: hydrated };
 }
 

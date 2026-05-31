@@ -215,6 +215,58 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, inviteUrl: url, email: body.email };
   });
 
+  // List pending (not-yet-accepted) invites for the caller's current workspace.
+  // Any member can view; the management UI uses this to show who's outstanding.
+  app.get("/auth/invites", { preHandler: requireAuth }, async (req, reply) => {
+    const { workspaceId } = req.auth!;
+    if (!workspaceId) return reply.code(409).send({ error: "no_workspace" });
+    const rows = await db
+      .select({
+        id: invites.id,
+        email: invites.email,
+        token: invites.token,
+        invitedBy: invites.invitedBy,
+        createdAt: invites.createdAt,
+        acceptedAt: invites.acceptedAt,
+      })
+      .from(invites)
+      .where(eq(invites.workspaceId, workspaceId));
+    const pending = rows.filter((r) => !r.acceptedAt);
+    return {
+      invites: pending.map((r) => ({
+        id: r.id,
+        email: r.email,
+        invitedBy: r.invitedBy,
+        createdAt: r.createdAt,
+        inviteUrl: `${config.publicBaseUrl}/invite/${r.token}`,
+      })),
+    };
+  });
+
+  // Revoke a pending invite. Admin-only. Already-accepted invites can't be
+  // revoked (the member is in — remove them via the workspace member routes).
+  app.delete("/auth/invites/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const inviteId = (req.params as { id: string }).id;
+    const { user, workspaceId } = req.auth!;
+    if (!workspaceId) return reply.code(409).send({ error: "no_workspace" });
+
+    const [wm] = await db
+      .select({ role: workspaceMembers.role })
+      .from(workspaceMembers)
+      .where(
+        and(eq(workspaceMembers.userId, user.id), eq(workspaceMembers.workspaceId, workspaceId)),
+      )
+      .limit(1);
+    if (!wm || wm.role !== "admin") return reply.code(403).send({ error: "admin_only" });
+
+    const [inv] = await db.select().from(invites).where(eq(invites.id, inviteId)).limit(1);
+    if (!inv || inv.workspaceId !== workspaceId) return reply.code(404).send({ error: "not_found" });
+    if (inv.acceptedAt) return reply.code(409).send({ error: "already_accepted" });
+
+    await db.delete(invites).where(eq(invites.id, inviteId));
+    return { ok: true };
+  });
+
   app.get("/invite/:token", async (req, reply) => {
     const token = (req.params as { token: string }).token;
     const [inv] = await db.select().from(invites).where(eq(invites.token, token)).limit(1);

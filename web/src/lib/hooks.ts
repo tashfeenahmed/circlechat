@@ -12,6 +12,7 @@ import {
   type Task,
   type TaskDetail,
   type TaskComment,
+  type Notification,
 } from "../api/client";
 import { bus } from "../ws/client";
 import { useBus } from "../state/store";
@@ -281,6 +282,118 @@ export function useApprovals() {
     });
   }, [qc]);
   return q;
+}
+
+// ─────────────────── Notifications (per-member inbox) ───────────────────
+
+interface NotificationsPage {
+  notifications: Notification[];
+  hasMore: boolean;
+  nextBefore: string | null;
+}
+
+// Notification list + live updates. Keeps the first page in cache; new
+// notifications are prepended on the notification.new event, and reads are
+// reflected on notification.read (single id or null = all).
+export function useNotifications() {
+  const qc = useQueryClient();
+  const q = useQuery<NotificationsPage>({
+    queryKey: ["notifications"],
+    queryFn: () => api.get("/notifications?limit=30"),
+    staleTime: 15_000,
+  });
+  useEffect(() => {
+    return bus.on((ev) => {
+      if (ev.type === "notification.new") {
+        const n = ev.notification as Notification;
+        qc.setQueryData<NotificationsPage>(["notifications"], (old) => {
+          if (!old) return { notifications: [n], hasMore: false, nextBefore: null };
+          if (old.notifications.some((x) => x.id === n.id)) return old;
+          return { ...old, notifications: [n, ...old.notifications] };
+        });
+        qc.setQueryData<{ count: number }>(["notifications", "unread"], (old) => ({
+          count: (old?.count ?? 0) + 1,
+        }));
+      } else if (ev.type === "notification.read") {
+        const id = ev.notificationId as string | null;
+        qc.setQueryData<NotificationsPage>(["notifications"], (old) => {
+          if (!old) return old;
+          const now = new Date().toISOString();
+          return {
+            ...old,
+            notifications: old.notifications.map((x) =>
+              (id === null || x.id === id) && !x.readAt ? { ...x, readAt: now } : x,
+            ),
+          };
+        });
+        qc.invalidateQueries({ queryKey: ["notifications", "unread"] });
+      }
+    });
+  }, [qc]);
+  return q;
+}
+
+// Cheap unread badge count. Kept as its own query so the bell can show a
+// number without loading the full list; updated live by the events above.
+export function useUnreadNotifications() {
+  return useQuery<{ count: number }>({
+    queryKey: ["notifications", "unread"],
+    queryFn: () => api.get("/notifications/unread-count"),
+    staleTime: 15_000,
+  });
+}
+
+export function useMarkNotificationRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/notifications/${id}/read`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+    },
+  });
+}
+
+export function useMarkAllNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post(`/notifications/read-all`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+    },
+  });
+}
+
+// ─────────────────── Workspace member admin + invites ───────────────────
+
+export interface WorkspaceMemberRow {
+  userId: string;
+  role: string;
+  joinedAt: string;
+}
+
+export function useWorkspaceMembers(workspaceId: string | null | undefined) {
+  return useQuery<{ members: WorkspaceMemberRow[]; myRole: string }>({
+    queryKey: ["workspace-members", workspaceId],
+    queryFn: () => api.get(`/workspaces/${workspaceId}/members`),
+    enabled: !!workspaceId,
+    staleTime: 15_000,
+  });
+}
+
+export interface PendingInvite {
+  id: string;
+  email: string;
+  invitedBy: string;
+  createdAt: string;
+  inviteUrl: string;
+}
+
+export function useInvites() {
+  return useQuery<{ invites: PendingInvite[] }>({
+    queryKey: ["invites"],
+    queryFn: () => api.get("/auth/invites"),
+    staleTime: 15_000,
+  });
 }
 
 export function useAgent(id: string | undefined) {

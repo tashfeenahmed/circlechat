@@ -11,6 +11,18 @@ build/
 .env.local
 .env.*.local
 
+# Private deploy notes & secrets (my own server, never push)
+DEPLOY.local.md
+*.local.md
+secrets/
+*.secret
+*.secret.*
+*.pem
+*.key
+*_rsa
+*_ed25519
+credentials*.json
+
 # Logs
 logs/
 *.log

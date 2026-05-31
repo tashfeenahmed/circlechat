@@ -1,13 +1,13 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Trash2, Pencil, Archive, X, UserMinus, UserPlus, Bot } from "lucide-react";
+import { Trash2, Pencil, Archive, ArchiveRestore, Bell, BellOff, X, UserMinus, UserPlus, Bot } from "lucide-react";
 import MessageList from "../components/MessageList";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
 import Menu from "../components/Menu";
 import Avatar from "../components/Avatar";
-import { useConversation, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory } from "../lib/hooks";
+import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
 import { useQueryClient } from "@tanstack/react-query";
@@ -54,6 +54,32 @@ export default function ChannelPage() {
   const memberCount = (conv.data?.members ?? []).length;
   const myRole = (conv.data?.members ?? []).find((m) => m.memberId === me.data?.memberId)?.role;
   const isAdmin = myRole === "admin";
+
+  // `muted` and `archived` live on the per-member conversations LIST row, not
+  // on GET /conversations/:id — read them from that cache.
+  const convList = useConversations();
+  const listRow = convList.data?.conversations.find((cv) => cv.id === id);
+  const isMuted = !!listRow?.muted;
+  const isArchived = !!listRow?.archived || !!c?.archived;
+
+  async function toggleMute() {
+    try {
+      await api.post(`/conversations/${id}/mute`, { muted: !isMuted });
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
+    } catch (e) {
+      alert(`Mute failed: ${(e as Error).message}`);
+    }
+  }
+
+  async function unarchiveChannel() {
+    try {
+      await api.post(`/conversations/${id}/unarchive`);
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
+      await qc.invalidateQueries({ queryKey: ["conversation", id] });
+    } catch (e) {
+      alert(`Unarchive failed: ${(e as Error).message}`);
+    }
+  }
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
@@ -110,30 +136,49 @@ export default function ChannelPage() {
             <button onClick={() => setMembersOpen(true)} className="ch-btn">
               {memberCount} members
             </button>
-            {isAdmin && (
-              <Menu
-                className="ch-btn"
-                title="Channel actions"
-                items={[
-                  {
-                    label: "Rename channel",
-                    icon: <Pencil size={13} strokeWidth={2} />,
-                    onSelect: () => setRenameOpen(true),
-                  },
-                  {
-                    label: "Archive channel",
-                    icon: <Archive size={13} strokeWidth={2} />,
-                    onSelect: archiveChannel,
-                  },
-                  {
-                    label: "Delete channel…",
-                    icon: <Trash2 size={13} strokeWidth={2} />,
-                    danger: true,
-                    onSelect: hardDeleteChannel,
-                  },
-                ]}
-              />
-            )}
+            <Menu
+              className="ch-btn"
+              title="Channel actions"
+              items={[
+                // Mute is per-member, so every member gets it.
+                {
+                  label: isMuted ? "Unmute channel" : "Mute channel",
+                  icon: isMuted ? (
+                    <Bell size={13} strokeWidth={2} />
+                  ) : (
+                    <BellOff size={13} strokeWidth={2} />
+                  ),
+                  onSelect: toggleMute,
+                },
+                // Admin-only items below.
+                ...(isAdmin
+                  ? [
+                      {
+                        label: "Rename channel",
+                        icon: <Pencil size={13} strokeWidth={2} />,
+                        onSelect: () => setRenameOpen(true),
+                      },
+                      isArchived
+                        ? {
+                            label: "Unarchive channel",
+                            icon: <ArchiveRestore size={13} strokeWidth={2} />,
+                            onSelect: unarchiveChannel,
+                          }
+                        : {
+                            label: "Archive channel",
+                            icon: <Archive size={13} strokeWidth={2} />,
+                            onSelect: archiveChannel,
+                          },
+                      {
+                        label: "Delete channel…",
+                        icon: <Trash2 size={13} strokeWidth={2} />,
+                        danger: true,
+                        onSelect: hardDeleteChannel,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
           </div>
         </header>
 

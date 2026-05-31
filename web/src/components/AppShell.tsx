@@ -5,6 +5,7 @@ import MemberDetailsPanel from "./MemberDetailsPanel";
 import FileViewer from "./FileViewer";
 import Menu from "./Menu";
 import TopSearch from "./TopSearch";
+import NotificationBell from "./NotificationBell";
 import WorkspaceRail from "./WorkspaceRail";
 import { api } from "../api/client";
 import { useMe, useMembersDirectory } from "../lib/hooks";
@@ -58,6 +59,7 @@ export default function AppShell() {
           Circle
         </Link>
         <TopSearch />
+        <NotificationBell />
         <Menu
           title={`Account · ${meLabel}`}
           align="end"
