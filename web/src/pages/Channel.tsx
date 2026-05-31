@@ -7,7 +7,7 @@ import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
 import Menu from "../components/Menu";
 import Avatar from "../components/Avatar";
-import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory } from "../lib/hooks";
+import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory, useMarkConversationNotificationsRead } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
 import { useQueryClient } from "@tanstack/react-query";
@@ -34,6 +34,14 @@ export default function ChannelPage() {
     markRead();
   }, [id, msgs.data?.messages.length, markRead]);
 
+  // Opening a conversation clears its inbox notifications (mentions + DMs) so
+  // the user doesn't have to click each one in the bell. Fires once per open.
+  const markConvNotifs = useMarkConversationNotificationsRead();
+  useEffect(() => {
+    if (id) markConvNotifs.mutate(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   const threadMsg = useMemo(
     () =>
       threadConvId === id && threadRootId
@@ -54,6 +62,19 @@ export default function ChannelPage() {
   const memberCount = (conv.data?.members ?? []).length;
   const myRole = (conv.data?.members ?? []).find((m) => m.memberId === me.data?.memberId)?.role;
   const isAdmin = myRole === "admin";
+
+  // DM conversations carry no `name` — title them by the other participant(s),
+  // resolved against the members directory (same source the sidebar uses).
+  // Without this a DM header rendered "# …" instead of the person's name.
+  const dmTitle =
+    c?.kind === "dm"
+      ? ((conv.data?.members ?? [])
+          .map((m) => m.memberId)
+          .filter((mid) => mid !== me.data?.memberId)
+          .map((mid) => dir[mid]?.name)
+          .filter(Boolean)
+          .join(", ") || null)
+      : null;
 
   // `muted` and `archived` live on the per-member conversations LIST row, not
   // on GET /conversations/:id — read them from that cache.
@@ -124,8 +145,14 @@ export default function ChannelPage() {
       <div className="workspace flex-1 min-w-0">
         <header className="chan-head">
           <div className="ch-title">
-            <span className="text-[var(--color-muted)]">#</span>
-            {c?.name ?? "…"}
+            {c?.kind === "dm" ? (
+              <span>{dmTitle ?? "…"}</span>
+            ) : (
+              <>
+                <span className="text-[var(--color-muted)]">#</span>
+                {c?.name ?? "…"}
+              </>
+            )}
           </div>
           {c?.topic && (
             <div className="ch-meta">
@@ -204,7 +231,7 @@ export default function ChannelPage() {
         )}
 
         <Composer
-          placeholder={`Message #${c?.name ?? ""}`}
+          placeholder={c?.kind === "dm" ? `Message ${dmTitle ?? ""}` : `Message #${c?.name ?? ""}`}
           conversationId={id}
           onTyping={() => {
             api.post(`/conversations/${id}/typing`).catch(() => {
