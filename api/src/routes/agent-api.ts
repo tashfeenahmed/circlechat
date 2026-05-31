@@ -46,6 +46,7 @@ declare module "fastify" {
     agentCtx?: {
       agentId: string;
       memberId: string;
+      workspaceId: string;
       handle: string;
     };
   }
@@ -72,10 +73,17 @@ async function requireAgentToken(req: FastifyRequest, reply: FastifyReply): Prom
     reply.code(500).send({ error: "agent_member_missing" });
     return;
   }
-  req.agentCtx = { agentId: a.id, memberId: m.id, handle: a.handle };
+  req.agentCtx = { agentId: a.id, memberId: m.id, workspaceId: m.workspaceId, handle: a.handle };
 }
 
-async function agentVisibleConversations(memberId: string): Promise<string[]> {
+// Conversations an agent may read: the ones it has joined, plus every public
+// channel IN ITS OWN WORKSPACE. The workspace filter on the public-channel
+// query is load-bearing — without it an agent token from one workspace could
+// enumerate and read public channels belonging to every other workspace.
+async function agentVisibleConversations(
+  memberId: string,
+  workspaceId: string,
+): Promise<string[]> {
   const rows = await db
     .select({ id: conversationMembers.conversationId })
     .from(conversationMembers)
@@ -84,7 +92,13 @@ async function agentVisibleConversations(memberId: string): Promise<string[]> {
   const pubs = await db
     .select({ id: conversations.id })
     .from(conversations)
-    .where(and(eq(conversations.kind, "channel"), eq(conversations.isPrivate, false)));
+    .where(
+      and(
+        eq(conversations.workspaceId, workspaceId),
+        eq(conversations.kind, "channel"),
+        eq(conversations.isPrivate, false),
+      ),
+    );
   const set = new Set([...joined, ...pubs.map((p) => p.id)]);
   return Array.from(set);
 }
@@ -408,7 +422,10 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
 
   // GET /agent-api/conversations — list all convs I can see
   app.get("/agent-api/conversations", async (req) => {
-    const convIds = await agentVisibleConversations(req.agentCtx!.memberId);
+    const convIds = await agentVisibleConversations(
+      req.agentCtx!.memberId,
+      req.agentCtx!.workspaceId,
+    );
     if (!convIds.length) return { conversations: [] };
     const rows = await db.select().from(conversations).where(inArray(conversations.id, convIds));
     return {
@@ -432,7 +449,10 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       limit?: string;
     };
     if (!q.conversationId) return reply.code(400).send({ error: "conversationId_required" });
-    const convIds = await agentVisibleConversations(req.agentCtx!.memberId);
+    const convIds = await agentVisibleConversations(
+      req.agentCtx!.memberId,
+      req.agentCtx!.workspaceId,
+    );
     if (!convIds.includes(q.conversationId))
       return reply.code(403).send({ error: "not_visible" });
 
@@ -460,7 +480,10 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     if (!q.messageId) return reply.code(400).send({ error: "messageId_required" });
     const [trig] = await db.select().from(messages).where(eq(messages.id, q.messageId)).limit(1);
     if (!trig) return reply.code(404).send({ error: "not_found" });
-    const convIds = await agentVisibleConversations(req.agentCtx!.memberId);
+    const convIds = await agentVisibleConversations(
+      req.agentCtx!.memberId,
+      req.agentCtx!.workspaceId,
+    );
     if (!convIds.includes(trig.conversationId))
       return reply.code(403).send({ error: "not_visible" });
     const rootId = trig.parentId ?? trig.id;
@@ -484,9 +507,17 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     if (!q.q || q.q.length < 2) return reply.code(400).send({ error: "q_too_short" });
     const limit = Math.min(50, Math.max(1, Number(q.limit ?? 20)));
 
-    const convIds = q.conversationId
-      ? [q.conversationId]
-      : await agentVisibleConversations(req.agentCtx!.memberId);
+    // Always resolve what this agent may see, then restrict to a caller-supplied
+    // conversationId only if it is actually in that set. Trusting the supplied
+    // id verbatim would let an agent search any conversation by id — including
+    // private channels and DMs in other workspaces.
+    const visible = await agentVisibleConversations(
+      req.agentCtx!.memberId,
+      req.agentCtx!.workspaceId,
+    );
+    if (q.conversationId && !visible.includes(q.conversationId))
+      return reply.code(403).send({ error: "not_visible" });
+    const convIds = q.conversationId ? [q.conversationId] : visible;
     if (!convIds.length) return { matches: [] };
 
     const rows = await db
