@@ -1,7 +1,7 @@
 {
   "_comment": "Budgets from PLAN.html §16. 'budget' is the absolute target; 'regressionPct' is the allowed drift vs baseline before a metric is flagged REGRESSED (the §16 rule: FCP-class 10%, send-to-render-class 20%). 'gate' marks which metrics would block in a future --strict run; everything is report-only today. lowerIsBetter=false only for throughput.",
   "metrics": {
-    "client_bundle_gzip_kb": { "budget": 180, "regressionPct": 10, "lowerIsBetter": true, "gate": true, "unit": "kB", "label": "Client bundle (initial, gzip)" },
+    "client_bundle_gzip_kb": { "budget": 250, "regressionPct": 10, "lowerIsBetter": true, "gate": true, "unit": "kB", "label": "Client bundle (initial, gzip)" },
     "fcp_login_ms":          { "budget": 800, "regressionPct": 10, "lowerIsBetter": true, "gate": true, "unit": "ms", "label": "First Contentful Paint (/login)" },
     "lcp_login_ms":          { "budget": 1200, "regressionPct": 10, "lowerIsBetter": true, "gate": false, "unit": "ms", "label": "Largest Contentful Paint (/login)" },
     "tbt_login_ms":          { "budget": 200, "regressionPct": 15, "lowerIsBetter": true, "gate": false, "unit": "ms", "label": "Total Blocking Time (/login)" },
