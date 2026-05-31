@@ -29,9 +29,26 @@ services:
       CC_API_BASE: ${PUBLIC_BASE_URL:-http://localhost:8080}/api
       CC_HERMES_IMAGE: ${CC_HERMES_IMAGE:-nousresearch/hermes-agent:latest}
       CC_OPENCLAW_IMAGE: ${CC_OPENCLAW_IMAGE:-alpine/openclaw:latest}
+      # Where the equip step finds the skill docs + MCP stdio script to install
+      # into each new agent. These MUST be absolute HOST paths: Hermes equip
+      # bind-mounts the template dir into a throw-away skill-ops container
+      # (resolved by the *host* daemon), while OpenClaw equip reads it from this
+      # container's filesystem. The identical-path mounts below make one value
+      # satisfy both. Left unset, equip falls back to /app/templates (a path
+      # that exists only inside this container) and the host bind-mount silently
+      # resolves to an empty dir — producing an empty "(missing DESCRIPTION.md)"
+      # skill. Override CC_REPO_HOST_DIR if the repo isn't at /opt/circlechat.
+      CC_SKILL_TEMPLATE: ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/templates/circlechat-skill
+      CC_BROWSER_SKILL_TEMPLATE: ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/templates/browser-skill
+      CC_MCP_SCRIPT: ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/scripts/circlechat-mcp.mjs
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HERMES_HOMES_DIR:-/opt/hermes-homes}:${HERMES_HOMES_DIR:-/opt/hermes-homes}
+      # Mounted at the SAME path inside the container as on the host so the
+      # template/script paths above resolve identically for both the in-container
+      # fs reads (OpenClaw) and the host-daemon bind-mounts (Hermes skill-ops).
+      - ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/templates:${CC_REPO_HOST_DIR:-/opt/circlechat}/api/templates:ro
+      - ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/scripts:${CC_REPO_HOST_DIR:-/opt/circlechat}/api/scripts:ro
 
   worker:
     environment:
