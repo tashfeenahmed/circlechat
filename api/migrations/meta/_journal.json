@@ -78,6 +78,13 @@
       "when": 1777130000000,
       "tag": "0010_notifications",
       "breakpoints": false
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1777140000000,
+      "tag": "0011_task_comment_attachments",
+      "breakpoints": true
     }
   ]
 }
