@@ -1,7 +1,14 @@
 {
-  "updatedAt": "2026-05-31T19:12:44.098Z",
+  "updatedAt": "2026-05-31T19:15:35.029Z",
+  "source": "CI run 26721920424 (main)",
   "metrics": {
-    "client_bundle_gzip_kb": 203.2,
-    "client_total_gzip_kb_info": 203.2
+    "client_bundle_gzip_kb": 204.1,
+    "client_total_gzip_kb_info": 204.1,
+    "fcp_login_ms": 5001.5,
+    "lcp_login_ms": 5454.9,
+    "tbt_login_ms": 0,
+    "tti_login_ms": 5454.9,
+    "perf_score_login": 57,
+    "fcp_signup_ms": 4552.8
   }
 }
