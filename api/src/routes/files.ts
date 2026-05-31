@@ -24,7 +24,23 @@ interface AttachmentRow {
   url: string;
 }
 
-// Accept either a human session cookie OR an agent bearer token.
+// The principal behind a /files/* request — either a human session or an agent
+// bearer token — resolved to the member + workspace we authorize blob reads
+// against. memberId is null for an agent whose member row is missing (treated
+// as having no joined conversations).
+declare module "fastify" {
+  interface FastifyRequest {
+    filePrincipal?: {
+      kind: "user" | "agent";
+      memberId: string | null;
+      workspaceId: string;
+    };
+  }
+}
+
+// Accept either a human session cookie OR an agent bearer token, and resolve
+// the principal's member + workspace so the handler can authorize the specific
+// blob being requested (a valid token alone must NOT grant access to any key).
 async function requireSessionOrAgent(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -33,15 +49,89 @@ async function requireSessionOrAgent(
   const bearer = header.replace(/^Bearer\s+/i, "");
   if (bearer) {
     const [a] = await db.select().from(agents).where(eq(agents.botToken, bearer)).limit(1);
-    if (a) return; // valid agent — allow
+    if (a) {
+      const [m] = await db
+        .select({ id: members.id })
+        .from(members)
+        .where(and(eq(members.kind, "agent"), eq(members.refId, a.id)))
+        .limit(1);
+      req.filePrincipal = { kind: "agent", memberId: m?.id ?? null, workspaceId: a.workspaceId };
+      return;
+    }
   }
   const cookies = (req as unknown as { cookies?: Record<string, string> }).cookies ?? {};
   const sid = cookies["cc_session"];
   if (sid) {
     const s = await loadSession(sid);
-    if (s) return;
+    if (s && s.workspaceId && s.memberId) {
+      req.filePrincipal = { kind: "user", memberId: s.memberId, workspaceId: s.workspaceId };
+      return;
+    }
   }
   reply.code(401).send({ error: "unauthorized" });
+}
+
+// True if `key` is referenced by a message or task-comment the principal can
+// actually see: a message in a conversation they've joined (or a public channel)
+// within their own workspace, or a task-comment on a task in their workspace.
+async function keyVisibleToPrincipal(
+  key: string,
+  principal: { memberId: string | null; workspaceId: string },
+): Promise<boolean> {
+  const probe = JSON.stringify([{ key }]);
+
+  // Messages that reference this key.
+  const msgRows = await db
+    .select({ conversationId: messages.conversationId })
+    .from(messages)
+    .where(dsql`${messages.attachmentsJson} @> ${probe}::jsonb` as never);
+  if (msgRows.length) {
+    const convIds = Array.from(new Set(msgRows.map((r) => r.conversationId)));
+    const convRows = await db
+      .select({
+        id: conversations.id,
+        workspaceId: conversations.workspaceId,
+        kind: conversations.kind,
+        isPrivate: conversations.isPrivate,
+      })
+      .from(conversations)
+      .where(inArray(conversations.id, convIds));
+    const joined = new Set<string>();
+    if (principal.memberId) {
+      const jm = await db
+        .select({ conversationId: conversationMembers.conversationId })
+        .from(conversationMembers)
+        .where(
+          and(
+            eq(conversationMembers.memberId, principal.memberId),
+            inArray(conversationMembers.conversationId, convIds),
+          ),
+        );
+      for (const r of jm) joined.add(r.conversationId);
+    }
+    for (const c of convRows) {
+      if (c.workspaceId !== principal.workspaceId) continue;
+      if (joined.has(c.id)) return true;
+      if (c.kind === "channel" && !c.isPrivate) return true;
+    }
+  }
+
+  // Task-comment attachments are workspace-scoped (same model as the board).
+  const tcRows = await db
+    .select({ taskId: taskComments.taskId })
+    .from(taskComments)
+    .where(dsql`${taskComments.attachmentsJson} @> ${probe}::jsonb` as never);
+  if (tcRows.length) {
+    const taskIds = Array.from(new Set(tcRows.map((r) => r.taskId)));
+    const [t] = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(inArray(tasks.id, taskIds), eq(tasks.workspaceId, principal.workspaceId)))
+      .limit(1);
+    if (t) return true;
+  }
+
+  return false;
 }
 
 // File serving: session cookie (web UI) OR agent bearer token (agent runtime).
@@ -51,6 +141,12 @@ export async function fileServeRoutes(app: FastifyInstance): Promise<void> {
   app.get("/files/*", async (req, reply) => {
     const key = (req.params as { "*": string })["*"];
     if (!key) return reply.code(400).send({ error: "no_key" });
+    // Authorize the specific blob against the principal's visible content —
+    // a valid token is necessary but not sufficient. 404 (not 403) so we don't
+    // confirm a key exists to a caller who can't see it.
+    const principal = req.filePrincipal!;
+    if (!(await keyVisibleToPrincipal(key, principal)))
+      return reply.code(404).send({ error: "not_found" });
     const st = await statObject(key);
     if (!st || !st.isFile()) return reply.code(404).send({ error: "not_found" });
     const ct = guessContentType(key);
