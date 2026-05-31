@@ -1,0 +1,11 @@
+# CI overlay for the backend/wsload perf benchmark. Publishes the api directly
+# on :3000 (bypassing Caddy/TLS, which is domain-specific) and tells it to mint
+# non-Secure cookies so the harness can auth over plain http on localhost.
+# Used as: docker compose -f compose.yml -f perf/compose.ci.yml up -d \
+#            postgres redis minio minio-setup api
+services:
+  api:
+    ports:
+      - "3000:3000"
+    environment:
+      PUBLIC_BASE_URL: http://localhost:3000

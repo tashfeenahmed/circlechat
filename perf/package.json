@@ -1,0 +1,20 @@
+{
+  "name": "circlechat-perf",
+  "private": true,
+  "type": "module",
+  "description": "Measurement harness for the §16 performance budgets (synthetic Lighthouse + bundle size, backend latency, WS throughput). Report-only, regression-vs-baseline.",
+  "scripts": {
+    "perf": "node run.mjs",
+    "perf:synthetic": "node run.mjs bundle lighthouse",
+    "perf:bundle": "node run.mjs bundle",
+    "perf:lighthouse": "node run.mjs lighthouse",
+    "perf:backend": "node run.mjs backend",
+    "perf:wsload": "node run.mjs wsload",
+    "baseline:update": "node run.mjs --update-baseline"
+  },
+  "dependencies": {
+    "chrome-launcher": "^1.1.2",
+    "lighthouse": "^12.2.1",
+    "ws": "^8.18.0"
+  }
+}

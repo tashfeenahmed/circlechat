@@ -62,3 +62,8 @@ coverage/
 # the line below is defensive in case it ever gets moved inside.
 ../marketing-site/
 marketing-site/
+
+# perf harness local outputs
+perf/node_modules/
+perf/results.json
+perf/report.md

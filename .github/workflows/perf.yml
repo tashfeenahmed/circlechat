@@ -1,0 +1,95 @@
+name: perf
+
+# Report-only performance check (PLAN.html §16). Runs Lighthouse + bundle-size
+# on the public pages and a backend/WS latency benchmark against an ephemeral
+# stack, compares to perf/baseline.json, and posts the result. It never blocks a
+# merge (the run always exits 0). Update the baseline on main with:
+#   cd perf && node run.mjs --update-baseline   (then commit perf/baseline.json)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Chrome (for Lighthouse)
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Build web
+        working-directory: web
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Bring up ephemeral stack (best-effort)
+        continue-on-error: true
+        run: |
+          docker compose -f compose.yml -f perf/compose.ci.yml \
+            up -d --build postgres redis minio minio-setup api
+
+      - name: Install perf deps
+        working-directory: perf
+        run: npm install --no-audit --no-fund
+
+      - name: Run perf harness
+        working-directory: perf
+        continue-on-error: true
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          PERF_BASE_URL: http://localhost:3000
+        run: node run.mjs
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report
+          path: |
+            perf/report.md
+            perf/results.json
+          if-no-files-found: ignore
+
+      - name: Comment report on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body;
+            try { body = fs.readFileSync('perf/report.md', 'utf8'); }
+            catch { body = '_perf report not produced._'; }
+            const marker = '<!-- circlechat-perf-report -->';
+            body = marker + '\n' + body;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f compose.yml -f perf/compose.ci.yml down -v || true
