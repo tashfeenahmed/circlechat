@@ -108,6 +108,20 @@ export async function installCircleChatTooling(params: {
     }
   }
 
+  // Post-install sanity check. A "successful" copy that left no DESCRIPTION.md
+  // behind almost always means the template source didn't resolve — e.g. a
+  // relative CC_SKILL_TEMPLATE that Docker can't bind-mount on the host daemon,
+  // which silently mounts an empty dir. Flip skillInstalled to false and say so
+  // rather than ship an empty "(missing DESCRIPTION.md)" skill.
+  if (skillInstalled && !(await skillHasDescription(skillDest))) {
+    skillInstalled = false;
+    notes.push(
+      `circlechat skill is empty after install — no DESCRIPTION.md in ${skillDest}. ` +
+        `Check that CC_SKILL_TEMPLATE (${SKILL_TEMPLATE_DIR}) is an absolute path that ` +
+        `resolves on the docker host.`,
+    );
+  }
+
   // In docker mode we must stage the MCP stdio script inside HERMES_HOME so
   // that the containerised hermes process can spawn it — `/opt/cc-scripts/…`
   // from the CircleChat host isn't visible inside the container.
@@ -258,6 +272,18 @@ async function copyDir(src: string, dest: string): Promise<void> {
     const d = join(dest, e.name);
     if (e.isDirectory()) await copyDir(s, d);
     else if (e.isFile()) await fs.copyFile(s, d);
+  }
+}
+
+// True only if the skill dir holds a non-empty DESCRIPTION.md — the file the
+// Skills UI reads. Used as a post-install guard so a copy that produced an
+// empty folder is reported as failed instead of silently "installed".
+export async function skillHasDescription(skillDir: string): Promise<boolean> {
+  try {
+    const st = await fs.stat(join(skillDir, "DESCRIPTION.md"));
+    return st.isFile() && st.size > 0;
+  } catch {
+    return false;
   }
 }
 

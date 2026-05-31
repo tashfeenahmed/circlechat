@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { join, resolve as pathResolve, basename } from "node:path";
 import { buildOpenClawCommand, CONTAINER_OPENCLAW_HOME } from "./openclaw-runtime.js";
+import { skillHasDescription } from "./hermes-equip.js";
 
 const MCP_SCRIPT =
   process.env.CC_MCP_SCRIPT ??
@@ -57,6 +58,16 @@ export async function equipOpenClawAgent(params: {
     skillInstalled = true;
   } catch (e) {
     notes.push(`skill copy failed: ${(e as Error).message.slice(0, 200)}`);
+  }
+  // Guard against a copy that left an empty folder (usually a CC_SKILL_TEMPLATE
+  // that doesn't resolve from this container) — report it instead of shipping a
+  // "(missing DESCRIPTION.md)" skill.
+  if (skillInstalled && !(await skillHasDescription(skillDest))) {
+    skillInstalled = false;
+    notes.push(
+      `circlechat skill is empty after install — no DESCRIPTION.md in ${skillDest}. ` +
+        `Check that CC_SKILL_TEMPLATE (${SKILL_TEMPLATE_DIR}) resolves to the template dir.`,
+    );
   }
   // Stage agent-browser skill next to circlechat. Non-fatal on old deploys
   // that don't have the template yet.
