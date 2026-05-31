@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Network, X, Search, Pencil, Link as LinkIcon, Unlink, Plus, Check } from "lucide-react";
+import { Network, X, Search, Link as LinkIcon, Unlink, Plus, Check } from "lucide-react";
 import { api } from "../api/client";
 import { humanizeError } from "../api/errors";
 import Avatar from "../components/Avatar";
@@ -23,7 +23,6 @@ export default function OrgPage() {
     queryKey: ["org"],
     queryFn: () => api.get<{ nodes: OrgNode[] }>("/org"),
   });
-  const [editing, setEditing] = useState<OrgNode | null>(null);
   const [addingUnder, setAddingUnder] = useState<OrgNode | null>(null);
 
   const nodes = org.data?.nodes ?? [];
@@ -55,8 +54,8 @@ export default function OrgPage() {
           <div className="org-canvas">
             {roots.length === 0 ? (
               <div className="text-[13px] text-[var(--color-muted)]">
-                No one's at the top yet. Click a member's <Pencil size={12} strokeWidth={2} className="inline" /> and clear their manager to anchor the tree.
-                <UnrootedList nodes={nodes} onEdit={setEditing} />
+                No one's at the top yet. Open a member's profile and set their manager to "Top of tree" to anchor the tree.
+                <UnrootedList nodes={nodes} />
               </div>
             ) : (
               <div className="org-row">
@@ -65,7 +64,6 @@ export default function OrgPage() {
                     key={r.memberId}
                     node={r}
                     byParent={byParent}
-                    onEdit={setEditing}
                     onAddReport={setAddingUnder}
                   />
                 ))}
@@ -75,13 +73,6 @@ export default function OrgPage() {
         )}
       </div>
 
-      {editing && (
-        <AssignDialog
-          target={editing}
-          all={nodes}
-          onClose={() => setEditing(null)}
-        />
-      )}
       {addingUnder && (
         <NewReportDialog
           manager={addingUnder}
@@ -110,18 +101,16 @@ function groupByParent(nodes: OrgNode[]): Map<string | null, OrgNode[]> {
 function OrgBranch({
   node,
   byParent,
-  onEdit,
   onAddReport,
 }: {
   node: OrgNode;
   byParent: Map<string | null, OrgNode[]>;
-  onEdit: (n: OrgNode) => void;
   onAddReport: (n: OrgNode) => void;
 }) {
   const children = byParent.get(node.memberId) ?? [];
   return (
     <div className="org-node-wrap">
-      <OrgCard node={node} onEdit={() => onEdit(node)} />
+      <OrgCard node={node} />
       <div className="org-spine" />
       <div className="org-row children">
         {children.map((c) => (
@@ -129,7 +118,6 @@ function OrgBranch({
             key={c.memberId}
             node={c}
             byParent={byParent}
-            onEdit={onEdit}
             onAddReport={onAddReport}
           />
         ))}
@@ -147,7 +135,7 @@ function OrgBranch({
   );
 }
 
-function OrgCard({ node, onEdit }: { node: OrgNode; onEdit: () => void }) {
+function OrgCard({ node }: { node: OrgNode }) {
   return (
     <div className="org-card">
       <button
@@ -177,23 +165,15 @@ function OrgCard({ node, onEdit }: { node: OrgNode; onEdit: () => void }) {
           {node.title && <div className="org-title truncate">{node.title}</div>}
         </div>
       </button>
-      <button
-        type="button"
-        className="org-edit"
-        title="Assign manager"
-        onClick={onEdit}
-      >
-        <Pencil size={12} strokeWidth={2} />
-      </button>
     </div>
   );
 }
 
-function UnrootedList({ nodes, onEdit }: { nodes: OrgNode[]; onEdit: (n: OrgNode) => void }) {
+function UnrootedList({ nodes }: { nodes: OrgNode[] }) {
   return (
     <div className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
       {nodes.map((n) => (
-        <OrgCard key={n.memberId} node={n} onEdit={() => onEdit(n)} />
+        <OrgCard key={n.memberId} node={n} />
       ))}
     </div>
   );
