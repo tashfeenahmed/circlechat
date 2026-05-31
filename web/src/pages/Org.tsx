@@ -6,7 +6,7 @@ import { humanizeError } from "../api/errors";
 import Avatar from "../components/Avatar";
 import { useBus } from "../state/store";
 
-interface OrgNode {
+export interface OrgNode {
   memberId: string;
   kind: "user" | "agent";
   name: string;
@@ -346,7 +346,7 @@ function NewReportDialog({ manager, onClose }: { manager: OrgNode; onClose: () =
   );
 }
 
-function AssignDialog({
+export function AssignDialog({
   target,
   all,
   onClose,
