@@ -193,9 +193,11 @@ export async function fireMentionTriggers(params: {
       .limit(1);
     if (mm?.kind !== "agent") continue;
 
-    // Auto-join the agent to the conversation on mention (public channels
-    // and DMs). Private channels require a pre-existing invite.
-    if (conv.kind !== "channel" || !conv.isPrivate) {
+    // Auto-join the agent to the conversation on mention ONLY in a public
+    // channel. DMs and private channels have fixed membership — mentioning a
+    // non-participant there must not pull them in (DMs are private to their
+    // participants).
+    if (conv.kind === "channel" && !conv.isPrivate) {
       await db
         .insert(conversationMembers)
         .values({
@@ -206,6 +208,23 @@ export async function fireMentionTriggers(params: {
         .onConflictDoNothing();
     }
     if (firedForAgent.has(mm.refId)) continue;
+
+    // Never trigger an agent that isn't a member of this conversation. In a
+    // public channel the auto-join above guarantees membership; in a DM or
+    // private channel this gates out @mentions of agents who don't belong,
+    // so an agent can't be tagged into a private DM it can't see. (DM
+    // participant agents are still woken by the conv.kind === "dm" block.)
+    const [mentionIsMember] = await db
+      .select({ id: conversationMembers.memberId })
+      .from(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, conversationId),
+          eq(conversationMembers.memberId, mentionMemberId),
+        ),
+      )
+      .limit(1);
+    if (!mentionIsMember) continue;
 
     // Loop-breaker: if author is an agent and the mentioned agent has
     // already posted in this conversation within COOLDOWN_MS, they've
@@ -294,12 +313,21 @@ export async function fireMentionTriggers(params: {
     }
     participating.delete(authorMemberId);
     if (participating.size) {
+      // Only wake thread participants who are actually members of this
+      // conversation — a recorded @mention of a non-member (e.g. an agent
+      // tagged in a private DM) must not pull them in via the thread path.
+      const convMemberRows = await db
+        .select({ memberId: conversationMembers.memberId })
+        .from(conversationMembers)
+        .where(eq(conversationMembers.conversationId, conversationId));
+      const convMemberSet = new Set(convMemberRows.map((r) => r.memberId));
       const ptMembers = await db
         .select()
         .from(members)
         .where(inArray(members.id, Array.from(participating)));
       for (const pm of ptMembers) {
         if (pm.kind !== "agent") continue;
+        if (!convMemberSet.has(pm.id)) continue;
         if (firedForAgent.has(pm.refId)) continue;
         // Same loop-breaker as direct mentions: if the author is an agent
         // and this thread participant has posted in the conversation
