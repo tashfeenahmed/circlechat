@@ -205,12 +205,30 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       for (const mentionMemberId of resolvedMentionIds) {
         const [mm2] = await db.select().from(members).where(eq(members.id, mentionMemberId)).limit(1);
         if (mm2?.kind !== "agent") continue;
-        if (conv.kind !== "channel" || !conv.isPrivate) {
+        // Auto-join a mentioned agent ONLY in a public channel. DMs and
+        // private channels have fixed membership — mentioning a non-participant
+        // there must not pull them in (DMs are private to their participants).
+        if (conv.kind === "channel" && !conv.isPrivate) {
           await db
             .insert(conversationMembers)
             .values({ conversationId: convId, memberId: mentionMemberId, role: "member" })
             .onConflictDoNothing();
         }
+        // Never trigger an agent that isn't a member of this conversation. In
+        // a public channel the auto-join above guarantees membership; in a DM
+        // or private channel this gates out @mentions of agents who don't
+        // belong, so an agent can't be tagged into a private DM it can't see.
+        const [mentionIsMember] = await db
+          .select({ id: conversationMembers.memberId })
+          .from(conversationMembers)
+          .where(
+            and(
+              eq(conversationMembers.conversationId, convId),
+              eq(conversationMembers.memberId, mentionMemberId),
+            ),
+          )
+          .limit(1);
+        if (!mentionIsMember) continue;
         firedForAgent.add(mm2.refId);
 
         const isDirect = directMentionIds.includes(mentionMemberId);
@@ -292,12 +310,21 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
         }
         participatingMemberIds.delete(memberId);
         if (participatingMemberIds.size) {
+          // Only wake thread participants who are actually members of this
+          // conversation — a recorded @mention of a non-member (e.g. an agent
+          // tagged in a private DM) must not pull them in via the thread path.
+          const convMemberRows = await db
+            .select({ memberId: conversationMembers.memberId })
+            .from(conversationMembers)
+            .where(eq(conversationMembers.conversationId, convId));
+          const convMemberSet = new Set(convMemberRows.map((r) => r.memberId));
           const participatingMembers = await db
             .select()
             .from(members)
             .where(inArray(members.id, Array.from(participatingMemberIds)));
           for (const pm of participatingMembers) {
             if (pm.kind !== "agent") continue;
+            if (!convMemberSet.has(pm.id)) continue;
             if (firedForAgent.has(pm.refId)) continue;
             await enqueueAgentEvent(pm.refId, {
               trigger: "thread_reply",
