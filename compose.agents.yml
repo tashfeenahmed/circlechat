@@ -1,0 +1,62 @@
+# Opt-in agent runtime for Hermes / OpenClaw agents.
+#
+#   docker compose -f compose.yml -f compose.agents.yml up -d --build
+#
+# This mounts the host Docker socket into the api, worker, and bridge
+# containers so CircleChat can spawn ephemeral agent containers
+# (nousresearch/hermes-agent, alpine/openclaw) per message.
+#
+# ── SECURITY ──────────────────────────────────────────────────────────────
+# Mounting /var/run/docker.sock grants these containers root-equivalent
+# control of the host. Only enable on a host you trust and control.
+#
+# ── HERMES_HOMES_DIR ──────────────────────────────────────────────────────
+# Must be an ABSOLUTE host path. Each agent's home dir is created here and
+# bind-mounted into the agent container by the *host* Docker daemon, so the
+# path has to resolve identically inside and outside the container — that's
+# why it's mounted at the same path on both sides. Create it first:
+#   sudo mkdir -p /opt/hermes-homes && sudo chmod 777 /opt/hermes-homes
+#
+# Pre-pull the agent images once:
+#   docker pull nousresearch/hermes-agent:latest
+#   docker pull alpine/openclaw:latest
+
+services:
+  api:
+    environment:
+      HERMES_HOMES_DIR: ${HERMES_HOMES_DIR:-/opt/hermes-homes}
+      CC_BRIDGE_CONFIG_PATH: ${HERMES_HOMES_DIR:-/opt/hermes-homes}/bridge-config.json
+      CC_API_BASE: ${PUBLIC_BASE_URL:-http://localhost:8080}/api
+      CC_HERMES_IMAGE: ${CC_HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+      CC_OPENCLAW_IMAGE: ${CC_OPENCLAW_IMAGE:-alpine/openclaw:latest}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HERMES_HOMES_DIR:-/opt/hermes-homes}:${HERMES_HOMES_DIR:-/opt/hermes-homes}
+
+  worker:
+    environment:
+      HERMES_HOMES_DIR: ${HERMES_HOMES_DIR:-/opt/hermes-homes}
+      CC_BRIDGE_CONFIG_PATH: ${HERMES_HOMES_DIR:-/opt/hermes-homes}/bridge-config.json
+    volumes:
+      - ${HERMES_HOMES_DIR:-/opt/hermes-homes}:${HERMES_HOMES_DIR:-/opt/hermes-homes}
+
+  # The multi-bridge holds one WebSocket per agent to /agent-socket and shells
+  # out to a Hermes container on each incoming message.
+  bridge:
+    build: ./api
+    command: ["node", "hermes-multi-bridge.mjs"]
+    environment:
+      CC_BRIDGE_CONFIG: ${HERMES_HOMES_DIR:-/opt/hermes-homes}/bridge-config.json
+      # Internal, in-network WS to the api — no TLS hop needed.
+      CC_WSS_URL: ws://api:3000/agent-socket
+      # Passed into the (host-network) agent containers for their /agent-api
+      # callbacks, so it must be reachable from the host, not a compose alias.
+      CC_API_BASE: ${PUBLIC_BASE_URL:-http://localhost:8080}/api
+      HERMES_HOMES_DIR: ${HERMES_HOMES_DIR:-/opt/hermes-homes}
+      CC_HERMES_IMAGE: ${CC_HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+      CC_OPENCLAW_IMAGE: ${CC_OPENCLAW_IMAGE:-alpine/openclaw:latest}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HERMES_HOMES_DIR:-/opt/hermes-homes}:${HERMES_HOMES_DIR:-/opt/hermes-homes}
+    depends_on: [api]
+    restart: unless-stopped

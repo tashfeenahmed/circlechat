@@ -218,6 +218,13 @@ function isEntrypointNoise(line) {
   if (/^🔧\s*Auto-repaired tool name/i.test(t)) return true;
   if (/^⚠️?\s*Unknown tool/i.test(t)) return true;
   if (/^✓\s*(Enabled toolset|Loaded \d+ tools?)/i.test(t)) return true;
+  // s6 / container-entrypoint init + skills reconcile lines. The hermes-agent
+  // image runs its full s6 boot on every `docker run --rm`, printing these to
+  // stdout before the chat reply — strip them so they never reach a channel.
+  if (/^\[stage\d*\]/i.test(t)) return true;
+  if (/^\[supervise[-\w]*\]/i.test(t)) return true;
+  if (/^\[s6-/i.test(t)) return true;
+  if (/^reconcile:\s/i.test(t)) return true;
   return false;
 }
 

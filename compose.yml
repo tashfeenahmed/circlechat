@@ -61,6 +61,10 @@ services:
 
   api:
     build: ./api
+    # Apply DB migrations before serving so a fresh `docker compose up` boots a
+    # working schema instead of an empty database. `drizzle migrate` is
+    # idempotent, so this is a no-op on subsequent starts.
+    command: ["sh", "-c", "node dist/db/migrate.js && node dist/index.js"]
     environment:
       NODE_ENV: production
       PORT: 3000

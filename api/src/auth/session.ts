@@ -95,7 +95,11 @@ export function setSessionCookie(reply: FastifyReply, sid: string): void {
   reply.setCookie(COOKIE_NAME, sid, {
     httpOnly: true,
     sameSite: "lax",
-    secure: config.env === "production",
+    // Tie Secure to the public URL scheme, not NODE_ENV. A production build
+    // served over plain HTTP (e.g. a bare IP or localhost trial) would
+    // otherwise set Secure and the browser would drop the session cookie,
+    // making login silently fail to persist.
+    secure: config.publicBaseUrl.startsWith("https"),
     path: "/",
     maxAge: Math.floor(SESSION_TTL_MS / 1000),
     signed: false,
