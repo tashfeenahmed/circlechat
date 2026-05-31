@@ -18,7 +18,18 @@ async function audit(url) {
     const res = await lighthouse(
       url,
       { port: chrome.port, output: "json", logLevel: "error", onlyCategories: ["performance"] },
-      { extends: "lighthouse:default", settings: { formFactor: "desktop", screenEmulation: { disabled: true } } },
+      {
+        extends: "lighthouse:default",
+        settings: {
+          formFactor: "desktop",
+          screenEmulation: { disabled: true },
+          // §16 budgets are desktop/unthrottled. Default Lighthouse applies
+          // simulated mobile throttling (4x CPU + slow-4G) which inflated FCP to
+          // ~5s. "provided" measures the actual environment with no artificial
+          // throttle — the right comparison for the desktop budget.
+          throttlingMethod: "provided",
+        },
+      },
     );
     const a = res.lhr.audits;
     return {

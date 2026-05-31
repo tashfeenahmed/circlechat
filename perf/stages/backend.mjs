@@ -63,6 +63,7 @@ export async function runBackend() {
         email: uniqueEmail(),
         password: "perftest12345",
         name: "Perf Bench",
+        handle: `perfb${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
         workspaceName: "Perf Bench WS",
       }),
     });

@@ -33,6 +33,7 @@ export async function runWsload() {
         email: `perfws_${Date.now()}_${Math.floor(Math.random() * 1e6)}@perf.local`,
         password: "perftest12345",
         name: "Perf WS",
+        handle: `perfw${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
         workspaceName: "Perf WS Load",
       }),
     });
