@@ -1,0 +1,16 @@
+{
+  "_comment": "Budgets from PLAN.html §16. 'budget' is the absolute target; 'regressionPct' is the allowed drift vs baseline before a metric is flagged REGRESSED (the §16 rule: FCP-class 10%, send-to-render-class 20%). 'gate' marks which metrics would block in a future --strict run; everything is report-only today. lowerIsBetter=false only for throughput.",
+  "metrics": {
+    "client_bundle_gzip_kb": { "budget": 180, "regressionPct": 10, "lowerIsBetter": true, "gate": true, "unit": "kB", "label": "Client bundle (initial, gzip)" },
+    "fcp_login_ms":          { "budget": 800, "regressionPct": 10, "lowerIsBetter": true, "gate": true, "unit": "ms", "label": "First Contentful Paint (/login)" },
+    "lcp_login_ms":          { "budget": 1200, "regressionPct": 10, "lowerIsBetter": true, "gate": false, "unit": "ms", "label": "Largest Contentful Paint (/login)" },
+    "tbt_login_ms":          { "budget": 200, "regressionPct": 15, "lowerIsBetter": true, "gate": false, "unit": "ms", "label": "Total Blocking Time (/login)" },
+    "tti_login_ms":          { "budget": 250, "regressionPct": 10, "lowerIsBetter": true, "gate": false, "unit": "ms", "label": "Time To Interactive (/login, cold — informational; §16 budget is warm/cached)" },
+    "perf_score_login":      { "budget": 90, "regressionPct": 10, "lowerIsBetter": false, "gate": false, "unit": "/100", "label": "Lighthouse perf score (/login)" },
+    "fcp_signup_ms":         { "budget": 800, "regressionPct": 10, "lowerIsBetter": true, "gate": false, "unit": "ms", "label": "First Contentful Paint (/signup)" },
+    "api_post_message_p50_ms": { "budget": 30, "regressionPct": 20, "lowerIsBetter": true, "gate": false, "unit": "ms", "label": "POST message round-trip p50 (server-side proxy for send-to-render; §16 30ms budget is client optimistic-UI)" },
+    "api_post_message_p95_ms": { "budget": 120, "regressionPct": 20, "lowerIsBetter": true, "gate": true, "unit": "ms", "label": "POST message round-trip p95" },
+    "ws_fanout_p95_ms":      { "budget": 120, "regressionPct": 20, "lowerIsBetter": true, "gate": true, "unit": "ms", "label": "WS fan-out p95 (POST -> message.new on a subscribed socket)" },
+    "ws_throughput_msgs_per_sec": { "budget": 50000, "regressionPct": 20, "lowerIsBetter": false, "gate": false, "unit": "msg/s", "label": "WS delivered throughput (scaled-down proxy for the >50k/core budget — see README)" }
+  }
+}
