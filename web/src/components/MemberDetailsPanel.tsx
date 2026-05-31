@@ -1,9 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { X, MessageSquare, ExternalLink } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { X, MessageSquare, ExternalLink, Pencil } from "lucide-react";
 import { useBus } from "../state/store";
+import { api } from "../api/client";
 import Avatar from "./Avatar";
 import { usePaneResize } from "../lib/usePaneResize";
+import { AssignDialog, type OrgNode } from "../pages/Org";
 
 export default function MemberDetailsPanel() {
   const memberId = useBus((s) => s.detailsMemberId);
@@ -14,6 +17,23 @@ export default function MemberDetailsPanel() {
   const setWidth = useBus((s) => s.setDetailsWidth);
   const startResize = usePaneResize(width, setWidth);
   const nav = useNavigate();
+  const [assigning, setAssigning] = useState(false);
+
+  // Org tree — used to show & edit who this member reports to.
+  const org = useQuery({
+    queryKey: ["org"],
+    queryFn: () => api.get<{ nodes: OrgNode[] }>("/org"),
+    enabled: !!memberId,
+  });
+  const orgNodes = org.data?.nodes ?? [];
+  const orgNode = useMemo(
+    () => orgNodes.find((n) => n.memberId === memberId) ?? null,
+    [orgNodes, memberId],
+  );
+  const manager = useMemo(
+    () => (orgNode?.reportsTo ? orgNodes.find((n) => n.memberId === orgNode.reportsTo) ?? null : null),
+    [orgNodes, orgNode],
+  );
 
   const member = useMemo(() => (memberId ? dir[memberId] : null), [memberId, dir]);
   if (!memberId || !member) return null;
@@ -98,6 +118,20 @@ export default function MemberDetailsPanel() {
               <dd className="font-mono text-[12px]">{status}</dd>
             </>
           )}
+          <dt>Reports to</dt>
+          <dd className="inline-flex items-center gap-1.5 min-w-0">
+            <span className="truncate">{manager ? manager.name : "Top of tree"}</span>
+            {orgNode && (
+              <button
+                type="button"
+                onClick={() => setAssigning(true)}
+                className="tb-btn shrink-0"
+                title="Change manager"
+              >
+                <Pencil size={11} strokeWidth={2} />
+              </button>
+            )}
+          </dd>
         </dl>
 
         {brief && (
@@ -107,6 +141,14 @@ export default function MemberDetailsPanel() {
           </div>
         )}
       </div>
+
+      {assigning && orgNode && (
+        <AssignDialog
+          target={orgNode}
+          all={orgNodes}
+          onClose={() => setAssigning(false)}
+        />
+      )}
     </aside>
   );
 }
