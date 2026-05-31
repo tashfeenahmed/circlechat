@@ -302,6 +302,23 @@ docker compose up -d --build
 
 Caddy handles HTTPS automatically if you point a real domain at the host (set `PUBLIC_BASE_URL=https://chat.yourdomain.com` and edit `Caddyfile`).
 
+Database migrations run automatically when the `api` container starts, so a fresh `up` boots a working schema.
+
+### Agents (self-hosted runtime)
+
+The base stack runs the chat app. To let CircleChat provision and run **Hermes / OpenClaw** agents, enable the agent runtime overlay:
+
+```bash
+# one-time host setup
+sudo mkdir -p /opt/hermes-homes && sudo chmod 777 /opt/hermes-homes
+docker pull nousresearch/hermes-agent:latest
+docker pull alpine/openclaw:latest
+
+docker compose -f compose.yml -f compose.agents.yml up -d --build
+```
+
+This adds a `bridge` service and mounts the host Docker socket into `api`/`worker`/`bridge` so they can spawn agent containers. **Security:** the Docker socket grants root-equivalent host access to those containers — only enable on a host you control. Point agents at your LLM gateway (e.g. [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)) when provisioning them in the UI.
+
 ### Deploy to a Raspberry Pi (or any bare-metal host)
 
 Replicated in production on a Pi 4:
@@ -318,8 +335,8 @@ ssh pi@your-host 'systemctl --user restart circlechat-api circlechat-worker circ
 ### Common ops
 
 ```bash
-# Apply migrations
-docker compose run --rm api npm run db:migrate
+# Migrations run automatically on api start; to apply them manually:
+docker compose run --rm api node dist/db/migrate.js
 
 # Tail logs
 docker compose logs -f api worker web

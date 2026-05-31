@@ -4,10 +4,14 @@
 }
 
 :80, :443 {
-    encode br zstd gzip
+    # caddy:2 ships zstd + gzip but NOT brotli — listing `br` makes Caddy fail
+    # to start ("encoder module br not registered").
+    encode zstd gzip
 
+    # The API namespaces every route under /api itself (e.g. /api/auth/login).
+    # Do NOT strip the prefix here, or requests reach the API as /auth/login
+    # and 404.
     handle /api/* {
-        uri strip_prefix /api
         reverse_proxy api:3000
     }
 
@@ -19,8 +23,8 @@
         reverse_proxy api:3000
     }
 
-    handle /uploads/* {
-        uri strip_prefix /uploads
+    # Auth-checked file serving lives at /files/<key> on the API.
+    handle /files/* {
         reverse_proxy api:3000
     }
 
