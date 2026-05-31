@@ -89,6 +89,37 @@ export default async function notificationRoutes(app: FastifyInstance): Promise<
     return { ok: true };
   });
 
+  // Mark every unread notification that points at a given conversation read.
+  // Called when the user opens that conversation, so landing on a channel/DM
+  // clears its mention/DM notifications without clicking each one.
+  app.post("/notifications/read-by-conversation", async (req, reply) => {
+    const memberId = req.auth!.memberId!;
+    const Body = z.object({ conversationId: z.string().min(1) });
+    const parsed = Body.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "conversationId_required" });
+    const rows = await db
+      .update(notifications)
+      .set({ readAt: new Date() })
+      .where(
+        and(
+          eq(notifications.memberId, memberId),
+          eq(notifications.conversationId, parsed.data.conversationId),
+          isNull(notifications.readAt),
+        ),
+      )
+      .returning({ id: notifications.id });
+    // Push a read event per affected row so the bell updates live (reuses the
+    // single-id read handler the client already has). Usually only a handful.
+    for (const r of rows) {
+      await publishToMember(memberId, {
+        type: "notification.read",
+        memberId,
+        notificationId: r.id,
+      });
+    }
+    return { ok: true, count: rows.length };
+  });
+
   // Mark all the caller's notifications read.
   app.post("/notifications/read-all", async (req) => {
     const memberId = req.auth!.memberId!;

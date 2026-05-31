@@ -363,6 +363,20 @@ export function useMarkAllNotificationsRead() {
   });
 }
 
+// Mark every notification for one conversation read — called when the user
+// opens that conversation, so they don't have to click each notification.
+export function useMarkConversationNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (conversationId: string) =>
+      api.post(`/notifications/read-by-conversation`, { conversationId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+      qc.invalidateQueries({ queryKey: ["notifications", "unread"] });
+    },
+  });
+}
+
 // ─────────────────── Workspace member admin + invites ───────────────────
 
 export interface WorkspaceMemberRow {
