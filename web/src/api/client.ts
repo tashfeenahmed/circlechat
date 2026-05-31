@@ -249,3 +249,27 @@ export interface ApprovalRow {
   decidedAt: string | null;
   createdAt: string;
 }
+
+export type NotificationKind =
+  | "mention"
+  | "dm"
+  | "task_assigned"
+  | "task_comment"
+  | "approval"
+  | "system";
+
+export interface Notification {
+  id: string;
+  workspaceId: string;
+  memberId: string;
+  kind: NotificationKind;
+  actorMemberId: string | null;
+  title: string;
+  body: string;
+  link: string;
+  conversationId: string | null;
+  messageId: string | null;
+  taskId: string | null;
+  readAt: string | null;
+  createdAt: string;
+}

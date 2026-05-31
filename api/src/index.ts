@@ -21,6 +21,7 @@ import agentInstallRoutes from "./routes/agent-install.js";
 import agentAttachRoutes from "./routes/agent-attach.js";
 import agentSkillsRoutes from "./routes/agent-skills.js";
 import searchRoutes from "./routes/search.js";
+import notificationRoutes from "./routes/notifications.js";
 import { fileServeRoutes, fileDirectoryRoutes } from "./routes/files.js";
 import eventsWs from "./ws/events.js";
 import agentSocketWs from "./ws/agent-socket.js";
@@ -78,6 +79,7 @@ await app.register(agentSkillsRoutes, { prefix: "/api" });
 await app.register(approvalRoutes, { prefix: "/api" });
 await app.register(agentApiRoutes, { prefix: "/api" });
 await app.register(searchRoutes, { prefix: "/api" });
+await app.register(notificationRoutes, { prefix: "/api" });
 await app.register(fileDirectoryRoutes, { prefix: "/api" });
 // Auth-checked file serving — registered at root so URLs are /files/<key>
 // and not /api/files/<key>. Must run before fastifyStatic so the route matches.

@@ -234,7 +234,10 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       adapter: "socket",
       configJson: {},
       model: body.model ?? "",
-      scopes: ["channels.read", "channels.reply"],
+      // Default scopes cover the everyday agent surface: read + reply in
+      // channels/DMs and manage the task board. Out-of-scope actions gate on a
+      // human approval when ENFORCE_AGENT_SCOPES is enabled (off by default).
+      scopes: ["channels.read", "channels.reply", "tasks.write"],
       status: "provisioning",
       title: body.title ?? "",
       brief: body.brief ?? "",
@@ -454,7 +457,10 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       adapter: "socket",
       configJson: {},
       model: body.model ?? "",
-      scopes: ["channels.read", "channels.reply"],
+      // Default scopes cover the everyday agent surface: read + reply in
+      // channels/DMs and manage the task board. Out-of-scope actions gate on a
+      // human approval when ENFORCE_AGENT_SCOPES is enabled (off by default).
+      scopes: ["channels.read", "channels.reply", "tasks.write"],
       status: "provisioning",
       title: body.title ?? "",
       brief: body.brief ?? "",

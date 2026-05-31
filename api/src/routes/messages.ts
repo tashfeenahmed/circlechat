@@ -17,6 +17,7 @@ import { id } from "../lib/ids.js";
 import { publishToConversation } from "../lib/events.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { fireChannelPostTrigger } from "../agents/mention-triggers.js";
+import { notifyForMessage } from "../lib/notifications.js";
 
 const PostBody = z.object({
   bodyMd: z.string().min(1).max(20_000),
@@ -168,6 +169,17 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
 
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1);
     if (conv) {
+      // Inbox notifications for human recipients (DM + direct mentions). Agents
+      // are woken by the trigger logic below, not the inbox. Fire-and-forget.
+      notifyForMessage({
+        workspaceId: req.auth!.workspaceId!,
+        conversationId: convId,
+        messageId: msgId,
+        authorMemberId: memberId,
+        bodyMd: body.bodyMd,
+        directMentionIds,
+        isDm: conv.kind === "dm",
+      }).catch((e) => req.log.warn({ err: (e as Error).message }, "notifyForMessage"));
       if (conv.kind === "dm") {
         const agentsInConv = await db
           .select({ memberId: members.id, agentId: agents.id })

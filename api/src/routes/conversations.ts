@@ -11,6 +11,7 @@ import {
   agents,
   messages,
   reactions,
+  presence,
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
@@ -131,8 +132,12 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
         ...r,
         memberIds: byConv.get(r.id) ?? [],
         lastMessageAt: lastTsMap.get(r.id) ?? null,
-        unreadCount: unreadMap.get(r.id)?.unread ?? 0,
-        unreadMentions: unreadMap.get(r.id)?.mentions ?? 0,
+        // Muted conversations never contribute to the sidebar badges. The real
+        // counts are still computed; we just zero them out in the response so a
+        // muted channel doesn't nag. The UI can still show a subtle dot off the
+        // `muted` flag if it wants.
+        unreadCount: r.muted ? 0 : unreadMap.get(r.id)?.unread ?? 0,
+        unreadMentions: r.muted ? 0 : unreadMap.get(r.id)?.mentions ?? 0,
       })),
     };
   });
@@ -306,6 +311,45 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
     return { ok: true };
   });
 
+  // Reverse of archive — admin-only. Brings a channel back into the active list.
+  app.post("/conversations/:id/unarchive", async (req, reply) => {
+    const convId = (req.params as { id: string }).id;
+    const memberId = req.auth!.memberId!;
+    const [m] = await db
+      .select()
+      .from(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, convId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      );
+    if (!m || m.role !== "admin") return reply.code(403).send({ error: "not_admin" });
+    await db.update(conversations).set({ archived: false }).where(eq(conversations.id, convId));
+    return { ok: true };
+  });
+
+  // Mute / unmute a conversation for the caller only — flips the per-member
+  // `muted` flag. Muted conversations are excluded from the sidebar unread/
+  // mention badges (see the unread query in GET /conversations). Body: { muted }.
+  app.post("/conversations/:id/mute", async (req, reply) => {
+    const convId = (req.params as { id: string }).id;
+    const memberId = req.auth!.memberId!;
+    const body = z.object({ muted: z.boolean() }).parse(req.body);
+    const res = await db
+      .update(conversationMembers)
+      .set({ muted: body.muted })
+      .where(
+        and(
+          eq(conversationMembers.conversationId, convId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      )
+      .returning({ conversationId: conversationMembers.conversationId });
+    if (res.length === 0) return reply.code(403).send({ error: "not_a_member" });
+    return { ok: true, muted: body.muted };
+  });
+
   // Admin-only rename / retopic. DMs are name-less — reject those so the UI
   // can't accidentally expose a rename control on a DM row.
   app.patch("/conversations/:id", async (req, reply) => {
@@ -438,5 +482,45 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
       .orderBy(desc(agents.createdAt));
 
     return { humans: u, agents: a };
+  });
+
+  // Presence snapshot for every member of the current workspace. Reads the
+  // persistent presence table (kept current by the events WS on connect/
+  // disconnect). A row whose lastSeen is older than the stale window is
+  // reported as "offline" regardless of its stored status, so a crashed tab
+  // that never sent a close frame doesn't linger as "online" forever.
+  app.get("/presence", async (req) => {
+    const workspaceId = req.auth!.workspaceId!;
+    const STALE_MS = Number(process.env.PRESENCE_STALE_MS ?? 90_000);
+
+    const memberRows = await db
+      .select({ id: members.id })
+      .from(members)
+      .where(eq(members.workspaceId, workspaceId));
+    const memberIds = memberRows.map((r) => r.id);
+    if (!memberIds.length) return { presence: [] };
+
+    const rows = await db
+      .select({
+        memberId: presence.memberId,
+        status: presence.status,
+        lastSeen: presence.lastSeen,
+      })
+      .from(presence)
+      .where(inArray(presence.memberId, memberIds));
+
+    const now = Date.now();
+    const byId = new Map(rows.map((r) => [r.memberId, r]));
+    return {
+      presence: memberIds.map((id) => {
+        const r = byId.get(id);
+        const stale = !r || now - new Date(r.lastSeen).getTime() > STALE_MS;
+        return {
+          memberId: id,
+          status: stale ? "offline" : r!.status,
+          lastSeen: r?.lastSeen ?? null,
+        };
+      }),
+    };
   });
 }

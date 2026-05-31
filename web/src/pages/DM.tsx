@@ -1,5 +1,6 @@
 import { useParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Bell, BellOff } from "lucide-react";
 import MessageList from "../components/MessageList";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
@@ -79,6 +80,19 @@ export default function DMPage() {
     [threadConvId, threadRootId, convId, msgs.data?.messages],
   );
 
+  const dmMuted = !!(convId
+    ? convs.data?.conversations.find((c) => c.id === convId)?.muted
+    : false);
+  async function toggleMute() {
+    if (!convId) return;
+    try {
+      await api.post(`/conversations/${convId}/mute`, { muted: !dmMuted });
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
+    } catch (e) {
+      alert(`Mute failed: ${(e as Error).message}`);
+    }
+  }
+
   return (
     <main className="flex h-full min-w-0 min-h-0 flex-1 bg-white overflow-hidden">
       <div className="workspace flex-1 min-w-0">
@@ -87,6 +101,16 @@ export default function DMPage() {
           <div className="ch-title">{otherName}</div>
           <div className="ch-meta">
             <span className="font-mono text-[12px]">@{otherHandle}</span>
+          </div>
+          <div className="ch-right">
+            <button
+              className="ch-btn"
+              title={dmMuted ? "Unmute conversation" : "Mute conversation"}
+              onClick={toggleMute}
+              disabled={!convId}
+            >
+              {dmMuted ? <BellOff size={14} strokeWidth={2} /> : <Bell size={14} strokeWidth={2} />}
+            </button>
           </div>
         </header>
         {convId ? (

@@ -704,6 +704,99 @@ input, textarea { font: inherit; color: inherit; }
 }
 .tb-btn:hover { background: var(--color-hi); color: var(--color-ink); }
 
+/* ─── notification bell + dropdown ─── */
+.notif-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--color-err);
+  color: #fff;
+  font-size: 9.5px;
+  line-height: 15px;
+  font-weight: 600;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+.notif-popover {
+  background: var(--color-paper);
+  border: 1px solid var(--color-hair-2);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+  width: 340px;
+  max-width: calc(100vw - 20px);
+  z-index: 80;
+  overflow: hidden;
+}
+.notif-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--color-hair);
+}
+.notif-title { font-size: 13px; font-weight: 600; color: var(--color-ink); }
+.notif-readall {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--color-muted);
+}
+.notif-readall:hover { color: var(--color-ink); }
+.notif-list { max-height: 420px; overflow-y: auto; }
+.notif-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--color-muted);
+}
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-hair);
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: var(--color-hi); }
+.notif-item.unread { background: rgba(0, 0, 0, 0.025); }
+.notif-item-icon {
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--color-muted);
+  flex: 0 0 auto;
+}
+.notif-item.unread .notif-item-icon { color: var(--color-ink); }
+.notif-item-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.notif-item-title {
+  font-size: 12.5px;
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notif-item.unread .notif-item-title { font-weight: 600; }
+.notif-item-text {
+  font-size: 12px;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notif-item-time {
+  font-size: 11px;
+  color: var(--color-muted-2);
+  font-family: var(--font-mono);
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 /* ─── rail (workspace column, 56px) ─── */
 .rail {
   background: var(--color-rail);

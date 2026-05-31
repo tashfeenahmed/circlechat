@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, Hash, MessageSquare, Eye, AlertTriangle, Search } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { FolderOpen, Hash, MessageSquare, Eye, AlertTriangle, Search, Trash2 } from "lucide-react";
 import { api } from "../api/client";
+import { useMe } from "../lib/hooks";
 import { useBus } from "../state/store";
 import { kindFor, ICON_FOR, STYLE_FOR } from "../lib/fileKind";
 
@@ -14,11 +15,16 @@ interface FileRow {
   url: string;
   exists: boolean;
   onDiskSize: number | null;
-  messageId: string;
-  conversationId: string;
-  conversationKind: "channel" | "dm";
+  // Discriminator — chat message vs. task-comment attachment.
+  source: "message" | "task_comment";
+  messageId: string | null;
+  conversationId: string | null;
+  conversationKind: "channel" | "dm" | null;
   conversationName: string | null;
   conversationOtherMemberId: string | null;
+  taskId: string | null;
+  taskTitle: string | null;
+  commentId: string | null;
   ts: string;
   author: { name: string; handle: string; kind: "user" | "agent" } | null;
 }
@@ -26,11 +32,43 @@ interface FileRow {
 export default function FilesPage() {
   const [q, setQ] = useState("");
   const openViewer = useBus((s) => s.openViewer);
+  const me = useMe();
+  const qc = useQueryClient();
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const myHandle = me.data?.user.handle;
+  const myWs = me.data?.workspaces.find((w) => w.id === me.data?.workspaceId);
+  const isAdmin = myWs?.role === "admin";
+
   const files = useQuery({
     queryKey: ["files"],
     queryFn: () => api.get<{ files: FileRow[] }>("/files"),
     refetchOnWindowFocus: true,
   });
+
+  // A file is deletable by its author (matched on handle) or a workspace admin.
+  // The backend enforces the same rule — this just decides whether to show the
+  // control so most users don't see a button that would 403.
+  function canDelete(f: FileRow): boolean {
+    return isAdmin || (!!myHandle && f.author?.kind === "user" && f.author.handle === myHandle);
+  }
+
+  async function deleteFile(f: FileRow) {
+    const rowKey = `${f.source}:${f.messageId ?? f.commentId}:${f.key}`;
+    if (!confirm(`Delete "${f.name}"? This removes the attachment and the file from storage.`)) return;
+    setDeleting(rowKey);
+    try {
+      await api.post("/files/delete", {
+        key: f.key,
+        source: f.source,
+        id: f.source === "message" ? f.messageId : f.commentId,
+      });
+      await qc.invalidateQueries({ queryKey: ["files"] });
+    } catch (e) {
+      alert(`Delete failed: ${(e as Error).message}`);
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   const rows = useMemo(() => {
     const all = files.data?.files ?? [];
@@ -49,7 +87,7 @@ export default function FilesPage() {
       rows
         .filter((f) => f.exists)
         .map((f) => ({
-          key: `${f.messageId}:${f.key}`,
+          key: `${f.messageId ?? f.commentId}:${f.key}`,
           name: f.name,
           contentType: f.contentType,
           size: f.size,
@@ -105,8 +143,9 @@ export default function FilesPage() {
                 : f.conversationOtherMemberId
                   ? `/d/${f.conversationOtherMemberId}`
                   : null;
+            const rowKey = `${f.source}:${f.messageId ?? f.commentId}:${f.key}`;
             const viewerFile = {
-              key: `${f.messageId}:${f.key}`,
+              key: `${f.messageId ?? f.commentId}:${f.key}`,
               name: f.name,
               contentType: f.contentType,
               size: f.size,
@@ -118,7 +157,7 @@ export default function FilesPage() {
             const style = STYLE_FOR[kind];
             return (
               <li
-                key={`${f.messageId}:${f.key}`}
+                key={rowKey}
                 className={`px-6 py-2.5 flex items-center gap-3 hover:bg-[var(--color-hi)] ${
                   !f.exists ? "opacity-60" : ""
                 }`}
@@ -174,7 +213,15 @@ export default function FilesPage() {
                     )}
                   </div>
                   <div className="text-[12px] text-[var(--color-muted)] mt-0.5 inline-flex items-center gap-2 flex-wrap">
-                    {convLink ? (
+                    {f.source === "task_comment" ? (
+                      <Link
+                        to={`/board?task=${f.taskId}`}
+                        className="inline-flex items-center gap-1 hover:underline"
+                      >
+                        <MessageSquare size={11} strokeWidth={2} />
+                        {f.taskTitle ?? "task"}
+                      </Link>
+                    ) : convLink ? (
                       <Link to={convLink} className="inline-flex items-center gap-1 hover:underline">
                         {f.conversationKind === "channel" ? (
                           <Hash size={11} strokeWidth={2} />
@@ -212,16 +259,30 @@ export default function FilesPage() {
                     </span>
                   </div>
                 </div>
-                {f.exists && (
-                  <button
-                    type="button"
-                    onClick={onOpen}
-                    className="btn sm ghost inline-flex items-center gap-1"
-                    title="Preview file"
-                  >
-                    <Eye size={13} strokeWidth={2} /> Preview
-                  </button>
-                )}
+                <div className="inline-flex items-center gap-1 shrink-0">
+                  {f.exists && (
+                    <button
+                      type="button"
+                      onClick={onOpen}
+                      className="btn sm ghost inline-flex items-center gap-1"
+                      title="Preview file"
+                    >
+                      <Eye size={13} strokeWidth={2} /> Preview
+                    </button>
+                  )}
+                  {canDelete(f) && (
+                    <button
+                      type="button"
+                      onClick={() => deleteFile(f)}
+                      disabled={deleting === rowKey}
+                      className="btn sm ghost inline-flex items-center gap-1 text-[var(--color-err)]"
+                      title="Delete file"
+                    >
+                      <Trash2 size={13} strokeWidth={2} />
+                      {deleting === rowKey ? "Deleting…" : "Delete"}
+                    </button>
+                  )}
+                </div>
               </li>
             );
           })}

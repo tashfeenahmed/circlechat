@@ -1,10 +1,27 @@
 import { FastifyInstance } from "fastify";
 import { eq, and, inArray, or, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { agentRuns, agents, conversationMembers } from "../db/schema.js";
+import { agentRuns, agents, conversationMembers, presence } from "../db/schema.js";
 import { COOKIE_NAME, loadSession } from "../auth/session.js";
 import { subscribe, unsubscribeAll } from "./bus.js";
 import { CONV_CHANNEL, WORKSPACE_CHANNEL, USER_CHANNEL, GLOBAL_CHANNEL, publishGlobal } from "../lib/events.js";
+
+// Upsert the persistent presence row alongside the live broadcast. The table
+// is the durable shadow of the in-flight WS state — it survives reconnects and
+// lets REST callers (GET /presence) read who's around without a socket.
+async function writePresence(memberId: string, status: string): Promise<void> {
+  try {
+    await db
+      .insert(presence)
+      .values({ memberId, status, lastSeen: new Date() })
+      .onConflictDoUpdate({
+        target: presence.memberId,
+        set: { status, lastSeen: new Date() },
+      });
+  } catch {
+    // presence is best-effort — never let it break the socket lifecycle
+  }
+}
 
 export default async function eventsWs(app: FastifyInstance): Promise<void> {
   app.get(
@@ -138,10 +155,12 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
             if (m) await subscribe(socket, CONV_CHANNEL(data.conversationId));
           }
           if (data.type === "presence") {
+            const status = typeof data.status === "string" ? data.status : "online";
+            await writePresence(memberId, status);
             await publishGlobal({
               type: "presence.update",
               memberId,
-              status: typeof data.status === "string" ? data.status : "online",
+              status,
             });
           }
         } catch {
@@ -152,9 +171,11 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
       socket.on("close", async () => {
         clearInterval(ping);
         await unsubscribeAll(socket);
+        await writePresence(memberId, "offline");
         await publishGlobal({ type: "presence.update", memberId, status: "offline" });
       });
 
+      await writePresence(memberId, "online");
       await publishGlobal({ type: "presence.update", memberId, status: "online" });
     },
   );
