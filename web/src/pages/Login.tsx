@@ -3,6 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { api } from "../api/client";
 import { humanizeError } from "../api/errors";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRegistrationOpen } from "../lib/hooks";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -10,6 +11,7 @@ export default function LoginPage() {
   const [err, setErr] = useState<string | null>(null);
   const nav = useNavigate();
   const qc = useQueryClient();
+  const reg = useRegistrationOpen();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -59,9 +61,11 @@ export default function LoginPage() {
             Sign in
           </button>
         </form>
-        <p className="text-[12px] text-[var(--color-muted)] mt-5 text-center">
-          No workspace yet? <Link to="/signup" className="text-[var(--color-accent-blue)]">Create one</Link>
-        </p>
+        {reg.data?.open && (
+          <p className="text-[12px] text-[var(--color-muted)] mt-5 text-center">
+            No workspace yet? <Link to="/signup" className="text-[var(--color-accent-blue)]">Create one</Link>
+          </p>
+        )}
       </div>
     </div>
   );

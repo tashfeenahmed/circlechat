@@ -35,6 +35,18 @@ export function useMe() {
   });
 }
 
+// Whether organic signup is still allowed (true only on a brand-new, zero-user
+// platform). Single-admin model: once the admin exists, signup is closed and
+// the UI shows login only. Backend is the real gate; this just drives the UI.
+export function useRegistrationOpen() {
+  return useQuery<{ open: boolean }>({
+    queryKey: ["registration-open"],
+    queryFn: () => api.get("/auth/registration-open"),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
 export function useConversations() {
   const qc = useQueryClient();
   const q = useQuery<{ conversations: Conversation[] }>({

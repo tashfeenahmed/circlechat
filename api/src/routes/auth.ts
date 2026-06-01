@@ -59,9 +59,24 @@ const AcceptInviteBody = z.object({
 });
 
 export default async function authRoutes(app: FastifyInstance): Promise<void> {
+  // Public: is organic signup still allowed? True only while the platform has
+  // zero users — this is a single-admin platform, so signup is a one-time
+  // bootstrap. The frontend uses this to decide signup vs login.
+  app.get("/auth/registration-open", async () => {
+    const [u] = await db.select({ id: users.id }).from(users).limit(1);
+    return { open: !u };
+  });
+
   // ─────────── signup: creates a user + a brand-new workspace ───────────
   app.post("/auth/signup", async (req, reply) => {
     const body = SignupBody.parse(req.body);
+
+    // Single-admin platform: only the very first user may sign up (the admin).
+    // After that, registration is closed — additional people join only via an
+    // admin invite and cannot create their own workspaces. Enforced server-side
+    // so a stale client or a direct API call can't bypass it.
+    const [anyUser] = await db.select({ id: users.id }).from(users).limit(1);
+    if (anyUser) return reply.code(403).send({ error: "registration_closed" });
 
     const [existUser] = await db
       .select({ id: users.id })

@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Route, Routes, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { bus } from "./ws/client";
-import { useMe, usePresenceBus } from "./lib/hooks";
+import { useMe, usePresenceBus, useRegistrationOpen } from "./lib/hooks";
 import AppShell from "./components/AppShell";
 import SignupPage from "./pages/Signup";
 import LoginPage from "./pages/Login";
@@ -35,6 +35,7 @@ export default function App() {
 
 function Shell() {
   const me = useMe();
+  const reg = useRegistrationOpen();
   const location = useLocation();
   const nav = useNavigate();
   usePresenceBus();
@@ -65,7 +66,15 @@ function Shell() {
   // Kicking the user off /signup at that moment skips the agent step entirely.
   const redirectAwayFromAuth = location.pathname === "/login";
 
-  if (!me.data && !isStandalone) return <Navigate to="/login" replace />;
+  // Single-admin platform: signup is open only on a fresh, zero-user install.
+  // Once closed, an unauthenticated visitor only ever sees /login, and a direct
+  // hit to /signup bounces to /login. While the status is still loading we don't
+  // redirect (avoids a flicker) — the backend rejects a closed signup anyway.
+  const regOpen = reg.data?.open === true;
+  const regClosed = reg.data?.open === false;
+  if (!me.data && location.pathname === "/signup" && regClosed)
+    return <Navigate to="/login" replace />;
+  if (!me.data && !isStandalone) return <Navigate to={regOpen ? "/signup" : "/login"} replace />;
   if (me.data && redirectAwayFromAuth) {
     void nav;
     return <Navigate to="/" replace />;
