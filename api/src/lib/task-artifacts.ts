@@ -2,7 +2,7 @@ import { and, eq, desc, isNull, sql as dsql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db } from "../db/index.js";
 import { taskArtifacts, members, users, agents, type TaskArtifact } from "../db/schema.js";
-import { putObject, publicUrl, readObject } from "./storage.js";
+import { putObject, publicUrl, readObject, deleteObject } from "./storage.js";
 import { id as makeId } from "./ids.js";
 import type { Attachment } from "../db/schema.js";
 
@@ -227,6 +227,21 @@ export async function softDeleteArtifact(artifactId: string): Promise<void> {
     .update(taskArtifacts)
     .set({ deletedAt: new Date() })
     .where(eq(taskArtifacts.id, artifactId));
+}
+
+// Hard-delete every artifact row for these tasks AND unlink their blobs.
+// Called when a task is hard-deleted (deleteTask) — without it the rows + the
+// t/<task>/… objects on disk are orphaned. Includes soft-deleted rows since the
+// whole task is going away. deleteObject is idempotent, so missing blobs are fine.
+export async function purgeArtifactsForTasks(taskIds: string[]): Promise<void> {
+  if (!taskIds.length) return;
+  const { inArray } = await import("drizzle-orm");
+  const rows = await db
+    .select({ storageKey: taskArtifacts.storageKey })
+    .from(taskArtifacts)
+    .where(inArray(taskArtifacts.taskId, taskIds));
+  for (const r of rows) await deleteObject(r.storageKey);
+  await db.delete(taskArtifacts).where(inArray(taskArtifacts.taskId, taskIds));
 }
 
 export async function artifactCount(taskId: string): Promise<number> {
