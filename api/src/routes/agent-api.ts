@@ -15,6 +15,7 @@ import { id as makeId } from "../lib/ids.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
+import { notifyForMessage } from "../lib/notifications.js";
 import { checkReplyBody } from "../agents/reply-guard.js";
 import { checkRecentDuplicate } from "../agents/dedupe.js";
 import { sanitizeAttachments } from "../agents/executor.js";
@@ -336,6 +337,25 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       }).catch((e) =>
         req.log.warn({ err: (e as Error).message }, "agent_mention_triggers"),
       );
+
+      // Inbox notifications for human recipients — an agent DM'ing a user, or
+      // @-mentioning one, via the post_message tool. The executor reply path
+      // already does this; without it here, agent-tool posts landed but never
+      // badged the human's bell. Fire-and-forget, mirrors the human path.
+      const [convRow] = await db
+        .select({ kind: conversations.kind })
+        .from(conversations)
+        .where(eq(conversations.id, body.conversationId))
+        .limit(1);
+      notifyForMessage({
+        workspaceId,
+        conversationId: body.conversationId,
+        messageId: id,
+        authorMemberId: memberId,
+        bodyMd: guard.bodyMd,
+        directMentionIds,
+        isDm: convRow?.kind === "dm",
+      }).catch((e) => req.log.warn({ err: (e as Error).message }, "agent_notify"));
     }
 
     return { id };
