@@ -2,7 +2,7 @@ import { and, eq, desc, isNull, sql as dsql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db } from "../db/index.js";
 import { taskArtifacts, members, users, agents, type TaskArtifact } from "../db/schema.js";
-import { putObject, publicUrl } from "./storage.js";
+import { putObject, publicUrl, readObject } from "./storage.js";
 import { id as makeId } from "./ids.js";
 import type { Attachment } from "../db/schema.js";
 
@@ -10,6 +10,18 @@ import type { Attachment } from "../db/schema.js";
 // can't be used to smuggle in larger payloads than the share path allows.
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024; // 20 MB
 export const MAX_ARTIFACTS_PER_TASK = 500;
+
+// Substance gate (PR E, heuristic v1) — used by done-requires-evidence to
+// reject placeholder/title-only "deliverables" (the junk-file bypass). Cheap
+// and instant; a determined agent could pad past it, but the human-sign-off
+// override covers that and an LLM judge can layer on later.
+export const MIN_SUBSTANTIVE_BYTES = 200; // below this is a stub, not a deliverable
+const TRUST_SIZE_BYTES = 2048;            // above this, trust size; don't read bytes
+const MIN_SUBSTANTIVE_TEXT_CHARS = 120;   // borderline text must carry real content
+
+function normalizeText(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
 
 // One current artifact as the API/UI sees it: the Attachment descriptor (so it
 // drops straight into the existing <Attachments> component / FileViewer) plus
@@ -150,6 +162,45 @@ export async function artifactByStorageKey(key: string): Promise<TaskArtifact | 
     .where(and(eq(taskArtifacts.storageKey, key), isNull(taskArtifacts.deletedAt)))
     .limit(1);
   return row ?? null;
+}
+
+// All live (non-deleted) artifact rows on a task — every version, not deduped
+// by name. Used by the done-evidence gate, which only needs to find ONE
+// substantive deliverable.
+export async function liveArtifactRows(taskId: string): Promise<TaskArtifact[]> {
+  return db
+    .select()
+    .from(taskArtifacts)
+    .where(and(eq(taskArtifacts.taskId, taskId), isNull(taskArtifacts.deletedAt)));
+}
+
+// Heuristic substance check for the done-evidence gate. Tiered to bound I/O:
+//   • size < MIN              → a stub, reject (kills the 26-byte title files)
+//   • size ≥ TRUST_SIZE       → trust it without reading (real work is big)
+//   • binary in between       → accept (image/pdf/zip ≥200B is plausibly real)
+//   • text in between         → read + reject title-echoes and thin content
+export async function isSubstantiveArtifact(
+  row: TaskArtifact,
+  taskTitle: string,
+): Promise<boolean> {
+  if (row.size < MIN_SUBSTANTIVE_BYTES) return false;
+  if (row.size >= TRUST_SIZE_BYTES) return true;
+
+  const ct = (row.contentType || "").toLowerCase();
+  const isText =
+    /^text\/|json|xml|csv|markdown|javascript|typescript|x-sh|yaml|html/.test(ct) ||
+    /\.(md|txt|csv|json|ya?ml|js|ts|tsx|py|sh|html?|sql)$/i.test(row.name);
+  if (!isText) return true; // binary blob over the floor — assume a real file
+
+  const buf = await readObject(row.storageKey);
+  if (!buf) return false;
+  const content = normalizeText(buf.toString("utf8"));
+  if (content.length < MIN_SUBSTANTIVE_TEXT_CHARS) return false;
+  const title = normalizeText(taskTitle || "");
+  // Reject content that is essentially just the task title restated.
+  if (title && (content === title || (content.includes(title) && content.length < title.length + 60)))
+    return false;
+  return true;
 }
 
 export async function loadArtifact(artifactId: string): Promise<TaskArtifact | null> {
