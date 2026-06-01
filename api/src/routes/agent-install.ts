@@ -164,18 +164,32 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       const configPath = join(hermesHome, "config.yaml");
       if (isFreeApi) {
         // FreeLLMAPI is an OpenAI-compatible endpoint declared under
-        // `custom_providers` in Hermes config, NOT via `hermes auth add`. Replace
-        // the empty `custom_providers: []` placeholder with the user's entry.
-        const patched = tmpl.replace(
-          /^custom_providers:\s*\[\]\s*$/m,
-          [
-            "custom_providers:",
-            "- name: freeapi",
-            `  base_url: ${JSON.stringify(body.apiBaseUrl)}`,
-            `  api_key: ${JSON.stringify(body.apiKey)}`,
-            "  api_mode: chat_completions",
-          ].join("\n"),
-        );
+        // `custom_providers` in Hermes config, NOT via `hermes auth add`.
+        //
+        // Write the FULL desired config ourselves — model.provider,
+        // model.default, AND the custom_providers entry — and do NOT call
+        // `hermes config set` afterwards. Some `nousresearch/hermes-agent`
+        // image builds re-serialise config.yaml on `config set`, which drops
+        // the hand-injected `custom_providers` block and resets the provider to
+        // `auto`, leaving the agent with no inference provider ("No inference
+        // provider configured…"). Writing the final file directly is
+        // image-version-agnostic and needs no extra docker runs. See issue #1.
+        let patched = tmpl
+          .replace(/^(model:\n {2}default:).*$/m, `$1 ${body.model ?? "auto"}`)
+          .replace(/^( {2}provider:).*$/m, "$1 custom:freeapi");
+        const block = [
+          "custom_providers:",
+          "- name: freeapi",
+          `  base_url: ${JSON.stringify(body.apiBaseUrl)}`,
+          `  api_key: ${JSON.stringify(body.apiKey)}`,
+          "  api_mode: chat_completions",
+        ].join("\n");
+        // Replace the `custom_providers: []` placeholder if present, otherwise
+        // append. A silent regex no-op on template drift was a second way the
+        // provider config went missing, so never assume the placeholder exists.
+        patched = /^custom_providers:\s*\[\]\s*$/m.test(patched)
+          ? patched.replace(/^custom_providers:\s*\[\]\s*$/m, block)
+          : `${patched.trimEnd()}\n${block}\n`;
         await fs.writeFile(configPath, patched);
       } else {
         await fs.writeFile(configPath, tmpl);
@@ -190,22 +204,25 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
           ...(body.apiKeyLabel ? ["--label", body.apiKeyLabel] : []),
         ]);
         await runCmd(authCmd.cmd, authCmd.args, authCmd.env);
-      }
-      const setProviderCmd = buildHermesCommand(hermesHome, [
-        "config",
-        "set",
-        "model.provider",
-        body.provider,
-      ]);
-      await runCmd(setProviderCmd.cmd, setProviderCmd.args, setProviderCmd.env);
-      if (body.model) {
-        const setModelCmd = buildHermesCommand(hermesHome, [
+        // hosted-provider path still uses `hermes config set` — these providers
+        // are stored in the auth keyring, not custom_providers, so there's no
+        // hand-injected block for a re-serialise to clobber.
+        const setProviderCmd = buildHermesCommand(hermesHome, [
           "config",
           "set",
-          "model.default",
-          body.model,
+          "model.provider",
+          body.provider,
         ]);
-        await runCmd(setModelCmd.cmd, setModelCmd.args, setModelCmd.env);
+        await runCmd(setProviderCmd.cmd, setProviderCmd.args, setProviderCmd.env);
+        if (body.model) {
+          const setModelCmd = buildHermesCommand(hermesHome, [
+            "config",
+            "set",
+            "model.default",
+            body.model,
+          ]);
+          await runCmd(setModelCmd.cmd, setModelCmd.args, setModelCmd.env);
+        }
       }
       // Skill + MCP install MUST happen before any other docker command that
       // might invoke the image's entrypoint, because skills_sync runs as the
