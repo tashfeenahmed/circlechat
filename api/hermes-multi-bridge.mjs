@@ -20,6 +20,11 @@ const HERMES_TIMEOUT = Number(process.env.HERMES_TIMEOUT ?? 180);
 const HERMES_RUNTIME = process.env.CC_HERMES_RUNTIME === "host" ? "host" : "docker";
 const HERMES_IMAGE = process.env.CC_HERMES_IMAGE ?? "nousresearch/hermes-agent:latest";
 const CONTAINER_HERMES_HOME = "/opt/data";
+// Shared, persistent workspace bind-mounted into every agent container at
+// /workspace so files survive the `--rm` teardown and are visible across
+// agents. HOST path (docker daemon resolves -v sources host-side). Empty = off.
+const SHARED_WORKSPACE_DIR = process.env.CC_SHARED_WORKSPACE_DIR ?? "";
+const CONTAINER_WORKSPACE = "/workspace";
 const OPENCLAW_IMAGE = process.env.CC_OPENCLAW_IMAGE ?? "alpine/openclaw:latest";
 const CONTAINER_OPENCLAW_HOME = "/root/.openclaw";
 
@@ -77,6 +82,9 @@ function buildHermesSpawn(hermesHome, hermesArgs, envExtras = {}) {
   for (const [k, v] of Object.entries(envExtras)) {
     if (v !== undefined && v !== null) envArgs.push("-e", `${k}=${v}`);
   }
+  const workspaceMount = SHARED_WORKSPACE_DIR
+    ? ["-v", `${SHARED_WORKSPACE_DIR}:${CONTAINER_WORKSPACE}`]
+    : [];
   const dockerArgs = [
     "run",
     "--rm",
@@ -84,6 +92,7 @@ function buildHermesSpawn(hermesHome, hermesArgs, envExtras = {}) {
     "--network=host",
     "-v",
     `${hermesHome}:${CONTAINER_HERMES_HOME}`,
+    ...workspaceMount,
     ...envArgs,
     HERMES_IMAGE,
     ...hermesArgs,
@@ -622,7 +631,7 @@ function buildPrompt(entry, packet) {
 If you have a real artifact (text, code, list, screenshot) to ship, use share_to_task instead so the file lands on the task card:
 
 <actions>[
-  {"type":"share_to_task","task_id":"<...>","body_md":"<1-line caption>","files":[{"path":"/tmp/result.md","name":"result.md"}]}
+  {"type":"share_to_task","task_id":"<...>","body_md":"<1-line caption>","files":[{"path":"/workspace/result.md","name":"result.md"}]}
 ]</actions>
 
 Priority order:
@@ -669,18 +678,25 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ``,
     `DO IT, DON'T TASK IT. If the user is asking for a direct in-chat thing you can fulfill this turn — share a file from the web, fetch and summarise a page, look something up, send a DM, react — DO IT with the matching action. Don't self-assign a create_task and call it a day. Tasks are for multi-step work that spans sessions, needs delegation, or genuinely needs tracking. "Add cat photos from the web" is NOT a ticket to create — it's a share_files action with URLs you fetched or found.`,
     ``,
+    `WORKSPACE & REAL WORK (read carefully — this is how you avoid losing work):`,
+    `  • Your shell's filesystem is WIPED after every turn, EXCEPT the shared directory /workspace. Anything you write to /tmp, your home, or the current dir is GONE next turn and is invisible to teammates. Write every file you want to keep or share to /workspace (e.g. /workspace/backlink-report.md).`,
+    `  • /workspace is SHARED across all agents and persists. To build on a colleague's file, read it from /workspace — don't recreate it. Before you start a task, ls /workspace and read what's already there instead of starting from scratch.`,
+    `  • To attach a file you wrote, use share_files / share_to_task with {"path":"/workspace/<file>"}. A bare filesystem path mentioned in prose does NOT share anything and the file won't survive — only an explicit share action with a /workspace path actually ships it.`,
+    `  • NEVER fabricate. Do not paste command output, logs, test results, or "Here's the output: …" blocks unless you actually ran the command THIS turn and are quoting its real output. Inventing results, or claiming a script "ran successfully" when you didn't run it, is a lie — worse than saying "not done yet". If you can't verify something, say so and do the next real step.`,
+    `  • Don't re-run the same search every wake. If you searched something last turn, the result is in your memory or on the task card — act on it or escalate; searching the same query again with no new action is spinning, not progress.`,
+    ``,
     `DON'T REPEAT YOURSELF. Before composing a reply, check the recent-messages block: if your planned reply is substantially the same as something YOU already posted in this conversation, emit exactly "HEARTBEAT_OK" instead. Never re-post a canned acknowledgment ("I'll finalize it and share it with the team", "Here's X for you!") when you already said it. If the human followed up and you genuinely have a new concrete answer (a different file, a finished deliverable, a specific update), post that — but paraphrase and reference what you already said rather than repeating it verbatim.`,
     ``,
     `Action types:`,
     `  {"type":"react","message_id":"<id>","emoji":"🙏"}            — react instead of writing an ack/thanks/agreement`,
-    `  {"type":"share_files","conversation_id":"<id>","body_md":"<optional, can be empty>","reply_to":"<optional>","files":[{"url":"https://…","name":"cat.jpg"},{"path":"/tmp/report.pdf","name":"Q3-report.pdf"}]}`,
-    `                                                                — each file entry has EXACTLY ONE of "url" (http/https, server fetches it) or "path" (absolute under /tmp/, server reads from disk). Use this to share web assets OR files you just wrote with the browser skill (e.g. browser pdf /tmp/x.pdf → share_files path /tmp/x.pdf). Up to 10 files, 20MB each. This replaces the old urllib/curl + /agent-api/uploads + <attachments> dance — always prefer share_files.`,
+    `  {"type":"share_files","conversation_id":"<id>","body_md":"<optional, can be empty>","reply_to":"<optional>","files":[{"url":"https://…","name":"cat.jpg"},{"path":"/workspace/report.pdf","name":"Q3-report.pdf"}]}`,
+    `                                                                — each file entry has EXACTLY ONE of "url" (http/https, server fetches it) or "path" (absolute under /workspace/ or /tmp/, server reads from disk). Use this to share web assets OR files you wrote to /workspace this turn. Up to 10 files, 20MB each. This replaces the old urllib/curl + /agent-api/uploads + <attachments> dance — always prefer share_files.`,
     `  {"type":"create_task","title":"…","body_md":"…","status":"backlog|in_progress|review|done","conversation_id":"<optional channel>","parent_id":"<optional parent task_…>","assignees":["<memberId>","<memberId>"],"labels":["eng"],"due_at":"2026-05-01"}`,
     `  {"type":"update_task","task_id":"task_…","status":"in_progress|review|done","progress":50,"title":"…","body_md":"…","due_at":"2026-05-01","archived":true}`,
     `                                                                — moving to "done" REQUIRES EVIDENCE: the task must already have either (a) a comment with at least one attachment (use share_to_task to drop the deliverable), or (b) a human-authored comment after your most recent comment (review/sign-off). If neither is true, the server rejects the update with done_requires_evidence — first emit a share_to_task with the artifact, THEN flip status. To request human review without an artifact, set status="review" instead.`,
     `  {"type":"assign_task","task_id":"task_…","member_id":"m_…"}`,
     `  {"type":"task_comment","task_id":"task_…","body_md":"…","mentions":["m_…"],"attachments":[<optional, hand-rolled descriptors from /uploads>]}`,
-    `  {"type":"share_to_task","task_id":"task_…","body_md":"progress note","files":[{"url":"https://…","name":"snapshot.png"},{"path":"/tmp/report.pdf","name":"Q3.pdf"}]}`,
+    `  {"type":"share_to_task","task_id":"task_…","body_md":"progress note","files":[{"url":"https://…","name":"snapshot.png"},{"path":"/workspace/report.pdf","name":"Q3.pdf"}]}`,
     `                                                                — mirror of share_files but attaches to a task card. Use this to drop progress updates + artifacts (screenshots, PDFs, data files) on tasks you're working on during heartbeats. Files show up on the task AND in the workspace Files tab.`,
     `  {"type":"open_thread","message_id":"<id>","body_md":"…"}      — start a thread reply on a specific message`,
     `  {"type":"set_memory","key":"<snake_case>","value":<any JSON>,"scope":"global|conversation|task","scope_id":"<c_… or task_… (omit for global)>"}  — persist a note across runs. Pick the narrowest scope that applies; existing values are in YOUR MEMORY above.`,
@@ -765,7 +781,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
           `No channel is attached to this heartbeat. You have NO chat surface. Prose you write has nowhere to land and will be dropped silently by the bridge. If you emit only prose and no <actions> block this turn, you accomplished nothing — the work queue advances zero, the team sees nothing.`,
           ``,
           `The ONLY way to make progress this turn is to emit one or more of these actions in an <actions>[...]</actions> block:`,
-          `  • {"type":"share_to_task","task_id":"task_…","body_md":"what I just did","files":[{"url":"…"}|{"path":"/tmp/…"}]}  — attach an artifact (screenshot, PDF, data, written-out answer)`,
+          `  • {"type":"share_to_task","task_id":"task_…","body_md":"what I just did","files":[{"url":"…"}|{"path":"/workspace/…"}]}  — attach an artifact (screenshot, PDF, data, written-out answer)`,
           `  • {"type":"task_comment","task_id":"task_…","body_md":"specific, concrete update"}  — narrate progress concretely (NOT "still working on it")`,
           `  • {"type":"update_task","task_id":"task_…","progress":<0-100>,"status":"in_progress|review|done"}  — bump progress or flip status when you hit a milestone`,
           ``,

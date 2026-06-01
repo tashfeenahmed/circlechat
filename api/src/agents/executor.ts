@@ -882,14 +882,16 @@ async function fetchAgentAttachments(
         contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim() || contentType;
         try { nameHint = new URL(rawUrl).pathname.split("/").pop() ?? ""; } catch { nameHint = ""; }
       } else {
-        // Local path: restrict to /tmp/ to prevent arbitrary reads. The
-        // browser pdf/screenshot commands save here by convention, and
-        // agent-terminal shell blocks default to /tmp scratch space.
+        // Local path: restrict to /tmp/ or the shared /workspace/ to prevent
+        // arbitrary reads. /workspace is the cross-agent shared mount (files
+        // there persist + are visible to every agent and to this API container,
+        // which mounts the same host dir at /workspace); /tmp covers browser
+        // pdf/screenshot outputs and agent-terminal scratch.
         const { resolve: pResolve } = await import("node:path");
         const { promises: fsp } = await import("node:fs");
         const abs = pResolve(rawPath);
-        if (!abs.startsWith("/tmp/")) {
-          trace.push(`${actionLabel} skip: path must be under /tmp/ (got ${abs})`);
+        if (!abs.startsWith("/tmp/") && !abs.startsWith("/workspace/")) {
+          trace.push(`${actionLabel} skip: path must be under /tmp/ or /workspace/ (got ${abs})`);
           continue;
         }
         const stat = await fsp.stat(abs).catch(() => null);
