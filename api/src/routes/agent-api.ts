@@ -17,6 +17,7 @@ import {
   currentArtifacts,
   currentArtifactByName,
   artifactCount,
+  isSubstantiveContent,
   MAX_ARTIFACT_BYTES,
   MAX_ARTIFACTS_PER_TASK,
 } from "../lib/task-artifacts.js";
@@ -791,6 +792,14 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     const { buffer, name, contentType } = resolved;
     if (buffer.length > MAX_ARTIFACT_BYTES)
       return reply.code(413).send({ error: "too_large", maxBytes: MAX_ARTIFACT_BYTES });
+    // Reject placeholders at the source so stub files don't litter the task's
+    // deliverables list. Agents are an untrusted client; humans (the human API)
+    // are not gated. Re-submitting the SAME name with real content versions it.
+    if (!isSubstantiveContent(buffer, contentType, name, t.title))
+      return reply.code(422).send({
+        error: "artifact_not_substantive",
+        hint: "This looks like a placeholder or just the task title — submit the real deliverable (the actual report/script/draft). Reuse the same name to version an existing artifact.",
+      });
 
     const art = await createArtifact({
       taskId,

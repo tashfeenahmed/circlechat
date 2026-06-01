@@ -28,7 +28,7 @@ import {
   loadTask,
 } from "../lib/tasks-core.js";
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
-import { createArtifact } from "../lib/task-artifacts.js";
+import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
 import { notifyForMessage } from "../lib/notifications.js";
 
 export interface AgentAttachment {
@@ -718,6 +718,13 @@ async function applyOne(
           const buf = await readObject(f.key);
           if (!buf) {
             out.trace.push(`share_to_task artifact skip ${f.name}: bytes not found`);
+            continue;
+          }
+          // Don't persist placeholder stubs as durable deliverables (they'd
+          // litter the task's artifacts list); the comment attachment above
+          // still landed for the activity feed.
+          if (!isSubstantiveContent(buf, f.contentType, f.name, targetTask.title)) {
+            out.trace.push(`share_to_task artifact skip ${f.name}: looks like a placeholder, not stored as a deliverable`);
             continue;
           }
           await createArtifact({
