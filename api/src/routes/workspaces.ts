@@ -90,6 +90,15 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
     const sid = req.cookies[COOKIE_NAME];
     if (!sid) return reply.code(401).send({ error: "unauthenticated" });
 
+    // Single-admin platform: only an existing admin may create workspaces.
+    // Invited users join as `member` and cannot spin up their own workspace.
+    const [adminOf] = await db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(and(eq(workspaceMembers.userId, user.id), eq(workspaceMembers.role, "admin")))
+      .limit(1);
+    if (!adminOf) return reply.code(403).send({ error: "workspace_creation_disabled" });
+
     const handle = await deriveUniqueWorkspaceHandle(body.name);
 
     const wsId = id("w");
