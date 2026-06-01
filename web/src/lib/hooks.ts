@@ -359,6 +359,10 @@ export function useMarkAllNotificationsRead() {
     mutationFn: () => api.post(`/notifications/read-all`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notifications"] });
+      qc.invalidateQueries({ queryKey: ["notifications", "unread"] });
+      // read-all now also advances every conversation's read marker server-side,
+      // so refresh the sidebar to clear the per-conversation unread badges too.
+      qc.invalidateQueries({ queryKey: ["conversations"] });
     },
   });
 }
