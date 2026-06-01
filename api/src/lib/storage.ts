@@ -48,6 +48,17 @@ export async function deleteObject(key: string): Promise<void> {
   }
 }
 
+// Remove a whole key prefix subtree (files + dirs) — e.g. a task's t/<id>/
+// folder when the task is deleted. Best-effort + idempotent; the safeJoin guard
+// keeps it inside the storage root.
+export async function removeStoragePrefix(prefix: string): Promise<void> {
+  try {
+    await fs.rm(safeJoin(prefix), { recursive: true, force: true });
+  } catch {
+    // ignore — best-effort cleanup
+  }
+}
+
 export function publicUrl(key: string): string {
   // Absolute so agents (bearer-auth'd curl) can follow the URL directly.
   return `${config.publicBaseUrl.replace(/\/$/, "")}/files/${key}`;

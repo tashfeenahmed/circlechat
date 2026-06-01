@@ -2,7 +2,7 @@ import { and, eq, desc, isNull, sql as dsql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db } from "../db/index.js";
 import { taskArtifacts, members, users, agents, type TaskArtifact } from "../db/schema.js";
-import { putObject, publicUrl, readObject, deleteObject } from "./storage.js";
+import { putObject, publicUrl, readObject, removeStoragePrefix } from "./storage.js";
 import { id as makeId } from "./ids.js";
 import type { Attachment } from "../db/schema.js";
 
@@ -236,12 +236,10 @@ export async function softDeleteArtifact(artifactId: string): Promise<void> {
 export async function purgeArtifactsForTasks(taskIds: string[]): Promise<void> {
   if (!taskIds.length) return;
   const { inArray } = await import("drizzle-orm");
-  const rows = await db
-    .select({ storageKey: taskArtifacts.storageKey })
-    .from(taskArtifacts)
-    .where(inArray(taskArtifacts.taskId, taskIds));
-  for (const r of rows) await deleteObject(r.storageKey);
   await db.delete(taskArtifacts).where(inArray(taskArtifacts.taskId, taskIds));
+  // Every artifact blob for a task lives under t/<taskId>/…, so dropping that
+  // subtree clears the bytes AND the now-empty dirs in one shot.
+  for (const id of taskIds) await removeStoragePrefix(`t/${id}`);
 }
 
 export async function artifactCount(taskId: string): Promise<number> {
