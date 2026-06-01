@@ -3,6 +3,7 @@ import { X, Download, ExternalLink, ChevronLeft, ChevronRight, Loader2 } from "l
 import DOMPurify from "dompurify";
 import { useBus, type ViewerFile } from "../state/store";
 import { renderMarkdown } from "../lib/md";
+import { fileUrl } from "../lib/fileUrl";
 
 type Kind =
   | "image"
@@ -116,7 +117,7 @@ export default function FileViewer() {
           <div className="fv-actions">
             <a
               className="fv-btn"
-              href={file.url}
+              href={fileUrl(file.url)}
               target="_blank"
               rel="noopener noreferrer"
               title="Open in new tab"
@@ -125,7 +126,7 @@ export default function FileViewer() {
             </a>
             <a
               className="fv-btn"
-              href={file.url}
+              href={fileUrl(file.url)}
               download={file.name}
               title="Download"
             >
@@ -167,28 +168,28 @@ function Preview({ file }: { file: ViewerFile }) {
   if (kind === "image") {
     return (
       <div className="fv-center">
-        <img src={file.url} alt={file.name} className="fv-image" />
+        <img src={fileUrl(file.url)} alt={file.name} className="fv-image" />
       </div>
     );
   }
   if (kind === "video") {
     return (
       <div className="fv-center">
-        <video src={file.url} controls className="fv-video" />
+        <video src={fileUrl(file.url)} controls className="fv-video" />
       </div>
     );
   }
   if (kind === "audio") {
     return (
       <div className="fv-center">
-        <audio src={file.url} controls className="fv-audio" />
+        <audio src={fileUrl(file.url)} controls className="fv-audio" />
       </div>
     );
   }
   if (kind === "pdf") {
     return (
       <iframe
-        src={file.url}
+        src={fileUrl(file.url)}
         title={file.name}
         className="fv-iframe"
       />
@@ -250,7 +251,7 @@ function ErrorPane({ err }: { err: string }) {
 }
 
 function MarkdownPreview({ file }: { file: ViewerFile }) {
-  const { text, err, loading } = useTextContent(file.url);
+  const { text, err, loading } = useTextContent(fileUrl(file.url));
   if (loading) return <Spinner />;
   if (err) return <ErrorPane err={err} />;
   const html = DOMPurify.sanitize(renderMarkdown(text ?? ""));
@@ -262,7 +263,7 @@ function MarkdownPreview({ file }: { file: ViewerFile }) {
 }
 
 function HtmlPreview({ file }: { file: ViewerFile }) {
-  const { text, err, loading } = useTextContent(file.url);
+  const { text, err, loading } = useTextContent(fileUrl(file.url));
   if (loading) return <Spinner />;
   if (err) return <ErrorPane err={err} />;
   // Sandboxed srcdoc: scripts disabled, no same-origin, no forms or popups.
@@ -279,7 +280,7 @@ function HtmlPreview({ file }: { file: ViewerFile }) {
 }
 
 function TextPreview({ file }: { file: ViewerFile }) {
-  const { text, err, loading } = useTextContent(file.url);
+  const { text, err, loading } = useTextContent(fileUrl(file.url));
   if (loading) return <Spinner />;
   if (err) return <ErrorPane err={err} />;
   return (
@@ -297,7 +298,7 @@ function Unsupported({ file }: { file: ViewerFile }) {
         This file type ({file.contentType || "unknown"}) can't be previewed in
         the browser. Download it to open locally.
       </div>
-      <a className="btn primary sm" href={file.url} download={file.name}>
+      <a className="btn primary sm" href={fileUrl(file.url)} download={file.name}>
         <Download size={14} /> Download
       </a>
     </div>

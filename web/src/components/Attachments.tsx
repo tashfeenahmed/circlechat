@@ -1,3 +1,4 @@
+import { fileUrl } from "../lib/fileUrl";
 import { ArrowUpRight } from "lucide-react";
 import { useBus } from "../state/store";
 import { kindFor, ICON_FOR, STYLE_FOR, formatSize } from "../lib/fileKind";
@@ -31,7 +32,7 @@ export default function Attachments({ files }: { files: Attachment[] }) {
               className="att-image"
               title={`${f.name} · ${formatSize(f.size)}`}
             >
-              <img src={f.url} alt={f.name} loading="lazy" />
+              <img src={fileUrl(f.url)} alt={f.name} loading="lazy" />
               <span className="att-image-meta">
                 <span className="att-image-name">{f.name}</span>
                 {f.size > 0 && <span className="att-image-size">{formatSize(f.size)}</span>}
