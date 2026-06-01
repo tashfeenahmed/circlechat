@@ -200,6 +200,12 @@ export async function isSubstantiveArtifact(
   // Reject content that is essentially just the task title restated.
   if (title && (content === title || (content.includes(title) && content.length < title.length + 60)))
     return false;
+  // Reject long-but-repetitive content — the obvious dodge once the size floor
+  // bites is to paste the title (or a phrase) N times. Few distinct words
+  // across many total words = padding, not a deliverable.
+  const words = content.split(" ").filter(Boolean);
+  const distinct = new Set(words).size;
+  if (words.length >= 12 && distinct < 8) return false;
   return true;
 }
 
