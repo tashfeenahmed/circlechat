@@ -55,7 +55,7 @@ const InstallOpenClawBody = z.object({
   apiKey: z.string().min(10).max(400),
   apiBaseUrl: z.string().url().max(400).optional(),
   model: z.string().max(120).optional(),
-  heartbeatIntervalSec: z.number().int().min(15).max(3600).optional(),
+  heartbeatIntervalSec: z.number().int().min(15).max(86400).optional(),
   channelIds: z.array(z.string()).optional(),
   // Optional member id the new agent should report to in the org chart —
   // wired by the "+ Add report" PLUS block on /org.
@@ -80,7 +80,7 @@ const InstallHermesBody = z.object({
   // FreeLLMAPI endpoint, stored in HERMES_HOME/config.yaml:custom_providers.
   apiBaseUrl: z.string().url().max(400).optional(),
   model: z.string().max(120).optional(),
-  heartbeatIntervalSec: z.number().int().min(15).max(3600).optional(),
+  heartbeatIntervalSec: z.number().int().min(15).max(86400).optional(),
   channelIds: z.array(z.string()).optional(),
   reportsTo: z.string().max(32).nullable().optional(),
 });

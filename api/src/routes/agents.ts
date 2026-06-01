@@ -29,7 +29,7 @@ const CreateBody = z.object({
   brief: z.string().max(2000).optional(),
   scopes: z.array(z.string()).optional(),
   callbackUrl: z.string().url().optional(),
-  heartbeatIntervalSec: z.number().int().min(5).max(3600).optional(),
+  heartbeatIntervalSec: z.number().int().min(5).max(86400).optional(),
   channelIds: z.array(z.string()).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
 });
@@ -40,7 +40,7 @@ const PatchBody = z.object({
   brief: z.string().max(2000).optional(),
   scopes: z.array(z.string()).optional(),
   callbackUrl: z.string().url().optional(),
-  heartbeatIntervalSec: z.number().int().min(5).max(3600).optional(),
+  heartbeatIntervalSec: z.number().int().min(5).max(86400).optional(),
   model: z.string().max(80).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
 });
