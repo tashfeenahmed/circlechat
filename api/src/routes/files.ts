@@ -172,6 +172,12 @@ export async function fileServeRoutes(app: FastifyInstance): Promise<void> {
     reply.header("content-type", ct);
     reply.header("content-length", String(st.size));
     reply.header("cache-control", "private, max-age=60");
+    // Display in the browser rather than force-downloading. Without this,
+    // navigating to e.g. a text/markdown URL pops a Save dialog. The web
+    // viewer's explicit Download button uses the <a download> attribute, which
+    // overrides this, so "download" still works.
+    const fname = (key.split("/").pop() || "file").replace(/[\r\n"]/g, "_");
+    reply.header("content-disposition", `inline; filename="${fname}"`);
     return reply.send(streamObject(key));
   });
 }

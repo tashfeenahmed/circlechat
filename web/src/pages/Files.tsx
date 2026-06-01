@@ -1,3 +1,4 @@
+import { fileUrl } from "../lib/fileUrl";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -170,7 +171,7 @@ export default function FilesPage() {
                     title={f.name}
                   >
                     <img
-                      src={f.url}
+                      src={fileUrl(f.url)}
                       alt={f.name}
                       loading="lazy"
                       className="w-full h-full object-cover"
