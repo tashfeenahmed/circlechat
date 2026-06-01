@@ -178,27 +178,29 @@ export async function liveArtifactRows(taskId: string): Promise<TaskArtifact[]> 
     .where(and(eq(taskArtifacts.taskId, taskId), isNull(taskArtifacts.deletedAt)));
 }
 
-// Heuristic substance check for the done-evidence gate. Tiered to bound I/O:
-//   • size < MIN              → a stub, reject (kills the 26-byte title files)
-//   • size ≥ TRUST_SIZE       → trust it without reading (real work is big)
-//   • binary in between       → accept (image/pdf/zip ≥200B is plausibly real)
-//   • text in between         → read + reject title-echoes and thin content
-export async function isSubstantiveArtifact(
-  row: TaskArtifact,
+// Heuristic substance check, working on raw bytes so it runs both at SUBMIT
+// time (before a row exists — reject stubs at the source) and at the done-gate.
+// Tiered to bound I/O:
+//   • size < MIN          → a stub, reject (kills the 26-byte title files)
+//   • size ≥ TRUST_SIZE   → trust it (real work is big)
+//   • binary in between   → accept (image/pdf/zip ≥120B is plausibly real)
+//   • text in between     → reject title-echoes and repetitive padding
+export function isSubstantiveContent(
+  buffer: Buffer,
+  contentType: string,
+  name: string,
   taskTitle: string,
-): Promise<boolean> {
-  if (row.size < MIN_SUBSTANTIVE_BYTES) return false;
-  if (row.size >= TRUST_SIZE_BYTES) return true;
+): boolean {
+  if (buffer.length < MIN_SUBSTANTIVE_BYTES) return false;
+  if (buffer.length >= TRUST_SIZE_BYTES) return true;
 
-  const ct = (row.contentType || "").toLowerCase();
+  const ct = (contentType || "").toLowerCase();
   const isText =
     /^text\/|json|xml|csv|markdown|javascript|typescript|x-sh|yaml|html/.test(ct) ||
-    /\.(md|txt|csv|json|ya?ml|js|ts|tsx|py|sh|html?|sql)$/i.test(row.name);
+    /\.(md|txt|csv|json|ya?ml|js|ts|tsx|py|sh|html?|sql)$/i.test(name);
   if (!isText) return true; // binary blob over the floor — assume a real file
 
-  const buf = await readObject(row.storageKey);
-  if (!buf) return false;
-  const content = normalizeText(buf.toString("utf8"));
+  const content = normalizeText(buffer.toString("utf8"));
   if (content.length < MIN_SUBSTANTIVE_TEXT_CHARS) return false;
   const title = normalizeText(taskTitle || "");
   // Reject content that is essentially just the task title restated.
@@ -208,9 +210,21 @@ export async function isSubstantiveArtifact(
   // bites is to paste the title (or a phrase) N times. Few distinct words
   // across many total words = padding, not a deliverable.
   const words = content.split(" ").filter(Boolean);
-  const distinct = new Set(words).size;
-  if (words.length >= 12 && distinct < 8) return false;
+  if (words.length >= 12 && new Set(words).size < 8) return false;
   return true;
+}
+
+// Done-gate variant: same check against a stored row, reading the blob only for
+// the borderline-size text case.
+export async function isSubstantiveArtifact(
+  row: TaskArtifact,
+  taskTitle: string,
+): Promise<boolean> {
+  if (row.size < MIN_SUBSTANTIVE_BYTES) return false;
+  if (row.size >= TRUST_SIZE_BYTES) return true;
+  const buf = await readObject(row.storageKey);
+  if (!buf) return false;
+  return isSubstantiveContent(buf, row.contentType, row.name, taskTitle);
 }
 
 export async function loadArtifact(artifactId: string): Promise<TaskArtifact | null> {
