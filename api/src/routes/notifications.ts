@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { and, eq, lt, desc, isNull, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { notifications } from "../db/schema.js";
+import { notifications, conversationMembers } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { publishToMember } from "../lib/events.js";
 
@@ -123,10 +123,21 @@ export default async function notificationRoutes(app: FastifyInstance): Promise<
   // Mark all the caller's notifications read.
   app.post("/notifications/read-all", async (req) => {
     const memberId = req.auth!.memberId!;
+    const now = new Date();
     await db
       .update(notifications)
-      .set({ readAt: new Date() })
+      .set({ readAt: now })
       .where(and(eq(notifications.memberId, memberId), isNull(notifications.readAt)));
+    // The bell (notifications table) and the left-sidebar unread badges are
+    // backed by DIFFERENT sources: the sidebar counts messages newer than each
+    // conversation's `last_read_at`. "Mark all read" must clear BOTH, so also
+    // advance the caller's read marker across every conversation they belong to
+    // — same write the per-conversation `POST /conversations/:id/read` does,
+    // just unscoped. Idempotent; only touches the caller's own rows.
+    await db
+      .update(conversationMembers)
+      .set({ lastReadAt: now })
+      .where(eq(conversationMembers.memberId, memberId));
     await publishToMember(memberId, {
       type: "notification.read",
       memberId,
