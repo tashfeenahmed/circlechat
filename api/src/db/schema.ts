@@ -403,6 +403,36 @@ export const taskComments = pgTable(
   }),
 );
 
+// ───────────────── task_artifacts (versioned, attributed deliverables) ─────────────────
+// A task's durable deliverables namespace. Each row is one version of one
+// named artifact, content-hashed + sized + attributed to the member who
+// submitted it. The object store holds the bytes (storage_key); this table is
+// the source of truth for "what was delivered for this task". The current
+// artifact named N on task T is the max(version) row with deleted_at IS NULL.
+export const taskArtifacts = pgTable(
+  "task_artifacts",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    taskId: varchar("task_id", { length: 32 }).notNull(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    version: integer("version").notNull().default(1),
+    storageKey: varchar("storage_key", { length: 300 }).notNull(),
+    contentType: varchar("content_type", { length: 160 }).notNull().default("application/octet-stream"),
+    size: integer("size").notNull().default(0),
+    sha256: varchar("sha256", { length: 64 }),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (t) => ({
+    taskIdx: index("task_artifacts_task_idx").on(t.taskId, t.deletedAt),
+    taskNameVer: uniqueIndex("task_artifacts_task_name_ver").on(t.taskId, t.name, t.version),
+  }),
+);
+
+export type TaskArtifact = typeof taskArtifacts.$inferSelect;
+
 export const taskActivity = pgTable(
   "task_activity",
   {

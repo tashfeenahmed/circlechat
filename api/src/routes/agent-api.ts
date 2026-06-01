@@ -10,8 +10,17 @@ import {
   reactions,
   users,
 } from "../db/schema.js";
-import { putObject, publicUrl } from "../lib/storage.js";
+import { putObject, publicUrl, statObject, streamObject } from "../lib/storage.js";
 import { id as makeId } from "../lib/ids.js";
+import {
+  createArtifact,
+  currentArtifacts,
+  currentArtifactByName,
+  artifactCount,
+  MAX_ARTIFACT_BYTES,
+  MAX_ARTIFACTS_PER_TASK,
+} from "../lib/task-artifacts.js";
+import { loadTask } from "../lib/tasks-core.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
@@ -759,6 +768,66 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     );
   });
 
+  // ─── Task artifacts (durable, versioned deliverables) ───────────────
+  //
+  // Artifacts are the first-class deliverables of a task. Submit via multipart
+  // file, a remote {url} the server fetches, or inline {name, contentText}.
+  // Reading goes through GET /files/<key> (object auth), so no new download
+  // path is needed — list returns ready-to-fetch urls. Cross-workspace writes
+  // are blocked: the task must be in THIS agent's workspace (re-checked from
+  // the authenticated principal, never trusting the supplied task_id).
+  app.post("/agent-api/tasks/:id/artifacts", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const ws = req.agentCtx!.workspaceId;
+    const t = await loadTask(taskId);
+    // 404 (not 403) when the task is missing OR in another workspace — don't
+    // confirm a foreign task's existence to a caller who can't write to it.
+    if (!t || t.workspaceId !== ws) return reply.code(404).send({ error: "not_found" });
+    if ((await artifactCount(taskId)) >= MAX_ARTIFACTS_PER_TASK)
+      return reply.code(422).send({ error: "too_many_artifacts" });
+
+    const resolved = await resolveArtifactInput(req, reply);
+    if (!resolved) return; // reply already sent
+    const { buffer, name, contentType } = resolved;
+    if (buffer.length > MAX_ARTIFACT_BYTES)
+      return reply.code(413).send({ error: "too_large", maxBytes: MAX_ARTIFACT_BYTES });
+
+    const art = await createArtifact({
+      taskId,
+      workspaceId: ws,
+      name,
+      buffer,
+      contentType,
+      createdBy: req.agentCtx!.memberId,
+    });
+    return reply.send({ artifact: art });
+  });
+
+  app.get("/agent-api/tasks/:id/artifacts", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const ws = req.agentCtx!.workspaceId;
+    const t = await loadTask(taskId);
+    if (!t || t.workspaceId !== ws) return reply.code(404).send({ error: "not_found" });
+    return { artifacts: await currentArtifacts(taskId) };
+  });
+
+  // Fetch the latest version of one named artifact. Streams the bytes directly
+  // (the principal is already authorized as a member of the task's workspace).
+  app.get("/agent-api/tasks/:id/artifacts/:name", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const name = decodeURIComponent((req.params as { name: string }).name);
+    const ws = req.agentCtx!.workspaceId;
+    const t = await loadTask(taskId);
+    if (!t || t.workspaceId !== ws) return reply.code(404).send({ error: "not_found" });
+    const art = await currentArtifactByName(taskId, name);
+    if (!art) return reply.code(404).send({ error: "not_found" });
+    const st = await statObject(art.storageKey);
+    if (!st || !st.isFile()) return reply.code(404).send({ error: "not_found" });
+    reply.header("content-type", art.contentType);
+    reply.header("content-length", String(st.size));
+    return reply.send(streamObject(art.storageKey));
+  });
+
   // Browser proxy: shell out to the host's `agent-browser` CLI so agents can
   // read live pages / fill forms / snapshot via their existing terminal skill.
   // We don't expose the raw CLI inside each container — one Chromium daemon
@@ -803,4 +872,75 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       stderr: stderr.slice(0, 4000),
     });
   });
+}
+
+// Resolve an artifact-submission request into bytes + a name + a content type.
+// Three input modes, mirroring how agents already produce files elsewhere:
+//   • multipart file upload (the `upload` skill / a real file)
+//   • { url }            → server fetches it (https/http only, 15s, capped)
+//   • { name, contentText } → inline text becomes the file body
+// Sends its own 4xx and returns null on bad input; otherwise returns the parts.
+async function resolveArtifactInput(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<{ buffer: Buffer; name: string; contentType: string } | null> {
+  if (req.isMultipart()) {
+    const data = await req.file();
+    if (!data) {
+      reply.code(400).send({ error: "no_file" });
+      return null;
+    }
+    const buffer = await data.toBuffer();
+    return { buffer, name: data.filename || "file", contentType: data.mimetype || "application/octet-stream" };
+  }
+
+  const Body = z
+    .object({
+      url: z.string().url().optional(),
+      name: z.string().min(1).max(200).optional(),
+      contentText: z.string().max(5_000_000).optional(),
+    })
+    .parse(req.body ?? {});
+
+  if (Body.url) {
+    if (!/^https?:\/\//i.test(Body.url)) {
+      reply.code(400).send({ error: "bad_url_scheme" });
+      return null;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    let res: Response;
+    try {
+      res = await fetch(Body.url, { signal: controller.signal, redirect: "follow" });
+    } catch {
+      clearTimeout(timer);
+      reply.code(400).send({ error: "fetch_failed" });
+      return null;
+    }
+    clearTimeout(timer);
+    if (!res.ok) {
+      reply.code(400).send({ error: "fetch_failed", status: res.status });
+      return null;
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim() || "application/octet-stream";
+    let nameHint = "";
+    try {
+      nameHint = new URL(Body.url).pathname.split("/").pop() ?? "";
+    } catch {
+      nameHint = "";
+    }
+    return { buffer, name: Body.name || nameHint || "file", contentType };
+  }
+
+  if (typeof Body.contentText === "string") {
+    return {
+      buffer: Buffer.from(Body.contentText, "utf8"),
+      name: Body.name || "note.txt",
+      contentType: "text/plain; charset=utf-8",
+    };
+  }
+
+  reply.code(400).send({ error: "no_input", hint: "send a multipart file, { url }, or { name, contentText }" });
+  return null;
 }

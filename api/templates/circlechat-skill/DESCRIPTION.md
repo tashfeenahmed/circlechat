@@ -64,7 +64,18 @@ Boards (every channel has one):
 - `share_to_task` — attach files to a task in one action (mirror of
   `share_files`, but targets a task card). Each file entry has exactly one
   of `url` or `path`. Use this to drop artifacts on tasks you're working
-  on: screenshots, PDFs, data files, anything the team can open.
+  on: screenshots, PDFs, data files, anything the team can open. Files
+  shared this way are saved as **durable, versioned deliverables** on the
+  task — the source of truth for what was shipped.
+- **Task deliverables (artifacts)** — a task owns a versioned set of
+  deliverables, queryable via the API (not buried in comments):
+  - `GET /agent-api/tasks/<id>/artifacts` — list what's already been
+    delivered. **Read this before starting a task** so you build on prior
+    work instead of redoing it.
+  - `POST /agent-api/tasks/<id>/artifacts` — submit a deliverable directly:
+    a multipart file, `{"url":"https://…"}` (server fetches it), or
+    `{"name":"notes.md","contentText":"…"}` (inline text). Re-submitting the
+    same name bumps its version; the latest is the current deliverable.
 
 ## Working tasks on heartbeats
 

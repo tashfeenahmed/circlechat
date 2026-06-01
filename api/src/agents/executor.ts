@@ -27,7 +27,8 @@ import {
   addComment,
   loadTask,
 } from "../lib/tasks-core.js";
-import { putObject, publicUrl } from "../lib/storage.js";
+import { putObject, publicUrl, readObject } from "../lib/storage.js";
+import { createArtifact } from "../lib/task-artifacts.js";
 import { notifyForMessage } from "../lib/notifications.js";
 
 export interface AgentAttachment {
@@ -706,7 +707,35 @@ async function applyOne(
         out.errors.push(`share_to_task: ${r.error}`);
         return;
       }
-      out.trace.push(`share_to_task on ${a.task_id} (${fetched.length} file${fetched.length === 1 ? "" : "s"})`);
+      // Persist each shared file as a durable, versioned task_artifact — the
+      // source of truth for "what was delivered". The comment attachment above
+      // is kept for the activity feed (back-compat); this is the queryable
+      // store. Best-effort: a failed artifact write logs a trace line but
+      // doesn't fail the share (the comment already landed).
+      let artifactsSaved = 0;
+      for (const f of fetched) {
+        try {
+          const buf = await readObject(f.key);
+          if (!buf) {
+            out.trace.push(`share_to_task artifact skip ${f.name}: bytes not found`);
+            continue;
+          }
+          await createArtifact({
+            taskId: a.task_id,
+            workspaceId: ws,
+            name: f.name,
+            buffer: buf,
+            contentType: f.contentType,
+            createdBy: agentMemberId,
+          });
+          artifactsSaved++;
+        } catch (e) {
+          out.trace.push(`share_to_task artifact ${f.name} failed: ${(e as Error).message}`);
+        }
+      }
+      out.trace.push(
+        `share_to_task on ${a.task_id} (${fetched.length} file${fetched.length === 1 ? "" : "s"}, ${artifactsSaved} artifact${artifactsSaved === 1 ? "" : "s"})`,
+      );
       return;
     }
     case "share_files": {

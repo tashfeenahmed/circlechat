@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { X, Plus, Trash2, Paperclip, Bold, Italic, Code, ChevronDown } from "lucide-react";
+import { X, Plus, Trash2, Paperclip, Bold, Italic, Code, ChevronDown, Upload } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useTaskDetail, useMembersDirectory, useMe } from "../lib/hooks";
+import {
+  useTaskDetail,
+  useMembersDirectory,
+  useMe,
+  useTaskArtifacts,
+  useUploadTaskArtifact,
+  useDeleteTaskArtifact,
+} from "../lib/hooks";
+import { formatSize } from "../lib/fileKind";
 import {
   api,
   type TaskStatus,
@@ -302,6 +310,8 @@ export default function TaskModal({
               }}
               onBlur={saveBody}
             />
+
+            <DeliverablesSection taskId={taskId} />
 
             <section className="tm-section">
               <div className="tm-section-head">
@@ -717,6 +727,116 @@ export default function TaskModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// The task's durable deliverables — the versioned, attributed artifacts that
+// are the source of truth for "what was shipped", distinct from chatty
+// comments. Drag-drop or pick a file to upload; download via the file-serve
+// route (object-auth'd); delete your own (or any, if you're an admin → server
+// gates).
+function DeliverablesSection({ taskId }: { taskId: string }) {
+  const q = useTaskArtifacts(taskId);
+  const upload = useUploadTaskArtifact(taskId);
+  const del = useDeleteTaskArtifact(taskId);
+  const me = useMe();
+  const openViewer = useBus((s) => s.openViewer);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const artifacts = q.data?.artifacts ?? [];
+
+  async function uploadFiles(files: FileList | File[]) {
+    for (const f of Array.from(files)) {
+      try {
+        await upload.mutateAsync(f);
+      } catch (e) {
+        alert(`Upload failed (${f.name}): ${(e as Error).message}`);
+      }
+    }
+  }
+
+  return (
+    <section className="tm-section">
+      <div className="tm-section-head">
+        <span className="tm-section-title">Deliverables</span>
+        {artifacts.length > 0 && <span className="tm-section-count">{artifacts.length}</span>}
+        <span className="tm-head-spacer" style={{ flex: 1 }} />
+        <button
+          type="button"
+          className="btn xs"
+          onClick={() => fileRef.current?.click()}
+          disabled={upload.isPending}
+        >
+          <Upload size={11} /> {upload.isPending ? "Uploading…" : "Upload"}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => {
+            if (e.target.files?.length) uploadFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+      </div>
+
+      <div
+        className={`tm-deliverables-drop ${dragOver ? "over" : ""}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files);
+        }}
+      >
+        {artifacts.length === 0 ? (
+          <div className="tm-rail-empty">
+            No deliverables yet. Drop a file here or use Upload — agents land theirs here too.
+          </div>
+        ) : (
+          <ul className="tm-deliverable-list">
+            {artifacts.map((a) => {
+              const mine = me.data?.memberId === a.createdBy;
+              return (
+                <li key={a.id} className="tm-deliverable">
+                  <button
+                    type="button"
+                    className="tm-deliverable-main"
+                    onClick={() => openViewer(a, artifacts)}
+                    title={a.contentType || a.name}
+                  >
+                    <Paperclip size={13} strokeWidth={1.9} />
+                    <span className="tm-deliverable-name">{a.name}</span>
+                    {a.version > 1 && <span className="tm-deliverable-ver">v{a.version}</span>}
+                  </button>
+                  <span className="tm-deliverable-meta mono text-[11px] text-[var(--color-muted)]">
+                    {a.size > 0 && <span>{formatSize(a.size)}</span>}
+                    {a.createdByHandle && <span>· @{a.createdByHandle}</span>}
+                  </span>
+                  {mine && (
+                    <button
+                      className="tm-chip-x"
+                      title="Delete deliverable"
+                      onClick={() => {
+                        if (confirm(`Delete deliverable "${a.name}"?`)) del.mutate(a.id);
+                      }}
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 

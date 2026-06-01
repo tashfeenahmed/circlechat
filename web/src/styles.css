@@ -2482,3 +2482,43 @@ input, textarea { font: inherit; color: inherit; }
   .kanban { grid-auto-columns: 90vw; }
 }
 
+
+/* ───────── Task deliverables (artifacts) ───────── */
+.tm-deliverables-drop {
+  border: 1px dashed var(--color-hair-2);
+  border-radius: 8px;
+  padding: 8px;
+  transition: border-color 0.12s, background 0.12s;
+}
+.tm-deliverables-drop.over {
+  border-color: var(--color-accent-blue);
+  background: var(--color-hi);
+}
+.tm-deliverable-list {
+  display: flex; flex-direction: column; gap: 2px;
+  list-style: none; padding: 0; margin: 0;
+}
+.tm-deliverable {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 4px;
+  border-radius: 6px;
+}
+.tm-deliverable:hover { background: var(--color-hi); }
+.tm-deliverable-main {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--color-ink); font-size: 13px;
+  padding: 0; text-align: left; min-width: 0;
+}
+.tm-deliverable-main:hover .tm-deliverable-name { text-decoration: underline; }
+.tm-deliverable-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+}
+.tm-deliverable-ver {
+  font-size: 10px; font-weight: 600;
+  padding: 1px 5px; border-radius: 999px;
+  background: var(--color-hair-2); color: var(--color-muted);
+}
+.tm-deliverable-meta {
+  display: inline-flex; gap: 5px; flex: 1; min-width: 0;
+}
