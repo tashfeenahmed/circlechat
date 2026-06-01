@@ -8,6 +8,18 @@ const md = new MarkdownIt({
   typographer: true,
 });
 
+// Open links in a new tab. markdown-it emits a bare <a href> by default, so
+// links would otherwise navigate away from the app in the same tab. rel
+// guards against tabnabbing on the opened page. (DOMPurify keeps target/rel.)
+const defaultLinkOpen =
+  md.renderer.rules.link_open ??
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  tokens[idx].attrSet("target", "_blank");
+  tokens[idx].attrSet("rel", "noopener noreferrer");
+  return defaultLinkOpen(tokens, idx, options, env, self);
+};
+
 export function renderMarkdown(
   body: string,
   isAgentHandle: (handle: string) => boolean = () => false,
