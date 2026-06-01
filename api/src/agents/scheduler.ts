@@ -21,9 +21,14 @@ export async function scheduleAgentHeartbeat(agentId: string, everySec: number):
 }
 
 export async function cancelAgentHeartbeat(agentId: string): Promise<void> {
+  const key = REPEAT_KEY(agentId);
   const repeats = await agentQueue.getRepeatableJobs();
   for (const r of repeats) {
-    if (r.id === REPEAT_KEY(agentId)) {
+    // The repeatable job is identified by its NAME (set via agentQueue.add(key,…));
+    // getRepeatableJobs() returns id=undefined, so matching on r.id silently
+    // matched nothing and old schedules piled up (duplicate heartbeats). Match
+    // on name (keep id as a fallback).
+    if (r.name === key || r.id === key) {
       await agentQueue.removeRepeatableByKey(r.key);
     }
   }
