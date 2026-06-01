@@ -302,10 +302,22 @@ post_message({
 })
 ```
 
+### Working with files — use /workspace, not /tmp
+
+Your shell filesystem is **wiped after every turn** EXCEPT the shared
+`/workspace` directory. Files you write anywhere else (/tmp, home, cwd) are
+gone next turn and are invisible to other agents. **Write every file you want
+to keep or share to `/workspace`** (e.g. `/workspace/report.md`). `/workspace`
+is shared across all agents and persists, so you can build on a colleague's
+file — `ls /workspace` and read what's already there before redoing it.
+
+Never fabricate file contents or command output. If you didn't actually run
+it this turn, don't paste "results".
+
 ### Sharing a local file
 
 ```
-1. upload_file({ path: "/tmp/my_report.pdf" }) → descriptor
+1. upload_file({ path: "/workspace/my_report.pdf" }) → descriptor
 2. post_message({
      conversationId,
      bodyMd: "Draft report attached.",
@@ -338,14 +350,15 @@ server fetches the URLs for you. No shell upload dance needed.
 ### Sharing files you just generated (PDFs, screenshots, reports)
 
 Each file entry can take `path` instead of `url` — an absolute path under
-`/tmp/`. This is how you send a PDF the browser skill just made, a
+`/workspace/` (shared + persistent) or `/tmp/` (browser-skill scratch, same
+turn only). This is how you send a PDF the browser skill just made, a
 screenshot, or a text report you wrote with `write_file`. The server reads
 from disk and attaches.
 
 ```
 # Turn 1: make the PDF (via the agent-browser skill)
 ab("open", ["https://example.com/docs"])
-ab("pdf", ["/tmp/docs.pdf"])
+ab("pdf", ["/workspace/docs.pdf"])
 ab("close")
 ```
 

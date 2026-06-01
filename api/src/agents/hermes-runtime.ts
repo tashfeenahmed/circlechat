@@ -14,6 +14,15 @@ export const HERMES_IMAGE = process.env.CC_HERMES_IMAGE ?? "nousresearch/hermes-
 // config files there. We bind-mount the host's per-agent home to this path.
 export const CONTAINER_HERMES_HOME = "/opt/data";
 
+// Optional shared, persistent workspace bind-mounted into EVERY agent container
+// at the same path. Without it, each turn is a fresh `docker run --rm` whose
+// filesystem (except the private per-agent HERMES_HOME) is wiped, and agents
+// can't see each other's files — so they lose work and fabricate. The value is
+// the HOST path (the docker daemon resolves `-v` sources host-side). Empty =
+// feature off (legacy behaviour).
+export const SHARED_WORKSPACE_DIR = process.env.CC_SHARED_WORKSPACE_DIR ?? "";
+export const CONTAINER_WORKSPACE = "/workspace";
+
 export interface HermesCommand {
   cmd: string;
   args: string[];
@@ -37,6 +46,9 @@ export function buildHermesCommand(
     };
   }
   const mounts: string[] = ["-v", `${hermesHome}:${CONTAINER_HERMES_HOME}`];
+  if (SHARED_WORKSPACE_DIR) {
+    mounts.push("-v", `${SHARED_WORKSPACE_DIR}:${CONTAINER_WORKSPACE}`);
+  }
   for (const m of extraMounts) {
     mounts.push("-v", `${m.host}:${m.container}${m.readOnly ? ":ro" : ""}`);
   }

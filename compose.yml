@@ -78,6 +78,14 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-please-change-me}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       SMTP_URL: ${SMTP_URL:-}
+      # Shared, persistent workspace for agents (HOST path). When set, every
+      # agent container gets it bind-mounted at /workspace so files survive the
+      # per-turn `docker run --rm` and are visible across agents; the API also
+      # mounts the same host dir at /workspace so share_to_task/share_files with
+      # a `path:/workspace/...` can read them. In a deployment that spawns agent
+      # containers, also add `- ${CC_SHARED_WORKSPACE_DIR}:/workspace` to the
+      # api/worker/bridge `volumes:` (see the box compose).
+      CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -92,6 +100,7 @@ services:
       REDIS_URL: redis://redis:6379
       API_INTERNAL_URL: http://api:3000
       SESSION_SECRET: ${SESSION_SECRET:-please-change-me}
+      CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
