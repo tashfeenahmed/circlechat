@@ -237,7 +237,13 @@ const PRESETS: Array<{ label: string; sec: number }> = [
   { label: "Normal (3 min)", sec: 180 },
   { label: "Slow (15 min)", sec: 900 },
   { label: "Hourly", sec: 3600 },
+  { label: "3 hours", sec: 10800 },
+  { label: "Daily", sec: 86400 },
 ];
+
+// Matches the server cap (api/src/routes/agents.ts). Low-frequency beats are the
+// main cost lever for paid models, so we allow up to 24h.
+const MAX_HEARTBEAT_SEC = 86400;
 
 function HeartbeatControl({
   agentId,
@@ -255,8 +261,8 @@ function HeartbeatControl({
   const [err, setErr] = useState<string | null>(null);
 
   async function save(nextSec: number) {
-    if (nextSec < 5 || nextSec > 3600) {
-      setErr("Must be between 5 and 3600 seconds.");
+    if (nextSec < 5 || nextSec > MAX_HEARTBEAT_SEC) {
+      setErr(`Must be between 5 and ${MAX_HEARTBEAT_SEC} seconds (24h).`);
       return;
     }
     setBusy(true);
@@ -299,7 +305,7 @@ function HeartbeatControl({
               type="number"
               value={customSec}
               min={5}
-              max={3600}
+              max={MAX_HEARTBEAT_SEC}
               disabled={busy}
               onChange={(e) => setCustomSec(parseInt(e.target.value, 10) || 0)}
               className="w-24 border border-[var(--color-hair-2)] rounded px-2 py-1 text-[13px] font-mono"
