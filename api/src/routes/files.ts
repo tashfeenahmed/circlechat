@@ -15,6 +15,7 @@ import {
 import { requireAuth, requireWorkspace, loadSession } from "../auth/session.js";
 import { statObject, streamObject, deleteObject } from "../lib/storage.js";
 import { workspaceMembers } from "../db/schema.js";
+import { artifactByStorageKey } from "../lib/task-artifacts.js";
 
 interface AttachmentRow {
   key: string;
@@ -78,6 +79,24 @@ async function keyVisibleToPrincipal(
   key: string,
   principal: { memberId: string | null; workspaceId: string },
 ): Promise<boolean> {
+  // Task artifacts live under t/<task_id>/… and are NOT referenced from any
+  // attachments_json blob — they're their own first-class store. Authorize the
+  // key by resolving it to its artifact row and checking the owning task is in
+  // the principal's workspace (same workspace-scoped model as task-comment
+  // attachments, below). A soft-deleted artifact's row won't resolve, so its
+  // blob stops serving.
+  if (key.startsWith("t/")) {
+    const art = await artifactByStorageKey(key);
+    if (!art) return false;
+    if (art.workspaceId !== principal.workspaceId) return false;
+    const [t] = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(eq(tasks.id, art.taskId), eq(tasks.workspaceId, principal.workspaceId)))
+      .limit(1);
+    return !!t;
+  }
+
   const probe = JSON.stringify([{ key }]);
 
   // Messages that reference this key.

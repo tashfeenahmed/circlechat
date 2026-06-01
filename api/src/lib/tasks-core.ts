@@ -599,6 +599,11 @@ async function assertDoneEvidence(
     .orderBy(asc(taskComments.ts));
 
   // Rule 1: any comment carries attachments.
+  // TODO(verification): once task_artifacts is adopted as the deliverables
+  // store (PR A/B), tighten this to require a real task_artifacts row created
+  // by an assignee AFTER the work was claimed — instead of any attachment on
+  // any comment (the junk-file bypass). Kept comment-based for now so the
+  // currently-working share flow isn't broken before the store is adopted.
   const hasArtifact = comments.some((c) => {
     const att = c.attachmentsJson as unknown[] | null | undefined;
     return Array.isArray(att) && att.length > 0;

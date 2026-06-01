@@ -219,6 +219,18 @@ export interface TaskComment {
   ts: string;
 }
 
+// A task's current deliverable. Extends the Attachment descriptor (so it drops
+// straight into <Attachments>/FileViewer) with versioning + attribution.
+export interface TaskArtifact extends Attachment {
+  id: string;
+  version: number;
+  sha256: string | null;
+  createdBy: string;
+  createdByHandle: string | null;
+  createdByName: string | null;
+  createdAt: string;
+}
+
 export interface TaskActivityRow {
   id: string;
   taskId: string;

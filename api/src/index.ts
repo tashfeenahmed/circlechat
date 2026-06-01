@@ -13,6 +13,7 @@ import orgRoutes from "./routes/org.js";
 import conversationRoutes from "./routes/conversations.js";
 import messageRoutes from "./routes/messages.js";
 import tasksRoutes from "./routes/tasks.js";
+import taskArtifactRoutes from "./routes/task-artifacts.js";
 import uploadRoutes from "./routes/uploads.js";
 import agentRoutes from "./routes/agents.js";
 import approvalRoutes from "./routes/approvals.js";
@@ -71,6 +72,7 @@ await app.register(orgRoutes, { prefix: "/api" });
 await app.register(conversationRoutes, { prefix: "/api" });
 await app.register(messageRoutes, { prefix: "/api" });
 await app.register(tasksRoutes, { prefix: "/api" });
+await app.register(taskArtifactRoutes, { prefix: "/api" });
 await app.register(uploadRoutes, { prefix: "/api" });
 await app.register(agentRoutes, { prefix: "/api" });
 await app.register(agentInstallRoutes, { prefix: "/api" });
@@ -105,6 +107,7 @@ if (existsSync(webDist)) {
       url.startsWith("/events") ||
       url.startsWith("/agent-socket") ||
       url.startsWith("/files/u/") ||
+      url.startsWith("/files/t/") ||
       url.startsWith("/_internal/")
     ) {
       reply.code(404).send({ error: "not_found" });

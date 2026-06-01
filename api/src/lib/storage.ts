@@ -32,6 +32,14 @@ export function streamObject(key: string): NodeJS.ReadableStream {
   return createReadStream(safeJoin(key));
 }
 
+export async function readObject(key: string): Promise<Buffer | null> {
+  try {
+    return await fs.readFile(safeJoin(key));
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteObject(key: string): Promise<void> {
   try {
     await fs.unlink(safeJoin(key));

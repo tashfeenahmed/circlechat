@@ -12,6 +12,7 @@ import {
   type Task,
   type TaskDetail,
   type TaskComment,
+  type TaskArtifact,
   type Notification,
 } from "../api/client";
 import { bus } from "../ws/client";
@@ -543,6 +544,39 @@ export function useTaskDetail(taskId: string | undefined) {
     });
   }, [taskId, qc, key]);
   return q;
+}
+
+// ─────────────────── Task artifacts (deliverables) ───────────────────
+
+export function useTaskArtifacts(taskId: string | undefined) {
+  return useQuery<{ artifacts: TaskArtifact[] }>({
+    queryKey: ["task-artifacts", taskId],
+    queryFn: () => api.get(`/tasks/${taskId}/artifacts`),
+    enabled: !!taskId,
+    staleTime: 10_000,
+  });
+}
+
+export function useUploadTaskArtifact(taskId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) =>
+      api.upload<{ artifact: TaskArtifact }>(`/tasks/${taskId}/artifacts`, file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["task-artifacts", taskId] });
+    },
+  });
+}
+
+export function useDeleteTaskArtifact(taskId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (artifactId: string) =>
+      api.del(`/tasks/${taskId}/artifacts/${artifactId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["task-artifacts", taskId] });
+    },
+  });
 }
 
 export function useIsClient() {
