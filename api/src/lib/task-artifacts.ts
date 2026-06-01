@@ -15,9 +15,13 @@ export const MAX_ARTIFACTS_PER_TASK = 500;
 // reject placeholder/title-only "deliverables" (the junk-file bypass). Cheap
 // and instant; a determined agent could pad past it, but the human-sign-off
 // override covers that and an LLM judge can layer on later.
-export const MIN_SUBSTANTIVE_BYTES = 200; // below this is a stub, not a deliverable
+// Floor sized to kill the observed stubs (the 26–34 byte title-echoes) with
+// margin, without false-positiving a legit-but-terse deliverable (e.g. a short
+// list of links is ~150B). Padding past the floor is caught by the title-echo
+// + low-distinct-word checks below; semantic relevance is the LLM judge's job.
+export const MIN_SUBSTANTIVE_BYTES = 120; // below this is a stub, not a deliverable
 const TRUST_SIZE_BYTES = 2048;            // above this, trust size; don't read bytes
-const MIN_SUBSTANTIVE_TEXT_CHARS = 120;   // borderline text must carry real content
+const MIN_SUBSTANTIVE_TEXT_CHARS = 90;    // borderline text must carry real content
 
 function normalizeText(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
