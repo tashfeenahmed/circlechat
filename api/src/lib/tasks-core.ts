@@ -13,6 +13,7 @@ import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { notify } from "./notifications.js";
+import { liveArtifactRows, isSubstantiveArtifact } from "./task-artifacts.js";
 
 export const STATUSES = ["backlog", "in_progress", "review", "done"] as const;
 export type Status = (typeof STATUSES)[number];
@@ -290,7 +291,7 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
     t!.status !== "done" &&
     !input.archived
   ) {
-    const denial = await assertDoneEvidence(taskId, actorMemberId);
+    const denial = await assertDoneEvidence(taskId, actorMemberId, t!.title);
     if (denial) return { error: denial };
   }
   const patch: Partial<typeof tasks.$inferInsert> = { updatedAt: new Date() };
@@ -559,7 +560,7 @@ export async function deleteComment(taskId: string, commentId: string, actorMemb
   return { ok: true as const };
 }
 
-// ───── done-requires-evidence ─────
+// ───── done-requires-evidence (PR E: verified completion) ─────
 //
 // Returns an error code if the actor (an agent) is trying to flip a task to
 // `done` without sufficient evidence; null if the move is allowed.
@@ -568,17 +569,23 @@ export async function deleteComment(taskId: string, commentId: string, actorMemb
 // and can mark anything done freely.
 //
 // Evidence is one of:
-//   1. Any task comment carries at least one attachment (an actual artifact).
-//   2. A human-authored comment exists AFTER this agent's most recent comment
-//      on the task (i.e. a human reviewer signed off after the agent's work).
-//   3. A human (not the calling agent) is among the task's assignees and has
-//      added a comment at all (lighter human-in-the-loop case).
+//   1. A SUBSTANTIVE deliverable in the task artifacts store, authored by
+//      someone responsible for the task (a current assignee or the acting
+//      agent). "Substantive" = clears the heuristic size/anti-placeholder gate
+//      (isSubstantiveArtifact) — a 26-byte title-echo no longer counts. This
+//      replaces the old "any comment attachment" rule (the junk-file bypass).
+//   2. A human-authored comment AFTER this agent's most recent comment (a human
+//      reviewer signed off after the agent's work).
+//   3. Any human comment AND the task has a human assignee (lighter
+//      collaborative sign-off).
 //
-// If none of those, we refuse and let the agent know to attach an artifact
-// or wait for human review.
+// Note: a determined agent can still pad past the heuristic — the human-review
+// rules (2/3) and a future LLM-judge layer are the backstop. The point here is
+// that "done" now requires a real artifact in the store, not a placeholder.
 async function assertDoneEvidence(
   taskId: string,
   actorMemberId: string,
+  taskTitle: string,
 ): Promise<"done_requires_evidence" | null> {
   const [actor] = await db
     .select({ kind: members.kind })
@@ -587,30 +594,30 @@ async function assertDoneEvidence(
     .limit(1);
   if (!actor || actor.kind !== "agent") return null;
 
+  const assigneeRows = await db
+    .select({ memberId: taskAssignees.memberId })
+    .from(taskAssignees)
+    .where(eq(taskAssignees.taskId, taskId));
+
+  // Rule 1: a substantive artifact authored by a current assignee or the actor.
+  const eligible = new Set<string>([...assigneeRows.map((r) => r.memberId), actorMemberId]);
+  const artifacts = await liveArtifactRows(taskId);
+  for (const a of artifacts) {
+    if (!eligible.has(a.createdBy)) continue;
+    if (await isSubstantiveArtifact(a, taskTitle)) return null;
+  }
+
+  // Human-in-the-loop override (the verifier of last resort).
   const comments = await db
     .select({
       id: taskComments.id,
       memberId: taskComments.memberId,
       ts: taskComments.ts,
-      attachmentsJson: taskComments.attachmentsJson,
     })
     .from(taskComments)
     .where(and(eq(taskComments.taskId, taskId), dsql`${taskComments.deletedAt} is null` as never))
     .orderBy(asc(taskComments.ts));
 
-  // Rule 1: any comment carries attachments.
-  // TODO(verification): once task_artifacts is adopted as the deliverables
-  // store (PR A/B), tighten this to require a real task_artifacts row created
-  // by an assignee AFTER the work was claimed — instead of any attachment on
-  // any comment (the junk-file bypass). Kept comment-based for now so the
-  // currently-working share flow isn't broken before the store is adopted.
-  const hasArtifact = comments.some((c) => {
-    const att = c.attachmentsJson as unknown[] | null | undefined;
-    return Array.isArray(att) && att.length > 0;
-  });
-  if (hasArtifact) return null;
-
-  // Bucket comment authors by kind in one lookup.
   const memberIds = Array.from(new Set(comments.map((c) => c.memberId)));
   if (!memberIds.length) return "done_requires_evidence";
   const memberRows = await db
@@ -628,21 +635,14 @@ async function assertDoneEvidence(
     if (humanAfter) return null;
   }
 
-  // Rule 3: any human commented AND the task has a human assignee (lighter
-  // sign-off case for collaborative tasks).
+  // Rule 3: any human commented AND the task has a human assignee.
   const anyHumanComment = comments.some((c) => kindByMember.get(c.memberId) === "user");
-  if (anyHumanComment) {
-    const assigneeRows = await db
-      .select({ memberId: taskAssignees.memberId })
-      .from(taskAssignees)
-      .where(eq(taskAssignees.taskId, taskId));
-    if (assigneeRows.length) {
-      const assigneeKinds = await db
-        .select({ id: members.id, kind: members.kind })
-        .from(members)
-        .where(inArray(members.id, assigneeRows.map((r) => r.memberId)));
-      if (assigneeKinds.some((m) => m.kind === "user")) return null;
-    }
+  if (anyHumanComment && assigneeRows.length) {
+    const assigneeKinds = await db
+      .select({ id: members.id, kind: members.kind })
+      .from(members)
+      .where(inArray(members.id, assigneeRows.map((r) => r.memberId)));
+    if (assigneeKinds.some((m) => m.kind === "user")) return null;
   }
 
   return "done_requires_evidence";

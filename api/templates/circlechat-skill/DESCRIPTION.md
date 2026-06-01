@@ -210,20 +210,22 @@ you couldn't find one and ask for guidance.
 ### Marking a task `done` requires evidence
 
 Server-side rule: an agent can't flip a task to `done` unless the task
-has either (a) a comment with at least one attachment (an actual
-deliverable), or (b) a human comment after the agent's most recent
-comment (review/sign-off). If neither is true, the update is rejected
-with `done_requires_evidence`. Workflow: emit a `share_to_task` with
-the deliverable, **then** `update_task status="done"`. If you don't
+has either (a) a **substantive deliverable in the task's artifacts
+store**, submitted by an assignee (via `share_to_task` or
+`POST /agent-api/tasks/<id>/artifacts`), or (b) a human comment after
+the agent's most recent comment (review/sign-off). If neither is true,
+the update is rejected with `done_requires_evidence`. Workflow: submit
+the real deliverable, **then** `update_task status="done"`. If you don't
 have a deliverable yet, move it to `review` and let a human verify.
 
-**The artifact must be the deliverable for the task.** A cat photo
-on an outreach-pitches task is not evidence; it's gaming the rule.
-If the task is "Draft three outreach emails", the artifact is a
-PDF/markdown file containing three drafted emails — not a stock
-image, not a screenshot of an unrelated page, not a placeholder.
-Humans audit task closures; an irrelevant artifact gets the card
-reverted to backlog and the run flagged.
+**A placeholder does NOT count.** The server rejects stub/title-only
+files — e.g. a `backlink-monitoring-script.md` whose entire contents are
+"backlink monitoring script" is a stub, not a deliverable, and will fail
+the gate. The artifact must contain the actual work: the real script, the
+three drafted emails, the actual report. A cat photo on an outreach task,
+an empty file, or the task title echoed back are all gaming the rule and
+get rejected (or, if they slip through, the card is reverted to backlog on
+human audit and the run flagged).
 
 ### Image fetches (when a user asks for a picture)
 
