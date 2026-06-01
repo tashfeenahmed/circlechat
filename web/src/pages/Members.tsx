@@ -77,19 +77,19 @@ export default function MembersPage() {
         <div className="flex items-center gap-1 border border-[var(--color-hair-2)] rounded overflow-hidden">
           <button
             onClick={() => setTab("humans")}
-            className={`px-3 py-1 text-[13px] inline-flex items-center gap-2 ${tab === "humans" ? "bg-[var(--color-ink)] text-white" : "text-[var(--color-muted)] hover:bg-[var(--color-hi)]"}`}
+            className={`px-3 py-1 text-[13px] inline-flex items-center gap-2 ${tab === "humans" ? "bg-[var(--color-ink)] text-paper" : "text-[var(--color-muted)] hover:bg-[var(--color-hi)]"}`}
           >
             People
-            <span className={`text-[10px] font-mono px-1.5 py-[1px] rounded ${tab === "humans" ? "bg-white/20" : "bg-[var(--color-hi)]"}`}>
+            <span className={`text-[10px] font-mono px-1.5 py-[1px] rounded ${tab === "humans" ? "bg-paper/20" : "bg-[var(--color-hi)]"}`}>
               {(dir.data?.humans ?? []).length}
             </span>
           </button>
           <button
             onClick={() => setTab("agents")}
-            className={`px-3 py-1 text-[13px] inline-flex items-center gap-2 ${tab === "agents" ? "bg-[var(--color-ink)] text-white" : "text-[var(--color-muted)] hover:bg-[var(--color-hi)]"}`}
+            className={`px-3 py-1 text-[13px] inline-flex items-center gap-2 ${tab === "agents" ? "bg-[var(--color-ink)] text-paper" : "text-[var(--color-muted)] hover:bg-[var(--color-hi)]"}`}
           >
             Agents
-            <span className={`text-[10px] font-mono px-1.5 py-[1px] rounded ${tab === "agents" ? "bg-white/20" : "bg-[var(--color-hi)]"}`}>
+            <span className={`text-[10px] font-mono px-1.5 py-[1px] rounded ${tab === "agents" ? "bg-paper/20" : "bg-[var(--color-hi)]"}`}>
               {(dir.data?.agents ?? []).length}
             </span>
           </button>
@@ -274,7 +274,7 @@ function Overlay({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-md border border-[var(--color-hair-2)] shadow-lg flex flex-col"
+        className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg flex flex-col"
         style={{ width, maxWidth: "92vw", maxHeight: "calc(100vh - 48px)" }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -758,7 +758,7 @@ function InstallAgent({
                     }
                     className={`text-[12px] px-2.5 py-1 rounded border transition ${
                       on
-                        ? "bg-[var(--color-ink)] text-white border-[var(--color-ink)]"
+                        ? "bg-[var(--color-ink)] text-paper border-[var(--color-ink)]"
                         : "border-[var(--color-hair-2)] text-[var(--color-ink)] hover:bg-[var(--color-hi)]"
                     }`}
                   >
@@ -1019,7 +1019,7 @@ function AttachAgent({
                     }
                     className={`text-[12px] px-2.5 py-1 rounded border transition ${
                       on
-                        ? "bg-[var(--color-ink)] text-white border-[var(--color-ink)]"
+                        ? "bg-[var(--color-ink)] text-paper border-[var(--color-ink)]"
                         : "border-[var(--color-hair-2)] text-[var(--color-ink)] hover:bg-[var(--color-hi)]"
                     }`}
                   >

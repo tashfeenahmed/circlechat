@@ -1,22 +1,25 @@
 @import "tailwindcss";
 
 @theme {
+  /* Light theme — soft neutral grays (the default palette). Surfaces read
+     these tokens, so the dark overrides below cascade app-wide. */
   --color-paper: #ffffff;
-  --color-bg: #ffffff;
-  --color-bg-2: #fafafa;
-  --color-ink: #000000;
-  --color-muted: #666666;
-  --color-muted-2: #999999;
-  --color-hair: #eaeaea;
-  --color-hair-2: #d4d4d4;
-  --color-hi: #fafafa;
-  --color-hi-2: #f0f0f0;
+  --color-bg: #f6f6f5;
+  --color-bg-2: #efefed;
+  --color-ink: #1f1f1f;
+  --color-ink-hover: rgb(30, 29, 26);
+  --color-muted: #6b6b6b;
+  --color-muted-2: #9b9b99;
+  --color-hair: #e7e6e3;
+  --color-hair-2: #d8d7d3;
+  --color-hi: #efefed;
+  --color-hi-2: #e8e7e4;
   --color-warn: rgb(203, 145, 47);
   --color-ok: rgb(68, 131, 97);
   --color-err: rgb(212, 76, 71);
-  --color-accent-blue: #000000;
-  --color-rail: #fafafa;
-  --color-sidebar: #ffffff;
+  --color-accent-blue: #1f1f1f;
+  --color-rail: #efefed;
+  --color-sidebar: #fbfbfa;
   --font-sans: "Geist", "Inter", -apple-system, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --font-serif: "Lora", "Iowan Old Style", "Apple Garamond", Georgia, serif;
@@ -28,6 +31,36 @@
   --radius-pill: 999px;
   --shadow-pop: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px, rgba(15, 15, 15, 0.1) 0px 3px 6px,
     rgba(15, 15, 15, 0.2) 0px 9px 24px;
+}
+
+/* Hint native UI (scrollbars, form controls, autofill) to match the theme. */
+:root { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* Dark theme — set via data-theme="dark" on <html> (see lib/theme.ts).
+   Overrides the same --color-* tokens the whole app already reads, so every
+   surface flips together. Accent (ink) inverts to near-white, so primary
+   buttons become light with dark (paper) text automatically. */
+:root[data-theme="dark"] {
+  --color-paper: #1e1e1e;
+  --color-bg: #161616;
+  --color-bg-2: #1c1c1c;
+  --color-ink: #ededed;
+  --color-ink-hover: #d6d6d6;
+  --color-muted: #9a9a9a;
+  --color-muted-2: #6e6e6e;
+  --color-hair: #2e2e2e;
+  --color-hair-2: #3a3a3a;
+  --color-hi: #262626;
+  --color-hi-2: #2f2f2f;
+  --color-warn: rgb(221, 163, 72);
+  --color-ok: rgb(96, 166, 122);
+  --color-err: rgb(226, 104, 99);
+  --color-accent-blue: #ededed;
+  --color-rail: #161616;
+  --color-sidebar: #1c1c1c;
+  --shadow-pop: rgba(0, 0, 0, 0.3) 0px 0px 0px 1px, rgba(0, 0, 0, 0.5) 0px 3px 6px,
+    rgba(0, 0, 0, 0.6) 0px 9px 24px;
 }
 
 html, body, #root {
@@ -1287,7 +1320,7 @@ input, textarea { font: inherit; color: inherit; }
   font-weight: 500;
   display: inline-flex; align-items: center; gap: 6px;
 }
-.composer .send:hover { background: rgb(30, 29, 26); }
+.composer .send:hover { background: var(--color-ink-hover); }
 .composer .send.dim {
   background: var(--color-bg-2);
   color: var(--color-muted);
@@ -1485,7 +1518,7 @@ input, textarea { font: inherit; color: inherit; }
 }
 .btn:hover { background: var(--color-hi); }
 .btn.primary { background: var(--color-ink); color: var(--color-paper); border-color: var(--color-ink); }
-.btn.primary:hover { background: rgb(30, 29, 26); }
+.btn.primary:hover { background: var(--color-ink-hover); }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--color-muted); }
 .btn.ghost:hover { color: var(--color-ink); background: var(--color-hi); }
 .btn.sm { padding: 3px 9px; font-size: 12px; }

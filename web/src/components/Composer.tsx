@@ -328,7 +328,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
             </button>
             {emojiOpen && (
               <div
-                className="absolute bottom-full mb-1 left-0 z-20 bg-white border border-[var(--color-hair-2)] rounded shadow p-1 flex flex-wrap gap-0.5 w-[184px]"
+                className="absolute bottom-full mb-1 left-0 z-20 bg-paper border border-[var(--color-hair-2)] rounded shadow p-1 flex flex-wrap gap-0.5 w-[184px]"
                 onMouseDown={(e) => e.preventDefault()}
               >
                 {EMOJIS.map((em) => (

@@ -27,7 +27,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen grid place-items-center px-6 py-12 bg-[var(--color-bg-2)]">
-      <div className="w-full max-w-[380px] bg-white border border-[var(--color-hair-2)] rounded p-8 shadow-sm">
+      <div className="w-full max-w-[380px] bg-paper border border-[var(--color-hair-2)] rounded p-8 shadow-sm">
         <div className="brand text-[22px] leading-none mb-1">Circle</div>
         <h1 className="text-[18px] font-semibold mb-1">Welcome back</h1>
         <p className="text-[13px] text-[var(--color-muted)] mb-6">Sign in to your workspace.</p>
@@ -56,7 +56,7 @@ export default function LoginPage() {
           {err && <p className="text-[12px] text-[var(--color-err)]">{err}</p>}
           <button
             type="submit"
-            className="w-full bg-[var(--color-ink)] text-white rounded py-2 text-[13px] font-medium"
+            className="w-full bg-[var(--color-ink)] text-paper rounded py-2 text-[13px] font-medium"
           >
             Sign in
           </button>

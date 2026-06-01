@@ -234,7 +234,7 @@ function NewReportDialog({ manager, onClose }: { manager: OrgNode; onClose: () =
     <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 overflow-y-auto py-6" onClick={onClose}>
       <form
         onSubmit={submit}
-        className="bg-white rounded-md border border-[var(--color-hair-2)] shadow-lg w-[520px] max-w-[92vw] flex flex-col"
+        className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[520px] max-w-[92vw] flex flex-col"
         style={{ maxHeight: "calc(100vh - 48px)" }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -394,7 +394,7 @@ export function AssignDialog({
   return (
     <div className="fixed inset-0 bg-black/30 grid place-items-center z-50" onClick={onClose}>
       <div
-        className="bg-white rounded-md border border-[var(--color-hair-2)] shadow-lg w-[480px] max-w-[92vw]"
+        className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[480px] max-w-[92vw]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)]">

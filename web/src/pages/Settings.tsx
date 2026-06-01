@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Trash2, ShieldCheck, UserMinus, Copy, Check } from "lucide-react";
+import { Trash2, ShieldCheck, UserMinus, Copy, Check, Sun, Moon } from "lucide-react";
 import { useMe, useWorkspaceMembers, useInvites, useMembersDirectory } from "../lib/hooks";
 import { api } from "../api/client";
+import { useTheme, type Theme } from "../lib/theme";
 
 export default function SettingsPage() {
   const me = useMe();
@@ -38,7 +39,7 @@ export default function SettingsPage() {
   const dirty = ws ? mission !== (ws.mission ?? "") : false;
 
   return (
-    <main className="flex-1 overflow-auto bg-white">
+    <main className="flex-1 overflow-auto bg-paper">
       <div className="max-w-[640px] mx-auto px-8 py-8">
         <h1 className="text-[22px] font-semibold mb-1">Settings</h1>
         <p className="text-[13px] text-[var(--color-muted)] mb-6">
@@ -113,10 +114,46 @@ export default function SettingsPage() {
 
         <section className="border border-[var(--color-hair)] rounded p-4">
           <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono mb-2">Theme</h2>
-          <p className="text-[13px] text-[var(--color-muted)]">Light theme · Notion-gray palette (MVP).</p>
+          <p className="text-[13px] text-[var(--color-muted)] mb-3">
+            Choose your appearance. Defaults to your system setting.
+          </p>
+          <ThemeToggle />
         </section>
       </div>
     </main>
+  );
+}
+
+// Light/dark appearance picker. Applies + persists immediately via setTheme.
+function ThemeToggle() {
+  const [theme, setTheme] = useTheme();
+  const options: Array<{ value: Theme; label: string; icon: typeof Sun }> = [
+    { value: "light", label: "Light", icon: Sun },
+    { value: "dark", label: "Dark", icon: Moon },
+  ];
+  return (
+    <div className="inline-flex rounded border border-[var(--color-hair-2)] overflow-hidden">
+      {options.map((opt) => {
+        const active = theme === opt.value;
+        const Icon = opt.icon;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            aria-pressed={active}
+            onClick={() => setTheme(opt.value)}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 text-[13px] ${
+              active
+                ? "bg-[var(--color-ink)] text-[var(--color-paper)]"
+                : "text-[var(--color-muted)] hover:bg-[var(--color-hi)]"
+            }`}
+          >
+            <Icon size={14} />
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

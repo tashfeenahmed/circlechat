@@ -74,7 +74,7 @@ export default function WorkspaceRail({ me }: Props) {
           onClick={() => !busy && setCreating(false)}
         >
           <div
-            className="bg-white rounded-md border border-[var(--color-hair-2)] shadow-lg w-[420px] max-w-[92vw]"
+            className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[420px] max-w-[92vw]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)]">

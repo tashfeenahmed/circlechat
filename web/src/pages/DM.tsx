@@ -94,7 +94,7 @@ export default function DMPage() {
   }
 
   return (
-    <main className="flex h-full min-w-0 min-h-0 flex-1 bg-white overflow-hidden">
+    <main className="flex h-full min-w-0 min-h-0 flex-1 bg-paper overflow-hidden">
       <div className="workspace flex-1 min-w-0">
         <header className="chan-head">
           <Avatar name={otherName} color="" agent={otherAgent} size="sm" status={otherStatus} />

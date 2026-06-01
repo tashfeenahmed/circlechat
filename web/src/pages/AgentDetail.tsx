@@ -69,7 +69,7 @@ export default function AgentDetailPage() {
   }
 
   return (
-    <main className="flex-1 overflow-auto bg-white">
+    <main className="flex-1 overflow-auto bg-paper">
       <div className="max-w-[800px] mx-auto px-8 py-8">
         <div className="flex items-start gap-4">
           <Avatar name={agent.name} color={agent.avatarColor} agent size="xl" />
@@ -179,7 +179,7 @@ export default function AgentDetailPage() {
                   </button>
                   <button
                     onClick={() => decide(a.id, "approve")}
-                    className="text-[12px] bg-[var(--color-ink)] text-white rounded px-2 py-1"
+                    className="text-[12px] bg-[var(--color-ink)] text-paper rounded px-2 py-1"
                   >
                     Approve
                   </button>

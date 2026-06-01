@@ -105,7 +105,7 @@ export default function SignupPage() {
 
   return (
     <div className="min-h-screen grid place-items-center px-6 py-12 bg-[var(--color-bg-2)]">
-      <div className="w-full max-w-[480px] bg-white border border-[var(--color-hair-2)] rounded p-8 shadow-sm">
+      <div className="w-full max-w-[480px] bg-paper border border-[var(--color-hair-2)] rounded p-8 shadow-sm">
         <div className="brand text-[22px] leading-none mb-1">Circle</div>
         <div className="text-[11px] uppercase tracking-widest text-[var(--color-muted)] mb-5 font-mono">
           Step {step + 1} of 3
@@ -129,7 +129,7 @@ export default function SignupPage() {
             />
             <button
               type="submit"
-              className="w-full bg-[var(--color-ink)] text-white rounded py-2 text-[13px] font-medium"
+              className="w-full bg-[var(--color-ink)] text-paper rounded py-2 text-[13px] font-medium"
             >
               Continue
             </button>
@@ -182,7 +182,7 @@ export default function SignupPage() {
               <button
                 type="submit"
                 disabled={busy || !name || !handle || !email || password.length < 8}
-                className="bg-[var(--color-ink)] text-white rounded py-2 px-4 text-[13px] font-medium disabled:opacity-60"
+                className="bg-[var(--color-ink)] text-paper rounded py-2 px-4 text-[13px] font-medium disabled:opacity-60"
               >
                 {busy ? "Creating…" : "Continue"}
               </button>
@@ -355,7 +355,7 @@ export default function SignupPage() {
                   apiKey.length < 10 ||
                   (providerId === "custom:freeapi" && apiBaseUrl.trim().length < 10)
                 }
-                className="bg-[var(--color-ink)] text-white rounded py-2 px-4 text-[13px] font-medium disabled:opacity-60"
+                className="bg-[var(--color-ink)] text-paper rounded py-2 px-4 text-[13px] font-medium disabled:opacity-60"
               >
                 {busy ? "Installing…" : "Install agent"}
               </button>
