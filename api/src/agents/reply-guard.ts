@@ -36,7 +36,15 @@ const TOOL_USE_RE = /<\/?tool_use\b|<\/?function_calls\b|<\/?invoke\b/i;
 const TOOL_CALL_JSON_RE =
   /\{[\s\S]{0,1200}["“]tool["”]\s*:\s*["“][^"”]+["”][\s\S]{0,1200}["“](?:input|arguments|parameters)["”]\s*:/i;
 const ACTION_JSON_RE =
-  /\{[\s\S]{0,400}["“]type["”]\s*:\s*["“](?:post_message|react|open_thread|request_approval|set_memory|call_tool|create_task|update_task|assign_task|task_comment|share_files)["”]/i;
+  /\{[\s\S]{0,400}["“]type["”]\s*:\s*["“](?:post_message|react|open_thread|request_approval|set_memory|delete_memory|call_tool|create_task|update_task|assign_task|task_comment|share_files|share_to_task)["”]/i;
+// Bare tool-call SYNTAX leaked as assistant text — a body that is (or starts
+// with) a line like `session_search(query="x", limit=1)` or
+// `update_task(task_id="…", status="done")`. The model is supposed to invoke
+// these via the action side-channel / MCP, never type them as prose. The
+// bridge strips these too, but guard server-side so an older bridge or the MCP
+// post route can't let them through.
+const TOOL_CALL_SYNTAX_RE =
+  /^\s*(?:session_search|search|update_task|create_task|assign_task|task_comment|share_files|share_to_task|set_memory|delete_memory|open_thread|request_approval|post_message|react)\s*\((?:[^()]|\([^()]*\))*\)\s*$/im;
 const CURL_BLOCK_RE = /```[^`]*?\bcurl\s+-[^`]{0,500}```/s;
 // Upstream LLM-gateway error strings that Hermes streams back as if they
 // were model output. These are diagnostics, not a reply — reject.
@@ -113,6 +121,7 @@ export function checkReplyBody(
   if (TOOL_USE_RE.test(trimmed)) return { ok: false, reason: "tool_use_markup" };
   if (TOOL_CALL_JSON_RE.test(trimmed)) return { ok: false, reason: "tool_call_json" };
   if (ACTION_JSON_RE.test(trimmed)) return { ok: false, reason: "action_json_leaked" };
+  if (TOOL_CALL_SYNTAX_RE.test(trimmed)) return { ok: false, reason: "tool_call_syntax" };
   if (GATEWAY_ERROR_RE.test(trimmed)) return { ok: false, reason: "gateway_error_echo" };
   if (ASSISTANT_REFUSAL_RE.test(trimmed)) return { ok: false, reason: "assistant_refusal" };
   if (HISTORY_ECHO_RE.test(trimmed)) return { ok: false, reason: "history_format_echo" };

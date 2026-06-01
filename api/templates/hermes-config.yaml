@@ -108,13 +108,13 @@ delegation:
   - file
   - web
 display:
-  compact: false
-  tool_progress: all
+  compact: true
+  tool_progress: none
   busy_input_mode: interrupt
-  background_process_notifications: all
+  background_process_notifications: none
   bell_on_complete: false
   show_reasoning: false
-  streaming: true
+  streaming: false
   skin: default
 TELEGRAM_HOME_CHANNEL: '7053600430'
 approvals:
