@@ -203,6 +203,28 @@ function extractOpenClawReply(stdout) {
 // never leak into a reply. The default entrypoint runs on every `docker run
 // hermes-agent <subcmd>` even when we just want a chat reply, so we filter
 // its progress output at the bridge.
+// Names of the structured tools/actions the model is supposed to invoke via
+// the <actions> side-channel or the MCP server — NOT type as prose. When the
+// model leaks a bare `session_search(query="…")` / `update_task(…, status="done")`
+// call as assistant text, the line is pure machinery and must never post.
+const KNOWN_TOOL_NAMES = [
+  "session_search", "search", "post_message", "react", "open_thread",
+  "request_approval", "set_memory", "delete_memory", "call_tool",
+  "create_task", "update_task", "assign_task", "task_comment",
+  "share_files", "share_to_task", "get_task", "list_tasks", "upload",
+];
+const TOOL_CALL_SYNTAX_RE = new RegExp(
+  `^(?:${KNOWN_TOOL_NAMES.join("|")})\\s*\\((?:[^()]|\\([^()]*\\))*\\)\\s*$`,
+);
+function isToolCallSyntaxLine(t) {
+  // A line that is ONLY a known tool call, e.g. `session_search(query="x", limit=1)`.
+  if (TOOL_CALL_SYNTAX_RE.test(t)) return true;
+  // Generic snake_case_ident(...) that carries args (= or quotes) and nothing
+  // else on the line — still machinery, not a sentence.
+  if (/^[a-z_][a-z0-9_]*\((?:[^()]|\([^()]*\))*\)\s*$/i.test(t) && /["'=]/.test(t)) return true;
+  return false;
+}
+
 function isEntrypointNoise(line) {
   const t = line.trim();
   if (!t) return false;
@@ -211,6 +233,23 @@ function isEntrypointNoise(line) {
   if (/^\s*[~+↑!] \S/.test(line)) return true;
   if (/^Dropping root privileges/i.test(t)) return true;
   if (/^\s*==+/.test(t)) return true;
+  // s6-overlay / entrypoint boot logs printed with an absolute path prefix on
+  // every `docker run --rm`, e.g. `/package/admin/s6-overlay/libexec/preinit:
+  // info: container permissions…` and `cont-init: info: …`.
+  if (/(?:^|\/)s6-overlay\/.*:\s*(?:info|notice|warning):/i.test(t)) return true;
+  if (/^\/package\/.*:\s*(?:info|notice|warning):/i.test(t)) return true;
+  if (/^(?:cont-init|cont-finish|preinit|s6-rc):\s/i.test(t)) return true;
+  // Hermes approval / diff-review UI artifacts ("┊ review diff a/x → b/x", hunk
+  // headers, the rename arrow). These come from display.tool_progress and must
+  // never reach a channel.
+  if (/^┊/.test(t)) return true;
+  if (/^@@\s*-?\d+[,\d ]*\+?\d*[,\d ]*@@/.test(t)) return true;
+  if (/^review diff\b/i.test(t)) return true;
+  if (/^[ab]\/\S+\s*(?:→|->)\s*[ab]\/\S+/.test(t)) return true;
+  // Runtime status / spinner lines, e.g. "⏱ Timeout — continuing without sudo".
+  if (/^[⏱⏳⌛⚙🔄]️?\s/.test(t)) return true;
+  // Bare tool-call syntax leaked as text, e.g. `session_search(query="x")`.
+  if (isToolCallSyntaxLine(t)) return true;
   // Hermes' tool-dispatcher status lines. These are internal diagnostics and
   // must never land as chat messages. "Auto-repaired tool name" specifically
   // happens when the model emits a tool call whose name Hermes fuzzy-matches
@@ -226,6 +265,26 @@ function isEntrypointNoise(line) {
   if (/^\[s6-/i.test(t)) return true;
   if (/^reconcile:\s/i.test(t)) return true;
   return false;
+}
+
+// Final safety net before posting: after <actions>/<attachments> have been
+// pulled out, is the remaining body nothing but machinery (tool-call syntax,
+// leftover JSON, diff/boot/spinner noise)? If so we must NOT post it as a chat
+// message — suppress the post entirely and let any side-actions carry the turn.
+function isOnlyArtifact(s) {
+  const t = (s || "").trim();
+  if (!t) return true;
+  const lines = t.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return true;
+  return lines.every(
+    (l) =>
+      isEntrypointNoise(l) ||
+      isToolCallSyntaxLine(l) ||
+      /^[┊@]/.test(l) ||
+      /^@@/.test(l) ||
+      // a line that is entirely a JSON object/array (leftover tool call)
+      /^(?:```(?:json)?)?\s*[[{][\s\S]*[\]}]\s*(?:```)?$/.test(l),
+  );
 }
 
 // Python traceback in stdout/stderr means Hermes crashed (usually SIGTERM
@@ -361,20 +420,12 @@ const ALLOWED_ACTION_TYPES = new Set([
   "update_task",
   "assign_task",
   "task_comment",
+  "share_files",
   "share_to_task",
 ]);
-function extractActions(text) {
-  const re = /<actions>\s*(\[[\s\S]*?\])\s*<\/actions>/i;
-  const m = re.exec(text);
-  if (!m) return { body: text, actions: [] };
-  let arr;
-  try {
-    arr = JSON.parse(m[1]);
-  } catch {
-    return { body: text.replace(re, "").trim(), actions: [] };
-  }
-  if (!Array.isArray(arr)) return { body: text.replace(re, "").trim(), actions: [] };
+function sanitizeActions(arr) {
   const clean = [];
+  if (!Array.isArray(arr)) return clean;
   for (const raw of arr) {
     if (!raw || typeof raw !== "object") continue;
     if (typeof raw.type !== "string") continue;
@@ -382,7 +433,50 @@ function extractActions(text) {
     clean.push(raw);
     if (clean.length >= 20) break;
   }
-  return { body: text.replace(re, "").trim(), actions: clean };
+  return clean;
+}
+function extractActions(text) {
+  const re = /<actions>\s*(\[[\s\S]*?\])\s*<\/actions>/i;
+  const m = re.exec(text);
+  if (m) {
+    let arr;
+    try {
+      arr = JSON.parse(m[1]);
+    } catch {
+      return { body: text.replace(re, "").trim(), actions: [] };
+    }
+    return { body: text.replace(re, "").trim(), actions: sanitizeActions(arr) };
+  }
+  // No <actions> wrapper — the model sometimes emits the action as a bare JSON
+  // object (or ```json fenced) sitting alone on its own line(s), e.g.
+  // `{"type":"share_to_task","task_id":"…","files":[…]}`. Parse those out,
+  // execute them as real side-actions, and strip them from the post body so the
+  // raw JSON never shows up as a chat message.
+  const collected = [];
+  const spans = [];
+  const bare = /(?:^|\n)[ \t]*(?:```(?:json)?[ \t]*\n?)?([ \t]*(?:\[[\s\S]*?\]|\{[\s\S]*?\}))[ \t]*\n?(?:```)?[ \t]*(?=\n|$)/g;
+  let mm;
+  while ((mm = bare.exec(text))) {
+    let v;
+    try {
+      v = JSON.parse(mm[1].trim());
+    } catch {
+      continue;
+    }
+    const items = Array.isArray(v) ? v : [v];
+    if (
+      items.some(
+        (o) => o && typeof o === "object" && typeof o.type === "string" && ALLOWED_ACTION_TYPES.has(o.type),
+      )
+    ) {
+      collected.push(...items);
+      spans.push([mm.index, bare.lastIndex]);
+    }
+  }
+  if (!collected.length) return { body: text, actions: [] };
+  let body = text;
+  for (const [s, e] of spans.reverse()) body = body.slice(0, s) + body.slice(e);
+  return { body: body.trim(), actions: sanitizeActions(collected) };
 }
 
 function formatMsg(agent, m) {
@@ -919,20 +1013,29 @@ function connect(entry) {
       const attachments = afterAtt.attachments;
       const sideActions = afterActions.actions;
       const actions = [];
+      // Final suppression: if the remaining body is nothing but machinery
+      // (tool-call syntax, leftover JSON, diff/boot/spinner noise), don't post
+      // it as a chat message — let any side-actions carry the turn. Without
+      // this, a leaked `session_search(...)` or raw `{"type":...}` would land
+      // in a channel as a garbage message.
+      const postBody = body && body.trim() && !isOnlyArtifact(body) ? body : "";
+      if (body && body.trim() && !postBody) {
+        console.log(`[${entry.handle}] ${trigger} → body was tool-call/artifact-only; suppressing post (sideActions=${sideActions.length})`);
+      }
       // Only emit a post_message if there's something to say AND we have a
       // conversation to post into. In task-only mode (scheduled wake with
       // empty inbox + open tasks), conv is undefined — the agent's prose
       // would have nowhere to land, so we drop it and let the side-actions
       // (task_comment / share_to_task / update_task) carry the work.
-      if (body && body.trim() && conv) {
+      if (postBody && conv) {
         actions.push({
           type: "post_message",
           conversation_id: conv.conversationId,
-          body_md: body,
+          body_md: postBody,
           ...(replyTo ? { reply_to: replyTo } : {}),
           ...(attachments.length ? { attachments } : {}),
         });
-      } else if (body && body.trim() && !conv) {
+      } else if (postBody && !conv) {
         // Task-only mode and the agent wrote prose but no actions block.
         // Don't drop the work — auto-wrap as a task_comment on the agent's
         // most-stale assigned task so the prose lands SOMEWHERE useful. If
@@ -943,24 +1046,24 @@ function connect(entry) {
           (Array.isArray(p.myTasks) && p.myTasks[0]?.id) ||
           null;
         if (targetTaskId) {
-          console.log(`[${entry.handle}] task-only: auto-wrapping ${body.length}-char prose into task_comment on ${targetTaskId}`);
+          console.log(`[${entry.handle}] task-only: auto-wrapping ${postBody.length}-char prose into task_comment on ${targetTaskId}`);
           actions.push({
             type: "task_comment",
             task_id: targetTaskId,
-            body_md: body,
+            body_md: postBody,
           });
         } else {
-          console.log(`[${entry.handle}] task-only: dropping ${body.length}-char prose (no conv and no task to wrap into)`);
+          console.log(`[${entry.handle}] task-only: dropping ${postBody.length}-char prose (no conv and no task to wrap into)`);
         }
       }
       for (const a of sideActions) actions.push(a);
       console.log(
-        `[${entry.handle}] replying, len=${body.length}, att=${attachments.length}${sideActions.length ? `, actions=${sideActions.length} (${sideActions.map((a) => a.type).join("+")})` : ""}`,
+        `[${entry.handle}] replying, len=${postBody.length}, att=${attachments.length}${sideActions.length ? `, actions=${sideActions.length} (${sideActions.map((a) => a.type).join("+")})` : ""}`,
       );
       if (actions.length === 0) return reply({ status: "HEARTBEAT_OK" });
       reply({
         actions,
-        trace: [`${entry.handle} responded, len=${body.length}${attachments.length ? `, att=${attachments.length}` : ""}${sideActions.length ? `, actions=${sideActions.length}` : ""}`],
+        trace: [`${entry.handle} responded, len=${postBody.length}${attachments.length ? `, att=${attachments.length}` : ""}${sideActions.length ? `, actions=${sideActions.length}` : ""}`],
       });
     } catch (e) {
       console.error(`[${entry.handle}] error: ${e.message.split("\n")[0]}`);
