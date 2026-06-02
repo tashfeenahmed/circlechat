@@ -1844,6 +1844,19 @@ input, textarea { font: inherit; color: inherit; }
   font-family: var(--font-mono);
   letter-spacing: 0;
 }
+.kc-blocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-err) 14%, transparent);
+  color: var(--color-err);
+  font-family: var(--font-mono);
+}
 .kc-foot {
   display: flex; align-items: center; gap: 10px;
   font-size: 11px;

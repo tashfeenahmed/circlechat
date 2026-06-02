@@ -44,12 +44,15 @@ export async function hydrateTasks(
       subtaskCount: number;
       commentCount: number;
       linkCount: number;
+      // Ids of unconditional `blocks` prerequisites that aren't `done` yet. A
+      // non-empty array means the task is workflow-blocked and shouldn't start.
+      blockedBy: string[];
     }
   >
 > {
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
-  const [as, ls, subs, coms, lks] = await Promise.all([
+  const [as, ls, subs, coms, lks, blockerLinks] = await Promise.all([
     db.select().from(taskAssignees).where(inArray(taskAssignees.taskId, ids)),
     db.select().from(taskLabels).where(inArray(taskLabels.taskId, ids)),
     db
@@ -67,7 +70,36 @@ export async function hydrateTasks(
       .from(taskLinks)
       .where(inArray(taskLinks.taskId, ids))
       .groupBy(taskLinks.taskId),
+    // Incoming `blocks` edges into these tasks — the prerequisites. (source
+    // taskId `blocks` target linkedTaskId.)
+    db
+      .select({
+        target: taskLinks.linkedTaskId,
+        source: taskLinks.taskId,
+        condition: taskLinks.condition,
+      })
+      .from(taskLinks)
+      .where(and(inArray(taskLinks.linkedTaskId, ids), eq(taskLinks.kind, "blocks"))),
   ]);
+  // Resolve the status of every prerequisite so we know which are still open.
+  const sourceIds = Array.from(new Set(blockerLinks.map((l) => l.source)));
+  const sourceStatus = new Map<string, string>();
+  if (sourceIds.length) {
+    const srows = await db
+      .select({ id: tasks.id, status: tasks.status })
+      .from(tasks)
+      .where(inArray(tasks.id, sourceIds));
+    for (const s of srows) sourceStatus.set(s.id, s.status);
+  }
+  const blockedMap = new Map<string, string[]>();
+  for (const l of blockerLinks) {
+    if (l.condition) continue; // conditional edges activate, they don't block
+    if (sourceStatus.get(l.source) !== "done") {
+      const arr = blockedMap.get(l.target) ?? [];
+      arr.push(l.source);
+      blockedMap.set(l.target, arr);
+    }
+  }
   const aMap = new Map<string, string[]>();
   for (const r of as) {
     const arr = aMap.get(r.taskId) ?? [];
@@ -90,6 +122,7 @@ export async function hydrateTasks(
     subtaskCount: sMap.get(r.id) ?? 0,
     commentCount: cMap.get(r.id) ?? 0,
     linkCount: kMap.get(r.id) ?? 0,
+    blockedBy: blockedMap.get(r.id) ?? [],
   }));
 }
 
@@ -150,6 +183,7 @@ export async function getTaskDetail(taskId: string, workspaceId: string) {
       id: taskLinks.id,
       linkedTaskId: taskLinks.linkedTaskId,
       kind: taskLinks.kind,
+      condition: taskLinks.condition,
       createdAt: taskLinks.createdAt,
     })
     .from(taskLinks)
@@ -320,7 +354,95 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
     taskId,
     task: hydrated,
   });
+  // Workflow: completing a task can unblock / branch into downstream tasks.
+  if (input.status === "done" && t!.status !== "done" && !input.archived) {
+    await advanceWorkflow(taskId, actorMemberId, workspaceId).catch(() => {});
+  }
   return { task: hydrated };
+}
+
+// ───── workflow advancement (deterministic A→B→C with branches) ─────
+//
+// Called when a task reaches `done`. Walks its outgoing `blocks` edges and
+// auto-starts downstream tasks whose prerequisites are now satisfied:
+//   • Unconditional edge (hard dependency / AND-join): the target starts once
+//     EVERY one of its unconditional blockers is `done`.
+//   • Conditional edge (decision branch / OR-activation): the target starts when
+//     the completed task carries a label equal to the edge's `condition` —
+//     letting an agent's labelled outcome pick which branch runs.
+// "Start" = move a backlog task to in_progress and wake its agent assignees
+// (humans get an inbox nudge). Tasks already past backlog are left untouched,
+// and this never sets anything to `done`, so it cannot recurse.
+export async function advanceWorkflow(
+  completedTaskId: string,
+  actorMemberId: string,
+  workspaceId: string,
+): Promise<void> {
+  const outgoing = await db
+    .select({ target: taskLinks.linkedTaskId, condition: taskLinks.condition })
+    .from(taskLinks)
+    .where(and(eq(taskLinks.taskId, completedTaskId), eq(taskLinks.kind, "blocks")));
+  if (!outgoing.length) return;
+
+  // Labels on the just-completed task select which conditional branches fire.
+  const completedLabels = new Set(
+    (
+      await db.select({ label: taskLabels.label }).from(taskLabels).where(eq(taskLabels.taskId, completedTaskId))
+    ).map((r) => r.label),
+  );
+
+  for (const edge of outgoing) {
+    const targetId = edge.target;
+    if (edge.condition && !completedLabels.has(edge.condition)) continue; // branch not taken
+
+    const target = await loadTask(targetId);
+    if (!target || target.workspaceId !== workspaceId) continue;
+    if (target.status !== "backlog") continue; // already running/done — don't disturb
+
+    // For a hard dependency, every other unconditional blocker must also be done.
+    if (!edge.condition) {
+      const blockers = await db
+        .select({ source: taskLinks.taskId, condition: taskLinks.condition })
+        .from(taskLinks)
+        .where(and(eq(taskLinks.linkedTaskId, targetId), eq(taskLinks.kind, "blocks")));
+      const hardIds = blockers.filter((b) => !b.condition).map((b) => b.source);
+      if (hardIds.length) {
+        const statuses = await db
+          .select({ id: tasks.id, status: tasks.status })
+          .from(tasks)
+          .where(inArray(tasks.id, hardIds));
+        if (!statuses.every((s) => s.status === "done")) continue; // still blocked
+      }
+    }
+
+    await db.update(tasks).set({ status: "in_progress", updatedAt: new Date() }).where(eq(tasks.id, targetId));
+    await logActivity(targetId, actorMemberId, "status_changed", {
+      from: "backlog",
+      to: "in_progress",
+      workflow: true,
+      fromTask: completedTaskId,
+    });
+    const [trow] = await db.select().from(tasks).where(eq(tasks.id, targetId));
+    const [thyd] = await hydrateTasks([trow]);
+    await publishToWorkspace(workspaceId, { type: "task.updated", workspaceId, taskId: targetId, task: thyd });
+    const assignees = await db
+      .select({ memberId: taskAssignees.memberId })
+      .from(taskAssignees)
+      .where(eq(taskAssignees.taskId, targetId));
+    for (const a of assignees) {
+      await maybeFireAgentTrigger(a.memberId, targetId, target.conversationId, "task_assigned");
+      notify({
+        workspaceId,
+        memberId: a.memberId,
+        kind: "task_assigned",
+        actorMemberId,
+        title: "A workflow task is ready for you",
+        body: target.title,
+        link: `/board?task=${targetId}`,
+        taskId: targetId,
+      }).catch(() => {});
+    }
+  }
 }
 
 export async function deleteTask(taskId: string, workspaceId: string) {
@@ -449,6 +571,7 @@ export async function addLink(
   kind: "relates" | "blocks" | "duplicate",
   actorMemberId: string,
   workspaceId: string,
+  condition?: string | null,
 ) {
   const t = await loadTask(taskId);
   const g = guard(t, workspaceId);
@@ -456,6 +579,8 @@ export async function addLink(
   if (linkedTaskId === taskId) return { error: "cannot_link_to_self" as const };
   const linked = await loadTask(linkedTaskId);
   if (!linked || linked.workspaceId !== workspaceId) return { error: "linked_not_found" as const };
+  // `condition` only carries meaning on a `blocks` edge (it makes it a branch).
+  const cond = kind === "blocks" && condition ? condition.trim().slice(0, 60) || null : null;
   const linkId = id("tlnk");
   await db
     .insert(taskLinks)
@@ -464,10 +589,11 @@ export async function addLink(
       taskId,
       linkedTaskId,
       kind,
+      condition: cond,
       createdBy: actorMemberId,
     })
     .onConflictDoNothing();
-  await logActivity(taskId, actorMemberId, "link_added", { linkedTaskId, kind });
+  await logActivity(taskId, actorMemberId, "link_added", { linkedTaskId, kind, condition: cond });
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
   await publishToWorkspace(workspaceId, {

@@ -706,13 +706,21 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       .object({
         linkedTaskId: z.string().min(1),
         kind: z.enum(["relates", "blocks", "duplicate"]).optional(),
+        condition: z.string().max(60).optional(),
       })
       .parse(req.body);
     const ws = await agentWorkspaceId(req.agentCtx!.agentId);
     if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
     return taskSend(
       reply,
-      await addLink(taskId, body.linkedTaskId, body.kind ?? "relates", req.agentCtx!.memberId, ws),
+      await addLink(
+        taskId,
+        body.linkedTaskId,
+        body.kind ?? "relates",
+        req.agentCtx!.memberId,
+        ws,
+        body.condition ?? null,
+      ),
     );
   });
   app.delete("/agent-api/tasks/:id/links/:linkId", async (req, reply) => {

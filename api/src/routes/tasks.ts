@@ -49,6 +49,9 @@ const LabelsBody = z.object({ labels: z.array(z.string().max(40)) });
 const LinkBody = z.object({
   linkedTaskId: z.string().min(1),
   kind: z.enum(["relates", "blocks", "duplicate"]).optional(),
+  // Optional branch condition for a `blocks` edge: the source must complete
+  // carrying a label equal to this value for the edge to auto-start the target.
+  condition: z.string().max(60).optional(),
 });
 const CommentBody = z.object({
   bodyMd: z.string().min(1).max(20000),
@@ -134,6 +137,7 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
       body.kind ?? "relates",
       req.auth!.memberId!,
       req.auth!.workspaceId!,
+      body.condition ?? null,
     );
     return send(reply, r);
   });

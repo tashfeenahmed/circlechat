@@ -376,6 +376,10 @@ export const taskLinks = pgTable(
     taskId: varchar("task_id", { length: 32 }).notNull(),
     linkedTaskId: varchar("linked_task_id", { length: 32 }).notNull(),
     kind: varchar("kind", { length: 20 }).notNull().default("relates"), // relates | blocks | duplicate
+    // Workflow branch condition. NULL = unconditional `blocks` (hard dependency,
+    // AND-join). Set = the source must complete carrying a label equal to this
+    // value for the edge to fire (OR-activation / decision branch).
+    condition: varchar("condition", { length: 60 }),
     createdBy: varchar("created_by", { length: 32 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },

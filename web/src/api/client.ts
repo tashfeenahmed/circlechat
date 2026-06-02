@@ -197,12 +197,16 @@ export interface Task {
   subtaskCount: number;
   commentCount: number;
   linkCount: number;
+  // Ids of unconditional `blocks` prerequisites that aren't done yet. Non-empty
+  // = the task is workflow-blocked (shouldn't start until they complete).
+  blockedBy: string[];
 }
 
 export interface TaskLink {
   id: string;
   linkedTaskId: string;
   kind: "relates" | "blocks" | "duplicate";
+  condition: string | null;
   createdAt: string;
   linked: Task | null;
 }

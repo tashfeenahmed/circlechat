@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Plus, MessageSquare, GitBranch, Link2, Calendar } from "lucide-react";
+import { Plus, MessageSquare, GitBranch, Link2, Calendar, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTasks, useMembersDirectory, useMe } from "../lib/hooks";
 import { api, type Task, type TaskStatus } from "../api/client";
@@ -232,6 +232,12 @@ export default function Board() {
                     title={c.id}
                   >
                     <div className="kc-title">{c.title}</div>
+                    {c.blockedBy && c.blockedBy.length > 0 && (
+                      <div className="kc-blocked" title={`Blocked by ${c.blockedBy.length} unfinished task(s)`}>
+                        <Lock size={10} strokeWidth={2.2} />
+                        Blocked
+                      </div>
+                    )}
                     {c.labels.length > 0 && (
                       <div className="kc-labels">
                         {c.labels.map((l) => (

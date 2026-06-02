@@ -316,21 +316,27 @@ const TOOLS = [
   {
     name: "link_tasks",
     description:
-      "Link two tasks together. kind: relates | blocks | duplicate. Use when work on one task depends on, duplicates, or relates to another.",
+      "Link two tasks. kind: relates | blocks | duplicate. A `blocks` edge (taskId blocks linkedTaskId) is a workflow dependency: linkedTaskId stays blocked until taskId is done, then auto-starts and wakes its assignee. Add `condition` to make it a decision branch — linkedTaskId only auto-starts when taskId completes carrying a label equal to `condition` (e.g. set condition='approved' on one edge and 'rejected' on another to branch). Use this to build deterministic A→B→C pipelines and approve/reject branches.",
     inputSchema: {
       type: "object",
       properties: {
         taskId: { type: "string" },
         linkedTaskId: { type: "string" },
         kind: { type: "string", enum: ["relates", "blocks", "duplicate"] },
+        condition: {
+          type: "string",
+          description:
+            "Branch label for a `blocks` edge. The target auto-starts only when the source completes carrying this label.",
+        },
       },
       required: ["taskId", "linkedTaskId"],
       additionalProperties: false,
     },
-    run: ({ taskId, linkedTaskId, kind }) =>
+    run: ({ taskId, linkedTaskId, kind, condition }) =>
       apiPost(`/agent-api/tasks/${encodeURIComponent(taskId)}/links`, {
         linkedTaskId,
         kind: kind ?? "relates",
+        ...(condition ? { condition } : {}),
       }),
   },
   {
