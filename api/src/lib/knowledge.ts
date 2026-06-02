@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { knowledgeChunks } from "../db/schema.js";
 import { id } from "./ids.js";
@@ -84,8 +84,9 @@ export async function recallKnowledge(
 }
 
 // Convenience: remove a workspace's chunks for a deleted source (best-effort).
+// Not gated on embeddingsEnabled — deletion must run even if embeddings were
+// later turned off, so stale chunks don't linger.
 export async function forgetKnowledge(workspaceId: string, source: KnowledgeSource, sourceId: string): Promise<void> {
-  if (!embeddingsEnabled()) return;
   try {
     await db
       .delete(knowledgeChunks)
@@ -94,6 +95,24 @@ export async function forgetKnowledge(workspaceId: string, source: KnowledgeSour
           eq(knowledgeChunks.workspaceId, workspaceId),
           eq(knowledgeChunks.source, source),
           eq(knowledgeChunks.sourceId, sourceId),
+        ),
+      );
+  } catch {
+    /* best-effort */
+  }
+}
+
+// Drop all artifact-derived chunks for a task (sourceId is `${taskId}:${name}`).
+// Called when a task is deleted so its knowledge doesn't outlive it.
+export async function forgetTaskKnowledge(workspaceId: string, taskId: string): Promise<void> {
+  try {
+    await db
+      .delete(knowledgeChunks)
+      .where(
+        and(
+          eq(knowledgeChunks.workspaceId, workspaceId),
+          eq(knowledgeChunks.source, "artifact"),
+          like(knowledgeChunks.sourceId, `${taskId}:%`),
         ),
       );
   } catch {

@@ -14,6 +14,7 @@ import { publishToWorkspace } from "./events.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { notify } from "./notifications.js";
 import { liveArtifactRows, isSubstantiveArtifact, purgeArtifactsForTasks } from "./task-artifacts.js";
+import { forgetTaskKnowledge } from "./knowledge.js";
 
 export const STATUSES = ["backlog", "in_progress", "review", "done"] as const;
 export type Status = (typeof STATUSES)[number];
@@ -461,6 +462,7 @@ export async function deleteTask(taskId: string, workspaceId: string) {
     .where(or(inArray(taskLinks.taskId, allIds), inArray(taskLinks.linkedTaskId, allIds)));
   await db.delete(taskActivity).where(inArray(taskActivity.taskId, allIds));
   await purgeArtifactsForTasks(allIds); // rows + their object-store blobs
+  for (const tid of allIds) await forgetTaskKnowledge(workspaceId, tid); // RAG chunks
   await db.delete(tasks).where(inArray(tasks.id, allIds));
   await publishToWorkspace(workspaceId, {
     type: "task.deleted",
