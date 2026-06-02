@@ -19,6 +19,7 @@
     "@fastify/cookie": "^10.0.1",
     "@fastify/cors": "^10.0.1",
     "@fastify/multipart": "^9.0.1",
+    "@fastify/static": "^8.0.1",
     "@fastify/websocket": "^11.0.1",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.13.0",
@@ -27,8 +28,8 @@
     "ioredis": "^5.4.1",
     "nanoid": "^5.0.7",
     "postgres": "^3.4.4",
-    "zod": "^3.23.8",
-    "@fastify/static": "^8.0.1"
+    "yaml": "^2.9.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

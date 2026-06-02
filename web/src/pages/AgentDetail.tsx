@@ -22,6 +22,21 @@ export default function AgentDetailPage() {
     await qc.invalidateQueries({ queryKey: ["agents"] });
   }
 
+  // Download this agent's secrets-free definition as a reviewable YAML spec
+  // (agent-as-code). Same-origin GET, so the session cookie rides along.
+  async function exportYaml() {
+    const base = import.meta.env.VITE_API_URL ?? "/api";
+    const res = await fetch(`${base}/agents/${id}/export`, { credentials: "include" });
+    const text = await res.text();
+    const blob = new Blob([text], { type: "application/yaml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `agent-${agent.handle}.yaml`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function runTest() {
     setPending("test");
     try {
@@ -108,6 +123,13 @@ export default function AgentDetailPage() {
               className="text-[12px] border border-[var(--color-hair-2)] rounded px-3 py-1.5 hover:bg-[var(--color-hi)]"
             >
               {agent.status === "paused" ? "Resume" : "Pause"}
+            </button>
+            <button
+              onClick={exportYaml}
+              title="Download this agent's definition as reviewable YAML (agent-as-code)"
+              className="text-[12px] border border-[var(--color-hair-2)] rounded px-3 py-1.5 hover:bg-[var(--color-hi)]"
+            >
+              Export YAML
             </button>
           </div>
         </div>
