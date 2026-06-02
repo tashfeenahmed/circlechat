@@ -274,6 +274,30 @@ export const memoryKv = pgTable(
   }),
 );
 
+// ───────────────── knowledge store (per-workspace RAG) ─────────────────
+// A chunk of text + its embedding vector (JSON number[]). Cross-run, workspace
+// scoped, queryable by similarity so agents can recall prior work beyond what's
+// in their context window or KV memory. Unique on (workspace, source, sourceId)
+// so re-ingesting a source updates in place.
+export const knowledgeChunks = pgTable(
+  "knowledge_chunks",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    source: varchar("source", { length: 20 }).notNull(), // artifact | message | task | note
+    sourceId: varchar("source_id", { length: 64 }).notNull().default(""),
+    title: varchar("title", { length: 300 }).notNull().default(""),
+    text: text("text").notNull(),
+    embedding: jsonb("embedding").$type<number[]>().notNull(),
+    dim: integer("dim").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    wsIdx: index("knowledge_ws_idx").on(t.workspaceId),
+    srcUniq: uniqueIndex("knowledge_src_uniq").on(t.workspaceId, t.source, t.sourceId),
+  }),
+);
+
 // ───────────────── presence (in-memory shadow; table kept for audit of last_seen) ─────────────────
 export const presence = pgTable("presence", {
   memberId: varchar("member_id", { length: 32 }).primaryKey(),

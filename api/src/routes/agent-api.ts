@@ -12,6 +12,7 @@ import {
   memoryKv,
 } from "../db/schema.js";
 import { putObject, publicUrl, statObject, streamObject } from "../lib/storage.js";
+import { recallKnowledge } from "../lib/knowledge.js";
 import { id as makeId } from "../lib/ids.js";
 import {
   createArtifact,
@@ -910,6 +911,17 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
         ),
       );
     return { ok: true };
+  });
+
+  // ───── RAG recall — semantic search over the workspace knowledge store ─────
+  // Returns the most similar past deliverables/notes for a query so an agent can
+  // recall prior work across runs. Empty unless an embeddings backend is wired.
+  app.get("/agent-api/recall", async (req) => {
+    const q = z
+      .object({ q: z.string().min(1), k: z.coerce.number().int().min(1).max(20).optional() })
+      .parse((req.query as Record<string, unknown>) ?? {});
+    const hits = await recallKnowledge(req.agentCtx!.workspaceId, q.q, q.k ?? 5);
+    return { hits };
   });
 
   // Browser proxy: shell out to the host's `agent-browser` CLI so agents can

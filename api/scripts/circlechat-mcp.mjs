@@ -443,6 +443,22 @@ const TOOLS = [
     },
     run: ({ taskId }) => apiGet(`/agent-api/tasks/${encodeURIComponent(taskId)}/artifacts`),
   },
+  {
+    name: "recall",
+    description:
+      "Semantic search over this workspace's knowledge — past task deliverables and notes, across all runs. Use it at the START of a task to find relevant prior work instead of starting cold or redoing something. Returns ranked snippets with their source.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1 },
+        k: { type: "number", description: "max results (default 5)" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    run: ({ query, k }) =>
+      apiGet(`/agent-api/recall?q=${encodeURIComponent(query)}${k ? `&k=${k}` : ""}`),
+  },
 ];
 
 // ──────────────────────── JSON-RPC (MCP stdio) ────────────────────────

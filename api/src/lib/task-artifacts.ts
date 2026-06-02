@@ -5,11 +5,28 @@ import { taskArtifacts, members, users, agents, type TaskArtifact } from "../db/
 import { putObject, publicUrl, readObject, removeStoragePrefix } from "./storage.js";
 import { id as makeId } from "./ids.js";
 import type { Attachment } from "../db/schema.js";
+import { ingestKnowledge } from "./knowledge.js";
 
 // Hard limits — mirror the agent attachment ingest (executor.ts) so artifacts
 // can't be used to smuggle in larger payloads than the share path allows.
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024; // 20 MB
 export const MAX_ARTIFACTS_PER_TASK = 500;
+
+// Is this content type plain text we can usefully embed for RAG? (markdown,
+// text, json, csv, code, etc.) Binary deliverables are skipped.
+function isTextualContentType(ct: string): boolean {
+  const t = (ct || "").toLowerCase();
+  return (
+    t.startsWith("text/") ||
+    t.includes("markdown") ||
+    t.includes("json") ||
+    t.includes("csv") ||
+    t.includes("xml") ||
+    t.includes("yaml") ||
+    t.includes("javascript") ||
+    t === "application/octet-stream" // inline text artifacts default to this
+  );
+}
 
 // Substance gate (PR E, heuristic v1) — used by done-requires-evidence to
 // reject placeholder/title-only "deliverables" (the junk-file bypass). Cheap
@@ -95,6 +112,19 @@ export async function createArtifact(opts: {
     createdBy: opts.createdBy,
   };
   await db.insert(taskArtifacts).values(row);
+
+  // RAG: ingest textual deliverables into the per-workspace knowledge store so
+  // agents can recall them across runs. Best-effort, fire-and-forget, no-op
+  // unless embeddings are configured.
+  if (isTextualContentType(row.contentType)) {
+    void ingestKnowledge({
+      workspaceId: opts.workspaceId,
+      source: "artifact",
+      sourceId: `${opts.taskId}:${name}`,
+      title: name,
+      text: opts.buffer.toString("utf8"),
+    });
+  }
 
   const handle = await resolveMember(opts.createdBy);
   return {
