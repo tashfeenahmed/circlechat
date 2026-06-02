@@ -797,8 +797,10 @@ input, textarea { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--color-hair);
 }
 .notif-item:last-child { border-bottom: none; }
-.notif-item:hover { background: var(--color-hi); }
-.notif-item.unread { background: rgba(0, 0, 0, 0.025); }
+.notif-item:hover { background: var(--color-hi-2); }
+/* token-based so the unread tint is visible on dark paper too (a hardcoded
+   black overlay vanished in dark mode); the accent bar makes it unmistakable. */
+.notif-item.unread { background: var(--color-hi); box-shadow: inset 2px 0 0 var(--color-err); }
 .notif-item-icon {
   display: inline-flex;
   margin-top: 1px;
@@ -893,15 +895,18 @@ input, textarea { font: inherit; color: inherit; }
   flex: 1 1 auto;
   overflow-y: auto;
 }
-/* count pill shown on a bundled row, e.g. "Samantha messaged you  (3)" */
+/* count pill shown on a bundled row, e.g. "Samantha messaged you  (3)".
+   Uses the inverting ink/paper pair so it stays legible in both themes —
+   dark ink on light paper-text in light mode, light ink on dark paper-text in
+   dark mode (a literal #fff here turned white-on-white when ink inverts). */
 .notif-count-pill {
   display: inline-block;
   margin-left: 6px;
   min-width: 16px;
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--color-accent, var(--color-ink));
-  color: #fff;
+  background: var(--color-ink);
+  color: var(--color-paper);
   font-size: 10px;
   line-height: 16px;
   font-weight: 600;

@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import {
   useNotifications,
-  useMarkNotificationRead,
+  useMarkNotificationsRead,
   useMarkAllNotificationsRead,
   useMarkConversationNotificationsRead,
 } from "../lib/hooks";
@@ -70,7 +70,7 @@ export default function NotificationBell() {
   // active for as long as the bell is on screen — i.e. the whole app shell.
   // The unread badge derives from this list, so it stays live while closed.
   const list = useNotifications();
-  const markRead = useMarkNotificationRead();
+  const markMany = useMarkNotificationsRead();
   const markAll = useMarkAllNotificationsRead();
   const markConv = useMarkConversationNotificationsRead();
   const nav = useNavigate();
@@ -141,14 +141,17 @@ export default function NotificationBell() {
   }, [open]);
 
   function onClickBundle(b: Bundle) {
-    // Mark the whole bundle read. Conversation bundles use the per-conversation
-    // endpoint (one call, optimistic); standalone/task bundles mark each unread
-    // row. Either way the badge updates the moment we navigate away.
-    const convId = b.latest.conversationId;
-    if (convId) {
-      if (b.unread > 0) markConv.mutate(convId);
-    } else {
-      for (const n of b.items) if (!n.readAt) markRead.mutate(n.id);
+    // Mark the whole bundle read in one optimistic step so it clears the instant
+    // it's clicked. Conversation bundles use the per-conversation endpoint (also
+    // catches unread rows beyond the loaded page); task/standalone bundles mark
+    // their unread ids together (one invalidate, no per-row refetch race).
+    if (b.unread > 0) {
+      const convId = b.latest.conversationId;
+      if (convId) {
+        markConv.mutate(convId);
+      } else {
+        markMany.mutate(b.items.filter((n) => !n.readAt).map((n) => n.id));
+      }
     }
     setOpen(false);
     if (b.latest.link) nav(b.latest.link);

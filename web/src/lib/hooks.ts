@@ -366,6 +366,42 @@ export function useMarkNotificationRead() {
   });
 }
 
+// Mark several notifications read in one shot — used when a bundled row (e.g. a
+// task with multiple comments) is clicked. Marking each id with the singular
+// hook raced: every call invalidated + refetched independently, and a refetch
+// landing before a sibling's write committed snapped that row back to unread
+// ("clicked but didn't go away"). Here we flip them all read optimistically,
+// fire the writes together, and invalidate ONCE after they all settle.
+export function useMarkNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.all(
+        ids.map((nid) => api.post(`/notifications/${nid}/read`).catch(() => {})),
+      );
+    },
+    onMutate: async (ids: string[]) => {
+      await qc.cancelQueries({ queryKey: ["notifications"] });
+      const set = new Set(ids);
+      const now = new Date().toISOString();
+      qc.setQueryData<NotificationsPage>(["notifications"], (old) =>
+        old
+          ? {
+              ...old,
+              notifications: old.notifications.map((n) =>
+                set.has(n.id) && !n.readAt ? { ...n, readAt: now } : n,
+              ),
+            }
+          : old,
+      );
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+      qc.invalidateQueries({ queryKey: ["notifications", "unread"] });
+    },
+  });
+}
+
 export function useMarkAllNotificationsRead() {
   const qc = useQueryClient();
   return useMutation({
