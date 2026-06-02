@@ -9,6 +9,7 @@ import {
   messages,
   reactions,
   users,
+  memoryKv,
 } from "../db/schema.js";
 import { putObject, publicUrl, statObject, streamObject } from "../lib/storage.js";
 import { id as makeId } from "../lib/ids.js";
@@ -843,6 +844,72 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     reply.header("content-type", art.contentType);
     reply.header("content-length", String(st.size));
     return reply.send(streamObject(art.storageKey));
+  });
+
+  // ───── durable agent memory (KV) — native tool surface ─────
+  // Mirrors the set_memory/delete_memory <actions> so agents can read and write
+  // their cross-run memory through native tool calls instead of emitting the
+  // text side-channel. Scopes: global | conversation | task (scopeId required
+  // for the latter two). Survives the per-turn container wipe (it's in Postgres).
+  app.post("/agent-api/memory", async (req, reply) => {
+    const body = z
+      .object({
+        key: z.string().min(1).max(100),
+        value: z.unknown(),
+        scope: z.enum(["global", "conversation", "task"]).optional(),
+        scopeId: z.string().max(32).optional(),
+      })
+      .parse(req.body);
+    const scope = body.scope ?? "global";
+    const scopeId = scope === "global" ? "" : (body.scopeId ?? "").trim();
+    if (scope !== "global" && !scopeId) return reply.code(400).send({ error: "scope_id_required" });
+    await db
+      .insert(memoryKv)
+      .values({ agentId: req.agentCtx!.agentId, scope, scopeId, key: body.key, valueJson: body.value as never })
+      .onConflictDoUpdate({
+        target: [memoryKv.agentId, memoryKv.scope, memoryKv.scopeId, memoryKv.key],
+        set: { valueJson: body.value as never, updatedAt: new Date() },
+      });
+    return { ok: true };
+  });
+
+  app.get("/agent-api/memory", async (req) => {
+    const q = z
+      .object({
+        scope: z.enum(["global", "conversation", "task"]).optional(),
+        scopeId: z.string().optional(),
+        key: z.string().optional(),
+      })
+      .parse((req.query as Record<string, unknown>) ?? {});
+    const conds = [eq(memoryKv.agentId, req.agentCtx!.agentId)];
+    if (q.scope) conds.push(eq(memoryKv.scope, q.scope));
+    if (q.scopeId !== undefined) conds.push(eq(memoryKv.scopeId, q.scopeId));
+    if (q.key) conds.push(eq(memoryKv.key, q.key));
+    const rows = await db.select().from(memoryKv).where(and(...conds));
+    return { memory: rows };
+  });
+
+  app.delete("/agent-api/memory", async (req) => {
+    const body = z
+      .object({
+        key: z.string().min(1),
+        scope: z.enum(["global", "conversation", "task"]).optional(),
+        scopeId: z.string().optional(),
+      })
+      .parse(req.body ?? {});
+    const scope = body.scope ?? "global";
+    const scopeId = scope === "global" ? "" : (body.scopeId ?? "");
+    await db
+      .delete(memoryKv)
+      .where(
+        and(
+          eq(memoryKv.agentId, req.agentCtx!.agentId),
+          eq(memoryKv.scope, scope),
+          eq(memoryKv.scopeId, scopeId),
+          eq(memoryKv.key, body.key),
+        ),
+      );
+    return { ok: true };
   });
 
   // Browser proxy: shell out to the host's `agent-browser` CLI so agents can

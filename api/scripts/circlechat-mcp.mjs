@@ -359,6 +359,90 @@ const TOOLS = [
         mentions: mentions ?? [],
       }),
   },
+  {
+    name: "set_memory",
+    description:
+      "Save a durable memory that survives across runs (your container filesystem is wiped every turn, but this is not). scope: global (default) | conversation | task; scopeId is required for conversation/task. Use this instead of relying on the chat transcript to remember facts, decisions, or progress.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", minLength: 1, maxLength: 100 },
+        value: {},
+        scope: { type: "string", enum: ["global", "conversation", "task"] },
+        scopeId: { type: "string", description: "conversation id or task id (for non-global scopes)" },
+      },
+      required: ["key", "value"],
+      additionalProperties: false,
+    },
+    run: ({ key, value, scope, scopeId }) =>
+      apiPost(`/agent-api/memory`, { key, value, ...(scope ? { scope } : {}), ...(scopeId ? { scopeId } : {}) }),
+  },
+  {
+    name: "get_memory",
+    description:
+      "Read back your durable memory. Optionally filter by scope, scopeId, or key. Call this at the start of a task to recall what you saved earlier.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", enum: ["global", "conversation", "task"] },
+        scopeId: { type: "string" },
+        key: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    run: ({ scope, scopeId, key }) => {
+      const qs = new URLSearchParams();
+      if (scope) qs.set("scope", scope);
+      if (scopeId) qs.set("scopeId", scopeId);
+      if (key) qs.set("key", key);
+      const q = qs.toString();
+      return apiGet(`/agent-api/memory${q ? `?${q}` : ""}`);
+    },
+  },
+  {
+    name: "delete_memory",
+    description: "Delete one durable memory entry by key (and scope/scopeId if non-global).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", minLength: 1 },
+        scope: { type: "string", enum: ["global", "conversation", "task"] },
+        scopeId: { type: "string" },
+      },
+      required: ["key"],
+      additionalProperties: false,
+    },
+    run: ({ key, scope, scopeId }) =>
+      apiReq("DELETE", `/agent-api/memory`, { key, ...(scope ? { scope } : {}), ...(scopeId ? { scopeId } : {}) }),
+  },
+  {
+    name: "add_task_artifact",
+    description:
+      "Attach a durable, versioned deliverable to a task (the real work product — a report, doc, data file). Re-posting the same name creates a new version. A task can only be marked done once it has a substantive artifact, so use this to ship your output rather than pasting it into a comment.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        name: { type: "string", minLength: 1, description: "filename, e.g. report.md" },
+        contentText: { type: "string", minLength: 1, description: "the deliverable's text content" },
+      },
+      required: ["taskId", "name", "contentText"],
+      additionalProperties: false,
+    },
+    run: ({ taskId, name, contentText }) =>
+      apiPost(`/agent-api/tasks/${encodeURIComponent(taskId)}/artifacts`, { name, contentText }),
+  },
+  {
+    name: "get_task_artifacts",
+    description: "List the current (latest-version) deliverables attached to a task.",
+    inputSchema: {
+      type: "object",
+      properties: { taskId: { type: "string" } },
+      required: ["taskId"],
+      additionalProperties: false,
+    },
+    run: ({ taskId }) => apiGet(`/agent-api/tasks/${encodeURIComponent(taskId)}/artifacts`),
+  },
 ];
 
 // ──────────────────────── JSON-RPC (MCP stdio) ────────────────────────

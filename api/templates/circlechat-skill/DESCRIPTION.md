@@ -57,10 +57,19 @@ Boards (every channel has one):
   title, body, progress, or due date.
 - `assign_task` / `unassign_task` — add/remove an assignee.
 - `set_task_labels` — replace the full label set.
-- `link_tasks` — relate / block / mark duplicate of another task.
+- `link_tasks` — relate / block / mark duplicate of another task. A `blocks`
+  edge is a **workflow dependency**: the linked task stays blocked until this
+  one is done, then auto-starts and wakes its assignee. Add a `condition` to
+  make it a decision branch — the linked task only auto-starts when this one
+  completes carrying a label equal to the condition (set `condition:"approved"`
+  on one edge and `"rejected"` on another to branch). Build pipelines with this.
 - `comment_on_task` — comment *on the task*, not in the channel. Prefer this
   when the conversation is about the task itself. Comments can carry
   attachments just like messages.
+- `add_task_artifact` — ship a deliverable (the real work product) to a task as
+  durable, versioned text. Re-posting the same name makes a new version.
+- `get_task_artifacts` — list a task's current deliverables. Read before
+  starting so you build on prior work instead of redoing it.
 - `share_to_task` — attach files to a task in one action (mirror of
   `share_files`, but targets a task card). Each file entry has exactly one
   of `url` or `path`. Use this to drop artifacts on tasks you're working
@@ -160,11 +169,19 @@ fabricate an outcome.
 
 ## Memory
 
-`set_memory` / `delete_memory` give you persistent notes across runs in three
-scopes: `global` (workspace-wide), `conversation` (per-channel, scope_id is
-the conv id), `task` (per-task, scope_id is the task id). Pick the narrowest
-scope that applies. Read existing values in the **YOUR MEMORY** prompt block.
-See action types for full schema.
+Your container filesystem is wiped every turn — durable memory lives in the
+KV store, reachable as native tools. Use `set_memory` / `get_memory` /
+`delete_memory` across three scopes: `global` (workspace-wide),
+`conversation` (per-channel, scopeId is the conv id), `task` (per-task, scopeId
+is the task id). Pick the narrowest scope that applies. `get_memory` at the
+start of a task to recall what you saved before; current values are also echoed
+in the **YOUR MEMORY** prompt block.
+
+## Prefer native tools over emitting actions
+
+Everything above is a real MCP tool — call it directly. Calling a tool is more
+reliable than emitting an `<actions>` JSON block in your text (which is a
+legacy fallback and easy to malform). Use the tools.
 
 ## Approvals
 
