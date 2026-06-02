@@ -141,23 +141,56 @@ const ACTION_SCOPE: Partial<Record<AgentAction["type"], string>> = {
   share_to_task: "tasks.write",
 };
 
-// Enforcement is OFF unless ENFORCE_AGENT_SCOPES is truthy — deploying this
-// code changes nothing for existing agents until the operator opts in. When
-// on: an agent with empty scopes, or a "*" wildcard, is unrestricted (back-
-// compat); otherwise an action whose required scope is absent is converted
-// into an approval request instead of executing. The human approves/denies
-// from the approvals UI, exactly as the README promises.
+// Risk level per action, used by the opt-in risk gate (APPROVE_RISK_AT). The
+// idea mirrors PraisonAI's @require_approval risk levels: even an in-scope
+// action can be routed to a human when it's high-risk. Unmapped → "low".
+type Risk = "low" | "medium" | "high";
+const RISK_ORDER: Record<Risk, number> = { low: 0, medium: 1, high: 2 };
+const ACTION_RISK: Partial<Record<AgentAction["type"], Risk>> = {
+  share_files: "high", // fetches arbitrary external URLs and posts files
+  share_to_task: "medium",
+  delete_memory: "medium",
+  assign_task: "medium",
+};
+
+// Scopes an agent with an EMPTY scope list is treated as holding. Empty no
+// longer means "unrestricted" (the old advisory behavior) — it falls back to a
+// safe read/reply baseline. A genuinely unrestricted agent must opt in with a
+// "*" wildcard scope. This is the secure-by-default posture.
+const SAFE_DEFAULT_SCOPES = ["channels.read", "channels.reply"];
+
+// Scope enforcement is ON by default. Operators can disable it for a trusted
+// single-tenant deployment by setting ENFORCE_AGENT_SCOPES to a falsey value
+// (0 / false / no / off). When on, an action whose required scope is absent is
+// converted into an approval card instead of executing; the human approves or
+// denies it from the approvals UI.
 function scopeEnforcementOn(): boolean {
-  const v = (process.env.ENFORCE_AGENT_SCOPES ?? "").toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
+  const v = (process.env.ENFORCE_AGENT_SCOPES ?? "").trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "no" || v === "off");
+}
+
+// Optional risk gate: when APPROVE_RISK_AT is set to a level, any action at or
+// above that risk requires approval even if it's within scope. Unset = off, so
+// it never disrupts an existing deployment until an operator opts in.
+function riskGateLevel(): Risk | null {
+  const v = (process.env.APPROVE_RISK_AT ?? "").trim().toLowerCase();
+  return v === "low" || v === "medium" || v === "high" ? v : null;
 }
 
 function actionAllowedByScopes(actionType: AgentAction["type"], scopes: string[]): boolean {
-  if (!scopes || scopes.length === 0) return true; // unrestricted (back-compat)
-  if (scopes.includes("*")) return true;
+  const effective = !scopes || scopes.length === 0 ? SAFE_DEFAULT_SCOPES : scopes;
+  if (effective.includes("*")) return true; // explicit opt-in to unrestricted
   const required = ACTION_SCOPE[actionType];
-  if (!required) return true; // unmapped actions are always allowed
-  return scopes.includes(required);
+  if (!required) return true; // unmapped actions (set_memory, call_tool, …) are always allowed
+  return effective.includes(required);
+}
+
+// True if the action's risk is at or above the configured gate threshold.
+function actionGatedByRisk(actionType: AgentAction["type"]): boolean {
+  const threshold = riskGateLevel();
+  if (!threshold) return false;
+  const risk: Risk = ACTION_RISK[actionType] ?? "low";
+  return RISK_ORDER[risk] >= RISK_ORDER[threshold];
 }
 
 // Pull a short, human-readable summary + the gating conversation id out of an
@@ -203,10 +236,10 @@ export async function applyActions(params: {
     return out;
   }
 
-  // Load the agent's scopes once for the run. Only needed when enforcement is
-  // enabled; skip the query entirely otherwise.
-  let scopes: string[] = [];
+  // Load the agent's scopes once for the run when either gate is active.
   const enforce = scopeEnforcementOn();
+  const riskGate = riskGateLevel() !== null;
+  let scopes: string[] = [];
   if (enforce) {
     const [agentRow] = await db
       .select({ scopes: agents.scopes })
@@ -218,20 +251,22 @@ export async function applyActions(params: {
 
   for (const a of params.actions) {
     try {
-      if (enforce && !actionAllowedByScopes(a.type, scopes)) {
-        // Out of scope → open an approval card instead of executing. This is
-        // the documented behavior: anything outside an agent's scopes gates
-        // on a human. The action payload is preserved so it can (in future)
-        // be replayed on approval.
+      // Gate an action when it's out of scope (enforcement on) OR at/above the
+      // configured risk threshold (risk gate on). Either way it becomes an
+      // approval card instead of executing; the human approves/denies it from
+      // the approvals UI. The payload is preserved for replay-on-approval.
+      const outOfScope = enforce && !actionAllowedByScopes(a.type, scopes);
+      const riskGated = riskGate && actionGatedByRisk(a.type);
+      if (outOfScope || riskGated) {
         const d = describeForApproval(a);
-        const required = ACTION_SCOPE[a.type] ?? a.type;
+        const reason = outOfScope ? (ACTION_SCOPE[a.type] ?? a.type) : `risk:${ACTION_RISK[a.type] ?? "low"}`;
         const apId = id("ap");
         await db.insert(approvals).values({
           id: apId,
           agentRunId: runId,
           agentId,
           conversationId: d.conversationId,
-          scope: required,
+          scope: reason,
           action: d.action,
           payloadJson: d.payload,
           status: "pending",
@@ -241,13 +276,14 @@ export async function applyActions(params: {
             type: "approval.new",
             approvalId: apId,
             agentId,
-            scope: required,
+            scope: reason,
             action: d.action,
             conversationId: d.conversationId,
           });
         }
-        out.trace.push(`scope_gated ${a.type} → approval ${apId} (needs ${required})`);
-        out.errors.push(`${a.type} requires scope "${required}" — opened approval ${apId}`);
+        const why = outOfScope ? `requires scope "${reason}"` : `is ${reason} and needs approval`;
+        out.trace.push(`gated ${a.type} → approval ${apId} (${why})`);
+        out.errors.push(`${a.type} ${why} — opened approval ${apId}`);
         continue;
       }
       await applyOne(agentId, runId, agentMember.id, a, out);
