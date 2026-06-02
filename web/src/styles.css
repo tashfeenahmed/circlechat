@@ -830,6 +830,92 @@ input, textarea { font: inherit; color: inherit; }
   margin-top: 1px;
 }
 
+/* ─── notifications drawer (slides in from the right) ─── */
+.cc-notif-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+.cc-notif-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cc-notif-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 91;
+  width: 360px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-paper);
+  border-left: 1px solid var(--color-hair-2);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.16);
+  transform: translateX(100%);
+  transition: transform 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+.cc-notif-drawer.open {
+  transform: translateX(0);
+}
+.cc-notif-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-hair);
+  flex: 0 0 auto;
+}
+.cc-notif-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.cc-notif-close {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-muted);
+  border-radius: 6px;
+  padding: 2px;
+}
+.cc-notif-close:hover {
+  color: var(--color-ink);
+  background: var(--color-hi);
+}
+.cc-notif-drawer-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+/* count pill shown on a bundled row, e.g. "Samantha messaged you  (3)" */
+.notif-count-pill {
+  display: inline-block;
+  margin-left: 6px;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--color-accent, var(--color-ink));
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 600;
+  text-align: center;
+  font-family: var(--font-mono);
+  vertical-align: middle;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-notif-drawer,
+  .cc-notif-backdrop {
+    transition: none;
+  }
+}
+
 /* ─── rail (workspace column, 56px) ─── */
 .rail {
   background: var(--color-rail);

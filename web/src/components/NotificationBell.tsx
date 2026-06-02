@@ -1,12 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { Bell, AtSign, MessageSquare, CheckSquare, ShieldQuestion, Info, CheckCheck } from "lucide-react";
+import {
+  Bell,
+  AtSign,
+  MessageSquare,
+  CheckSquare,
+  ShieldQuestion,
+  Info,
+  CheckCheck,
+  X,
+} from "lucide-react";
 import {
   useNotifications,
-  useUnreadNotifications,
   useMarkNotificationRead,
   useMarkAllNotificationsRead,
+  useMarkConversationNotificationsRead,
 } from "../lib/hooks";
 import type { Notification, NotificationKind } from "../api/client";
 
@@ -38,121 +47,200 @@ function timeAgo(iso: string): string {
   return `${d}d`;
 }
 
+// A bundle groups every notification that points at the same conversation (or
+// the same task) into a single row, so two quick pings from one agent show as
+// one entry — "Samantha · 2 new" — instead of spamming the list. Standalone
+// kinds (system/approval, no conversation or task) bundle by their own id.
+interface Bundle {
+  key: string;
+  latest: Notification;
+  items: Notification[];
+  total: number;
+  unread: number;
+}
+
+function bundleKey(n: Notification): string {
+  if (n.conversationId) return `c:${n.conversationId}`;
+  if (n.taskId) return `t:${n.taskId}`;
+  return `n:${n.id}`;
+}
+
 export default function NotificationBell() {
   // Mount the list hook here so its WS listener (notification.new/read) stays
   // active for as long as the bell is on screen — i.e. the whole app shell.
-  // That keeps the unread badge live even while the dropdown is closed.
+  // The unread badge derives from this list, so it stays live while closed.
   const list = useNotifications();
-  const unread = useUnreadNotifications();
   const markRead = useMarkNotificationRead();
   const markAll = useMarkAllNotificationsRead();
+  const markConv = useMarkConversationNotificationsRead();
   const nav = useNavigate();
 
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-
-  const count = unread.data?.count ?? 0;
-  const items = list.data?.notifications ?? [];
-
-  function open() {
-    const el = btnRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const width = 340;
-    const left = Math.min(Math.max(8, r.right - width), window.innerWidth - width - 8);
-    setPos({ top: r.bottom + 4, left });
-  }
-  function close() {
-    setPos(null);
-  }
+  // `open` is the user intent; `render` keeps the drawer in the DOM through its
+  // slide-out so we get an exit animation, then unmounts it (a closed drawer
+  // left mounted at translateX(100%) would sit off-screen and add a phantom
+  // horizontal scrollbar, since body allows document scroll). `shown` drives
+  // the .open class and is toggled one frame after mount to trigger the slide.
+  const [open, setOpen] = useState(false);
+  const [render, setRender] = useState(false);
+  const [shown, setShown] = useState(false);
 
   useEffect(() => {
-    if (!pos) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") close();
+    if (open) {
+      setRender(true);
+      const raf = requestAnimationFrame(() => setShown(true));
+      return () => cancelAnimationFrame(raf);
     }
-    function onDoc(e: MouseEvent) {
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (btnRef.current?.contains(target)) return;
-      const menu = document.getElementById("__cc_notif_popover");
-      if (menu && menu.contains(target)) return;
-      close();
+    setShown(false);
+    const t = setTimeout(() => setRender(false), 300);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  const items = useMemo(
+    () => list.data?.notifications ?? [],
+    [list.data?.notifications],
+  );
+
+  // Group newest-first list into bundles, preserving recency order.
+  const bundles = useMemo<Bundle[]>(() => {
+    const map = new Map<string, Bundle>();
+    for (const n of items) {
+      const key = bundleKey(n);
+      const b = map.get(key);
+      if (b) {
+        b.items.push(n);
+        b.total += 1;
+        if (!n.readAt) b.unread += 1;
+      } else {
+        map.set(key, {
+          key,
+          latest: n,
+          items: [n],
+          total: 1,
+          unread: n.readAt ? 0 : 1,
+        });
+      }
+    }
+    return Array.from(map.values()).sort(
+      (a, b) =>
+        new Date(b.latest.createdAt).getTime() -
+        new Date(a.latest.createdAt).getTime(),
+    );
+  }, [items]);
+
+  // Badge counts unread *bundles* (threads), not raw rows — so repeated pings
+  // from the same conversation read as one. This is the number the user sees.
+  const count = bundles.reduce((acc, b) => acc + (b.unread > 0 ? 1 : 0), 0);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
     }
     window.addEventListener("keydown", onKey);
-    window.addEventListener("mousedown", onDoc);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onDoc);
-      window.removeEventListener("resize", close);
-    };
-  }, [pos]);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
 
-  function onClickItem(n: Notification) {
-    if (!n.readAt) markRead.mutate(n.id);
-    close();
-    if (n.link) nav(n.link);
+  function onClickBundle(b: Bundle) {
+    // Mark the whole bundle read. Conversation bundles use the per-conversation
+    // endpoint (one call, optimistic); standalone/task bundles mark each unread
+    // row. Either way the badge updates the moment we navigate away.
+    const convId = b.latest.conversationId;
+    if (convId) {
+      if (b.unread > 0) markConv.mutate(convId);
+    } else {
+      for (const n of b.items) if (!n.readAt) markRead.mutate(n.id);
+    }
+    setOpen(false);
+    if (b.latest.link) nav(b.latest.link);
   }
 
   return (
     <>
       <button
-        ref={btnRef}
         type="button"
         className="tb-btn inline-flex items-center relative"
         title="Notifications"
-        aria-haspopup="menu"
-        aria-expanded={!!pos}
-        onClick={() => (pos ? close() : open())}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
       >
         <Bell size={15} strokeWidth={2} />
-        {count > 0 && <span className="notif-badge">{count > 99 ? "99+" : count}</span>}
+        {count > 0 && (
+          <span className="notif-badge">{count > 99 ? "99+" : count}</span>
+        )}
       </button>
-      {pos &&
+      {render &&
         createPortal(
+        <>
           <div
-            id="__cc_notif_popover"
-            role="menu"
-            className="notif-popover"
-            style={{ position: "fixed", top: pos.top, left: pos.left }}
+            className={`cc-notif-backdrop ${shown ? "open" : ""}`}
+            onClick={() => setOpen(false)}
+            aria-hidden="true"
+          />
+          <aside
+            className={`cc-notif-drawer ${shown ? "open" : ""}`}
+            role="dialog"
+            aria-label="Notifications"
           >
-            <div className="notif-head">
+            <div className="cc-notif-drawer-head">
               <span className="notif-title">Notifications</span>
-              {count > 0 && (
+              <div className="cc-notif-head-actions">
+                {count > 0 && (
+                  <button
+                    type="button"
+                    className="notif-readall"
+                    onClick={() => markAll.mutate()}
+                    title="Mark all as read"
+                  >
+                    <CheckCheck size={13} strokeWidth={2} /> Mark all read
+                  </button>
+                )}
                 <button
                   type="button"
-                  className="notif-readall"
-                  onClick={() => markAll.mutate()}
-                  title="Mark all as read"
+                  className="cc-notif-close"
+                  onClick={() => setOpen(false)}
+                  title="Close"
+                  aria-label="Close notifications"
                 >
-                  <CheckCheck size={13} strokeWidth={2} /> Mark all read
+                  <X size={16} strokeWidth={2} />
                 </button>
-              )}
+              </div>
             </div>
-            <div className="notif-list">
-              {items.length === 0 && (
+            <div className="cc-notif-drawer-list">
+              {bundles.length === 0 && (
                 <div className="notif-empty">You're all caught up.</div>
               )}
-              {items.map((n) => (
+              {bundles.map((b) => (
                 <button
-                  key={n.id}
+                  key={b.key}
                   type="button"
-                  className={`notif-item ${n.readAt ? "" : "unread"}`}
-                  onClick={() => onClickItem(n)}
+                  className={`notif-item ${b.unread > 0 ? "unread" : ""}`}
+                  onClick={() => onClickBundle(b)}
                 >
-                  <span className="notif-item-icon">{iconFor(n.kind)}</span>
-                  <span className="notif-item-body">
-                    <span className="notif-item-title">{n.title}</span>
-                    {n.body && <span className="notif-item-text">{n.body}</span>}
+                  <span className="notif-item-icon">
+                    {iconFor(b.latest.kind)}
                   </span>
-                  <span className="notif-item-time">{timeAgo(n.createdAt)}</span>
+                  <span className="notif-item-body">
+                    <span className="notif-item-title">
+                      {b.latest.title}
+                      {b.total > 1 && (
+                        <span className="notif-count-pill">{b.total}</span>
+                      )}
+                    </span>
+                    {b.latest.body && (
+                      <span className="notif-item-text">{b.latest.body}</span>
+                    )}
+                  </span>
+                  <span className="notif-item-time">
+                    {timeAgo(b.latest.createdAt)}
+                  </span>
                 </button>
               ))}
             </div>
-          </div>,
-          document.body,
-        )}
+          </aside>
+        </>,
+        document.body,
+      )}
     </>
   );
 }

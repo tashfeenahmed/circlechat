@@ -382,11 +382,31 @@ export function useMarkAllNotificationsRead() {
 
 // Mark every notification for one conversation read — called when the user
 // opens that conversation, so they don't have to click each notification.
+// Optimistic: the bell badge derives from the loaded notifications list, so we
+// flip the matching rows to read *immediately* on open rather than waiting for
+// the server round-trip / WS echo. This is what keeps the bell in sync with the
+// left sidebar when you jump straight into a channel (the reported bug).
 export function useMarkConversationNotificationsRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (conversationId: string) =>
       api.post(`/notifications/read-by-conversation`, { conversationId }),
+    onMutate: async (conversationId: string) => {
+      await qc.cancelQueries({ queryKey: ["notifications"] });
+      const now = new Date().toISOString();
+      qc.setQueryData<NotificationsPage>(["notifications"], (old) =>
+        old
+          ? {
+              ...old,
+              notifications: old.notifications.map((n) =>
+                n.conversationId === conversationId && !n.readAt
+                  ? { ...n, readAt: now }
+                  : n,
+              ),
+            }
+          : old,
+      );
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notifications"] });
       qc.invalidateQueries({ queryKey: ["notifications", "unread"] });
