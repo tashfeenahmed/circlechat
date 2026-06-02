@@ -18,6 +18,7 @@ import { callAgent } from "./agents/adapters/dispatch.js";
 import { applyActions, type AgentAction } from "./agents/executor.js";
 import { materialiseScheduledRun, cancelAgentHeartbeat } from "./agents/scheduler.js";
 import { publishToConversation, publishGlobal } from "./lib/events.js";
+import { exportRunTrace } from "./lib/tracing.js";
 
 const worker = new Worker<AgentJobPayload>(
   AGENT_QUEUE,
@@ -181,6 +182,10 @@ async function emitFinished(
   conversationId?: string | null,
   extra?: { agentName?: string; agentHandle?: string; errors?: string[] },
 ): Promise<void> {
+  // Ship the finalized run to the standard tracing backend if configured. The
+  // run row is already written by every caller before this fires, so it has the
+  // final status/result/trace. Fire-and-forget — never blocks the WS frame.
+  void exportRunTrace(agentId, runId);
   const base = {
     type: "agent.run.finished" as const,
     agentId,
