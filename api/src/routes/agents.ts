@@ -140,7 +140,7 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
       title: body.title ?? "",
       brief: body.brief ?? "",
       botToken,
-      heartbeatIntervalSec: body.heartbeatIntervalSec ?? 30,
+      heartbeatIntervalSec: body.heartbeatIntervalSec ?? 3600,
       callbackUrl: body.callbackUrl ?? null,
       createdBy: memberId!,
       avatarColor: pickColor(body.handle),
@@ -168,7 +168,7 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
     // If callback URL is set (OpenClaw) or adapter=socket (Hermes) and we're ready, schedule heartbeats.
     if (body.adapter === "webhook" && body.callbackUrl) {
       await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agentId));
-      await scheduleAgentHeartbeat(agentId, body.heartbeatIntervalSec ?? 30);
+      await scheduleAgentHeartbeat(agentId, body.heartbeatIntervalSec ?? 3600);
     }
     // Sockets register by opening WS themselves — stay in "provisioning" until they do.
 
@@ -499,7 +499,7 @@ async function createAgentFromSpec(
     title: spec.title ?? "",
     brief: spec.brief ?? "",
     botToken,
-    heartbeatIntervalSec: spec.heartbeatIntervalSec ?? 180,
+    heartbeatIntervalSec: spec.heartbeatIntervalSec ?? 3600,
     callbackUrl: null,
     createdBy: creatorMemberId,
     avatarColor: spec.avatarColor || pickColor(spec.handle),

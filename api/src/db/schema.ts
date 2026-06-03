@@ -87,7 +87,7 @@ export const agents = pgTable(
     status: varchar("status", { length: 20 }).notNull().default("provisioning"),
     title: varchar("title", { length: 160 }).notNull().default(""),
     brief: text("brief").notNull().default(""),
-    heartbeatIntervalSec: integer("heartbeat_interval_sec").notNull().default(30),
+    heartbeatIntervalSec: integer("heartbeat_interval_sec").notNull().default(3600),
     botToken: varchar("bot_token", { length: 80 }).notNull(),
     callbackUrl: text("callback_url"),
     createdBy: varchar("created_by", { length: 32 }).notNull(),

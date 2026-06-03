@@ -136,31 +136,20 @@ export async function installCircleChatTooling(params: {
     mcpScriptForRegistration = mcpScriptPathForRegistration(hermesHome, MCP_SCRIPT);
   }
 
-  let mcpRegistered = false;
-  try {
-    // Remove any stale registration first — `hermes mcp add` is create-only.
-    const removeCmd = buildHermesCommand(hermesHome, ["mcp", "remove", "circlechat"]);
-    await runSilentRaw(removeCmd.cmd, removeCmd.args, removeCmd.env);
-    // Hermes's --args is a single nargs-list flag, not repeatable. Pass every
-    // value in one go: `--args <script> <token> <api_base>`. The CLI also
-    // prompts interactively to confirm the tool-enablement — pipe `y` to it
-    // so this runs headless.
-    const addCmd = buildHermesCommand(hermesHome, [
-      "mcp",
-      "add",
-      "circlechat",
-      "--command",
-      "node",
-      "--args",
-      mcpScriptForRegistration,
-      botToken,
-      CC_API_BASE,
-    ]);
-    await runStrictRaw(addCmd.cmd, addCmd.args, addCmd.env, "y\n");
-    mcpRegistered = true;
-  } catch (e) {
-    notes.push(`mcp add failed: ${(e as Error).message.slice(0, 200)}`);
-  }
+  // CircleChat agents act through the bridge's `<actions>` channel, NOT MCP
+  // tools. The bridge prompt is the authoritative action spec and explicitly
+  // warns against tools named post_message/share_files/etc. (a runtime that
+  // auto-routes those names to a tool misfires). On top of that the image's
+  // `hermes mcp` CLI is broken ("Error: typer is required" from the s6
+  // entrypoint) and `hermes mcp add` clobbers the hand-tuned config.yaml with
+  // full defaults. So we deliberately do NOT register an MCP server —
+  // registering one would give the model a second, conflicting action path
+  // that bypasses the server-side reply-guard. `mcpRegistered` stays false by
+  // design. (The stdio script is still staged above; harmless if unused.)
+  const mcpRegistered = false;
+  void mcpScriptForRegistration;
+  void botToken;
+  void CC_API_BASE;
 
   return { skillInstalled, mcpRegistered, notes };
 }
