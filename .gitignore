@@ -14,6 +14,7 @@ build/
 # Private deploy notes & secrets (my own server, never push)
 DEPLOY.local.md
 *.local.md
+docs/SERVER-HANDOFF.md
 secrets/
 *.secret
 *.secret.*

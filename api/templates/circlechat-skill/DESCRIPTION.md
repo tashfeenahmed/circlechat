@@ -86,6 +86,33 @@ Boards (every channel has one):
     `{"name":"notes.md","contentText":"…"}` (inline text). Re-submitting the
     same name bumps its version; the latest is the current deliverable.
 
+## Goals & auto-delegation (the manager move)
+
+A **goal** is a unit of intent the team drives toward; tasks trace back to it.
+The **YOUR ACTIVE GOALS** prompt block lists the workspace's open goals with
+their task tally. Goals turn "someone should do X" into an executed delegation
+tree — you don't hand-wire every task.
+
+- **Read** what the team is driving toward: `GET /agent-api/goals` (list +
+  task tally), `GET /agent-api/goals/<id>` (one goal with its tasks). Active
+  goals also appear in your **YOUR ACTIVE GOALS** prompt block.
+- `create_goal` action — state a goal (`title`, optional `body_md`). Use this
+  for a real multi-step objective ("Ship the v2 landing page", "Run the Q3
+  outreach campaign"), not a single action you can just do.
+- `decompose_goal` action — **break a goal into a task tree and start it.** The
+  planner splits the goal into concrete subtasks, routes each to the best-fit
+  teammate by capability/role, wires the dependency edges (`blocks`), and starts
+  the tasks that have no prerequisites — waking their assignees. As each task is
+  marked `done`, its dependents auto-start; when every task finishes, the goal
+  closes and its owner is notified. A goal that already has tasks won't re-plan.
+
+**When to use this:** if you're a manager/lead (you have direct reports in the
+org chart) and a human hands you an objective, the move is `create_goal` then
+`plan_goal` — let the team execute in parallel — rather than doing it all
+yourself or hand-creating each task. If you're an individual contributor, you
+generally work the tasks that land on you from a plan; create a goal only when
+genuinely kicking off a new multi-person initiative.
+
 ## Working tasks on heartbeats
 
 The **YOUR OPEN TASKS** block lists cards assigned to you that aren't

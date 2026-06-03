@@ -27,6 +27,8 @@ import {
   addComment,
   loadTask,
 } from "../lib/tasks-core.js";
+import { createGoal } from "../lib/goals-core.js";
+import { planGoal } from "../lib/planner.js";
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
 import { notifyForMessage } from "../lib/notifications.js";
@@ -83,6 +85,10 @@ export type AgentAction =
       archived?: boolean;
     }
   | { type: "assign_task"; task_id: string; member_id: string }
+  // Goal actions — set a goal and have the planner auto-decompose it into a
+  // delegation tree of tasks routed across the team (the manager move).
+  | { type: "create_goal"; title: string; body_md?: string; parent_goal_id?: string }
+  | { type: "decompose_goal"; goal_id: string }
   | {
       type: "task_comment";
       task_id: string;
@@ -139,6 +145,8 @@ const ACTION_SCOPE: Partial<Record<AgentAction["type"], string>> = {
   assign_task: "tasks.write",
   task_comment: "tasks.write",
   share_to_task: "tasks.write",
+  create_goal: "tasks.write",
+  decompose_goal: "tasks.write",
 };
 
 // Risk level per action, used by the opt-in risk gate (APPROVE_RISK_AT). The
@@ -151,6 +159,7 @@ const ACTION_RISK: Partial<Record<AgentAction["type"], Risk>> = {
   share_to_task: "medium",
   delete_memory: "medium",
   assign_task: "medium",
+  decompose_goal: "medium", // fans a goal out into many tasks + assignments
 };
 
 // Scopes an agent with an EMPTY scope list is treated as holding. Empty no
@@ -210,6 +219,10 @@ function describeForApproval(a: AgentAction): { action: string; conversationId: 
       return { action: `update_task ${a.task_id}`, conversationId: null, payload: { ...a } };
     case "assign_task":
       return { action: `assign_task ${a.task_id}`, conversationId: null, payload: { ...a } };
+    case "create_goal":
+      return { action: `create_goal "${a.title}"`, conversationId: null, payload: { ...a } };
+    case "decompose_goal":
+      return { action: `decompose_goal ${a.goal_id}`, conversationId: null, payload: { ...a } };
     case "task_comment":
     case "share_to_task":
       return { action: `${a.type} on ${a.task_id}`, conversationId: null, payload: { ...a } };
@@ -670,6 +683,34 @@ async function applyOne(
         return;
       }
       out.trace.push(`assign_task ${a.task_id}→${a.member_id}`);
+      return;
+    }
+    case "create_goal": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const r = await createGoal(
+        { title: a.title, bodyMd: a.body_md, parentGoalId: a.parent_goal_id },
+        agentMemberId,
+        ws,
+      );
+      if ("error" in r) {
+        out.errors.push(`create_goal: ${r.error}`);
+        return;
+      }
+      out.trace.push(`create_goal ${r.goal.id}`);
+      return;
+    }
+    case "decompose_goal": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const r = await planGoal({ goalId: a.goal_id, workspaceId: ws, actorMemberId: agentMemberId });
+      if ("error" in r) {
+        out.errors.push(`decompose_goal: ${r.error}`);
+        return;
+      }
+      out.trace.push(
+        `decompose_goal ${a.goal_id} → ${r.plan.taskCount} task(s), ${r.plan.rootCount} started`,
+      );
       return;
     }
     case "task_comment": {

@@ -862,6 +862,12 @@ function formatActivity(a: TaskDetail["activity"][number]): string {
       return "removed a link";
     case "comment":
       return "commented";
+    case "planned": {
+      const p = a.payload as { assignee?: string | null; routing?: string; rationale?: string | null };
+      const who = p.assignee ? `→ @${p.assignee}` : "(unassigned)";
+      const why = p.rationale || p.routing || "";
+      return `planned by goal ${who}${why ? ` — ${why}` : ""}`;
+    }
     default:
       return a.kind;
   }

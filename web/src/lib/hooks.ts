@@ -14,6 +14,7 @@ import {
   type TaskComment,
   type TaskArtifact,
   type Notification,
+  type Goal,
 } from "../api/client";
 import { bus } from "../ws/client";
 import { useBus } from "../state/store";
@@ -270,6 +271,52 @@ export function usePostMessage(convId: string | undefined, parentId?: string | n
       });
     },
   });
+}
+
+export function useGoals() {
+  const qc = useQueryClient();
+  const q = useQuery<{ goals: Goal[] }>({
+    queryKey: ["goals"],
+    queryFn: () => api.get("/goals"),
+    staleTime: 15_000,
+  });
+  useEffect(() => {
+    return bus.on((ev) => {
+      if (typeof ev.type !== "string" || !String(ev.type).startsWith("goal.")) return;
+      if (ev.type === "goal.new") {
+        const g = ev.goal as Goal;
+        qc.setQueryData<{ goals: Goal[] }>(["goals"], (old) => {
+          if (!old) return { goals: [g] };
+          if (old.goals.some((x) => x.id === g.id)) return old;
+          return { goals: [g, ...old.goals] };
+        });
+      } else if (ev.type === "goal.updated") {
+        // The event may carry the full goal (with counts) or just a status —
+        // refetch to stay authoritative on the task tally either way.
+        if (ev.goal) {
+          const g = ev.goal as Goal;
+          qc.setQueryData<{ goals: Goal[] }>(["goals"], (old) =>
+            old ? { goals: old.goals.map((x) => (x.id === g.id ? g : x)) } : old,
+          );
+        } else {
+          qc.invalidateQueries({ queryKey: ["goals"] });
+        }
+      } else if (ev.type === "goal.deleted") {
+        qc.setQueryData<{ goals: Goal[] }>(["goals"], (old) =>
+          old ? { goals: old.goals.filter((x) => x.id !== ev.goalId) } : old,
+        );
+      }
+    });
+  }, [qc]);
+  // A goal's task tally shifts as its tasks move — refresh on any task event.
+  useEffect(() => {
+    return bus.on((ev) => {
+      if (typeof ev.type === "string" && String(ev.type).startsWith("task.")) {
+        qc.invalidateQueries({ queryKey: ["goals"] });
+      }
+    });
+  }, [qc]);
+  return q;
 }
 
 export function useAgents() {

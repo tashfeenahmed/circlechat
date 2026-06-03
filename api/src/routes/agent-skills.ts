@@ -2,31 +2,17 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { promises as fs } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { db } from "../db/index.js";
 import { agents, workspaceMembers } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
+import { readManifest, addToManifest, removeFromManifest } from "../agents/hermes-equip.js";
 import {
-  resolveHermesHome,
-  readManifest,
-  addToManifest,
-  removeFromManifest,
-} from "../agents/hermes-equip.js";
-
-const HERMES_HOMES_DIR = process.env.HERMES_HOMES_DIR ?? homedir();
-
-// Both runtimes keep their CircleChat-managed skills under `<home>/skills/`
-// with the same `.circlechat-managed.json` manifest. For Hermes, the path is
-// authoritatively resolved from bridge-config.json via resolveHermesHome;
-// for OpenClaw we use the install convention `.openclaw-<handle>`.
-async function resolveAgentSkillsRoot(agent: { id: string; handle: string; kind: string }): Promise<string> {
-  if (agent.kind === "openclaw") {
-    return join(HERMES_HOMES_DIR, `.openclaw-${agent.handle}`, "skills");
-  }
-  const home = await resolveHermesHome(agent.id, agent.handle);
-  return join(home, "skills");
-}
+  resolveAgentSkillsRoot,
+  resolveDescription,
+  extractSummary,
+  safeListDirs,
+} from "../lib/agent-skills-fs.js";
 
 const SkillBody = z.object({
   markdown: z.string().min(1).max(200_000),
@@ -114,56 +100,6 @@ export default async function agentSkillsRoutes(app: FastifyInstance): Promise<v
 }
 
 // ──────────────────────── helpers ────────────────────────
-
-async function safeListDirs(root: string): Promise<string[]> {
-  try {
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return [];
-  }
-}
-
-async function safeReadFile(path: string): Promise<string | null> {
-  try {
-    return await fs.readFile(path, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-// Handle both layouts found in staged skills:
-//   flat:   skills/<name>/DESCRIPTION.md              (e.g. circlechat)
-//   nested: skills/<name>/<subdir>/DESCRIPTION.md     (e.g. browser/agent-browser)
-// The installer writes "browser" to the manifest but the skill docs actually
-// live one directory deeper. Fall back to a single-subdir scan so nested
-// skills surface in the UI without a manifest migration.
-async function resolveDescription(root: string, name: string): Promise<string | null> {
-  const flat = await safeReadFile(join(root, name, "DESCRIPTION.md"));
-  if (flat !== null) return flat;
-  try {
-    const entries = await fs.readdir(join(root, name), { withFileTypes: true });
-    const subs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-    for (const sub of subs) {
-      const nested = await safeReadFile(join(root, name, sub, "DESCRIPTION.md"));
-      if (nested !== null) return nested;
-    }
-  } catch { /* root/name missing */ }
-  return null;
-}
-
-function extractSummary(md: string): string | null {
-  const fm = md.match(/^---\n([\s\S]*?)\n---/);
-  if (!fm) return null;
-  const desc = fm[1]!.match(/^description:\s*>?\s*\n?((?: {2}.*\n?)+|.*)/m);
-  if (!desc) return null;
-  return desc[1]!
-    .split("\n")
-    .map((l) => l.replace(/^\s+/, ""))
-    .join(" ")
-    .trim()
-    .slice(0, 240);
-}
 
 async function resolveAgent(
   req: import("fastify").FastifyRequest,

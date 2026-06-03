@@ -77,6 +77,10 @@ export const agents = pgTable(
     configJson: jsonb("config_json").$type<Record<string, unknown>>().notNull().default({}),
     model: varchar("model", { length: 80 }).notNull().default(""),
     scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
+    // Free-form capability tags ("research", "frontend", "copywriting", …) used
+    // by the goal planner to route decomposed subtasks to the right agent. The
+    // org chart says who reports to whom; capabilities say who can do what.
+    capabilities: jsonb("capabilities").$type<string[]>().notNull().default([]),
     status: varchar("status", { length: 20 }).notNull().default("provisioning"),
     title: varchar("title", { length: 160 }).notNull().default(""),
     brief: text("brief").notNull().default(""),
@@ -338,6 +342,38 @@ export const notifications = pgTable(
   }),
 );
 
+// ───────────────── goals (the delegation spine) ─────────────────
+// A goal is a unit of intent that the planner decomposes into a dependency
+// graph of tasks. Goals can nest (a sub-goal points at its parent) so a
+// company mission → project goal → goal tree mirrors Paperclip's "all work
+// traces to the company goal". Tasks point back at a goal via tasks.goalId.
+//   status: open       — created, not yet planned
+//           planning   — decomposition in flight
+//           in_progress— plan materialised, tasks running
+//           done        — every task under it completed
+//           archived
+export const goals = pgTable(
+  "goals",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    parentGoalId: varchar("parent_goal_id", { length: 32 }),
+    title: varchar("title", { length: 300 }).notNull(),
+    bodyMd: text("body_md").notNull().default(""),
+    status: varchar("status", { length: 20 }).notNull().default("open"),
+    // The member accountable for the goal — usually a manager agent or the human
+    // who set it. Gets the roll-up notification when the goal completes.
+    ownerMemberId: varchar("owner_member_id", { length: 32 }),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    wsIdx: index("goals_ws_idx").on(t.workspaceId, t.status),
+    parentIdx: index("goals_parent_idx").on(t.parentGoalId),
+  }),
+);
+
 // ───────────────── tasks (workspace-scoped kanban board) ─────────────────
 export const tasks = pgTable(
   "tasks",
@@ -348,6 +384,9 @@ export const tasks = pgTable(
     // for "came from #eng" context on the card. Not a scope.
     conversationId: varchar("conversation_id", { length: 32 }),
     parentId: varchar("parent_id", { length: 32 }),
+    // Goal this task traces back to (null for ad-hoc board tasks). Set by the
+    // planner when it decomposes a goal so completion can roll back up to it.
+    goalId: varchar("goal_id", { length: 32 }),
     title: varchar("title", { length: 200 }).notNull(),
     bodyMd: text("body_md").notNull().default(""),
     status: varchar("status", { length: 20 }).notNull().default("backlog"), // backlog | in_progress | review | done
@@ -364,6 +403,7 @@ export const tasks = pgTable(
     wsIdx: index("tasks_ws_idx").on(t.workspaceId, t.archived),
     convIdx: index("tasks_conv_idx").on(t.conversationId, t.archived),
     parentIdx: index("tasks_parent_idx").on(t.parentId),
+    goalIdx: index("tasks_goal_idx").on(t.goalId),
     statusPosIdx: index("tasks_status_pos_idx").on(t.workspaceId, t.status, t.position),
   }),
 );
