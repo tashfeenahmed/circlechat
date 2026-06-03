@@ -19,6 +19,9 @@ export type Event =
   | { type: "task.unassigned"; workspaceId: string; taskId: string; memberId: string }
   | { type: "task.comment.new"; workspaceId: string; taskId: string; comment: unknown }
   | { type: "task.comment.deleted"; workspaceId: string; taskId: string; commentId: string }
+  | { type: "goal.new"; workspaceId: string; goal: unknown }
+  | { type: "goal.updated"; workspaceId: string; goalId: string; goal?: unknown; status?: string }
+  | { type: "goal.deleted"; workspaceId: string; goalId: string }
   | { type: "notification.new"; memberId: string; notification: unknown }
   | { type: "notification.read"; memberId: string; notificationId: string | null };
 

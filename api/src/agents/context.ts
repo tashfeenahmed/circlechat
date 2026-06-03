@@ -17,6 +17,7 @@ import {
   workspaces,
 } from "../db/schema.js";
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
+import { listGoals } from "../lib/goals-core.js";
 
 export interface MemberInfo {
   memberId: string;
@@ -110,6 +111,16 @@ export interface ContextPacket {
     byTask: Record<string, Record<string, unknown>>;
   };
   reporting: ReportingBundle;
+  // Active goals in the workspace (not done/archived) with their task tally, so
+  // an agent — especially a manager — can see what the team is driving toward,
+  // pick up an unplanned goal and decompose it, or set a new one. Bounded.
+  goals: Array<{
+    id: string;
+    title: string;
+    status: string;
+    ownerMemberId: string | null;
+    taskCounts: { total: number; done: number; inProgress: number };
+  }>;
   // Open tasks assigned to this agent, freshest first. Present on every
   // trigger so heartbeats have a "what am I working on?" list — the agent
   // can pick one up, move status, drop a progress comment, attach artifacts.
@@ -444,6 +455,19 @@ export async function buildContext(opts: {
 
   const reporting = await loadReportingFor(a.workspaceId, agentMemberId);
 
+  // Active goals (not done/archived), most recent first, bounded for prompt size.
+  const allGoals = (await listGoals(a.workspaceId)).goals;
+  const activeGoals = allGoals
+    .filter((g) => g.status !== "done" && g.status !== "archived")
+    .slice(0, 10)
+    .map((g) => ({
+      id: g.id,
+      title: g.title,
+      status: g.status,
+      ownerMemberId: g.ownerMemberId ?? null,
+      taskCounts: g.taskCounts,
+    }));
+
   let taskCtx: ContextPacket["task"];
   if (opts.taskId) {
     const [t] = await db.select().from(tasks).where(eq(tasks.id, opts.taskId)).limit(1);
@@ -704,6 +728,7 @@ export async function buildContext(opts: {
       ]),
     },
     reporting,
+    goals: activeGoals,
     myTasks,
     task: taskCtx,
   };

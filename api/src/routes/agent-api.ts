@@ -24,6 +24,8 @@ import {
   MAX_ARTIFACTS_PER_TASK,
 } from "../lib/task-artifacts.js";
 import { loadTask } from "../lib/tasks-core.js";
+import { createGoal, listGoals, getGoalDetail } from "../lib/goals-core.js";
+import { planGoal } from "../lib/planner.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
@@ -627,6 +629,41 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       .limit(1);
     return a?.workspaceId ?? null;
   }
+
+  // ───── goals (the delegation spine — agents can set a goal and have it
+  // auto-decomposed into a task tree routed across the team) ─────
+  app.get("/agent-api/goals", async (req, reply) => {
+    const ws = await agentWorkspaceId(req.agentCtx!.agentId);
+    if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
+    return await listGoals(ws);
+  });
+  app.get("/agent-api/goals/:id", async (req, reply) => {
+    const goalId = (req.params as { id: string }).id;
+    const ws = await agentWorkspaceId(req.agentCtx!.agentId);
+    if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
+    return taskSend(reply, await getGoalDetail(goalId, ws));
+  });
+  app.post("/agent-api/goals", async (req, reply) => {
+    const body = z
+      .object({
+        title: z.string().min(1).max(300),
+        bodyMd: z.string().max(20000).optional(),
+        parentGoalId: z.string().nullable().optional(),
+        ownerMemberId: z.string().nullable().optional(),
+      })
+      .parse(req.body);
+    const ws = await agentWorkspaceId(req.agentCtx!.agentId);
+    if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
+    return taskSend(reply, await createGoal(body, req.agentCtx!.memberId, ws));
+  });
+  app.post("/agent-api/goals/:id/plan", async (req, reply) => {
+    const goalId = (req.params as { id: string }).id;
+    const ws = await agentWorkspaceId(req.agentCtx!.agentId);
+    if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
+    const r = await planGoal({ goalId, workspaceId: ws, actorMemberId: req.agentCtx!.memberId });
+    if ("error" in r) return reply.code(r.error === "already_planned" ? 409 : 400).send({ error: r.error });
+    return r;
+  });
 
   app.get("/agent-api/tasks", async (req, reply) => {
     const ws = await agentWorkspaceId(req.agentCtx!.agentId);

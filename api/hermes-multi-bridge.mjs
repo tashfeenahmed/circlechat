@@ -695,6 +695,8 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  {"type":"update_task","task_id":"task_…","status":"in_progress|review|done","progress":50,"title":"…","body_md":"…","due_at":"2026-05-01","archived":true}`,
     `                                                                — moving to "done" REQUIRES EVIDENCE: the task must already have either (a) a SUBSTANTIVE deliverable in its artifacts store (use share_to_task to drop the real file — a stub/title-only placeholder is REJECTED), or (b) a human-authored comment after your most recent comment (review/sign-off). If neither is true, the server rejects the update with done_requires_evidence — first share the actual work product (the real script/report/draft, not its title), THEN flip status. To request human review without a finished deliverable, set status="review" instead.`,
     `  {"type":"assign_task","task_id":"task_…","member_id":"m_…"}`,
+    `  {"type":"create_goal","title":"…","body_md":"<optional detail>","parent_goal_id":"<optional goal_…>"}  — state a multi-step objective for the team. Use for real initiatives, not a single action you can just do.`,
+    `  {"type":"decompose_goal","goal_id":"goal_…"}              — THE MANAGER MOVE: auto-decompose a goal into a task tree, route each subtask to the best-fit teammate by capability, wire the dependency edges, and start the unblocked tasks (waking their assignees). As tasks complete, dependents auto-start; when all finish, the goal closes. Use create_goal then decompose_goal when a human hands YOU (a lead with direct reports) an objective — don't hand-create every task or do it all yourself.`,
     `  {"type":"task_comment","task_id":"task_…","body_md":"…","mentions":["m_…"],"attachments":[<optional, hand-rolled descriptors from /uploads>]}`,
     `  {"type":"share_to_task","task_id":"task_…","body_md":"progress note","files":[{"url":"https://…","name":"snapshot.png"},{"path":"/workspace/report.pdf","name":"Q3.pdf"}]}`,
     `                                                                — mirror of share_files but attaches to a task card. Use this to drop progress updates + artifacts (screenshots, PDFs, data files) on tasks you're working on during heartbeats. Files show up on the task AND are saved as DURABLE, VERSIONED deliverables on that task. To see what's already been delivered for a task (so you build on it instead of redoing it), call GET /agent-api/tasks/<id>/artifacts. You can also submit a deliverable directly with POST /agent-api/tasks/<id>/artifacts (multipart file, {"url":"https://…"}, or {"name":"notes.md","contentText":"…"}).`,
@@ -719,6 +721,8 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  — GET /agent-api/members`,
     `  — GET /agent-api/tasks                               — list all tasks on the workspace board`,
     `  — GET /agent-api/tasks/<id>                          — full task + subtasks + links + comments`,
+    `  — GET /agent-api/goals                               — list goals + their task tally`,
+    `  — GET /agent-api/goals/<id>                          — one goal with its tasks + sub-goals`,
     `  — POST /agent-api/browser  body:{"cmd":"open|snapshot|get text|click|find role|eval|close|…","args":[…]}  — drive a real headless Chromium on the host (shared across all agents). See the \`browser/agent-browser\` skill for full command reference and recipes. Prefer plain \`curl\` for static pages; reach for this when JS must render or you need to click/fill. Always close the session when you're done.`,
     `  — POST /agent-api/uploads   (multipart file upload; returns {key,name,contentType,size,url})`,
     `If a user attaches a file, the attachment line shows the URL — you can curl it directly with your Bearer header.`,
@@ -802,6 +806,23 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ].join("\n");
   }
 
+  // Active goals — what the team is driving toward. A goal with 0 tasks is
+  // unplanned: a lead can decompose_goal it to fan it out into a task tree.
+  let goalsBlock = "";
+  const gs = Array.isArray(packet.goals) ? packet.goals : [];
+  if (gs.length) {
+    const lines = gs.slice(0, 10).map((g) => {
+      const c = g.taskCounts || { total: 0, done: 0, inProgress: 0 };
+      const tally = c.total ? ` · ${c.done}/${c.total} done` : ` · UNPLANNED — decompose_goal to fan it out`;
+      return `  ◆ ${g.id} [${g.status}${tally}] ${g.title}`;
+    });
+    goalsBlock = [
+      ``,
+      `YOUR ACTIVE GOALS (what the team is driving toward):`,
+      ...lines,
+    ].join("\n");
+  }
+
   // Memory block: render scoped memory the agent has previously written.
   // Global is always shown. Per-conversation memory appears only for
   // conversations in this packet's inbox; per-task memory only for tasks
@@ -866,6 +887,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         ``,
         `You are currently in ${convLabel}.${colleaguesLine}${reportingLine}${memberIdBlock}`,
         myTasksBlock,
+        goalsBlock,
         memoryBlock,
         ``,
         triggerLine,
@@ -880,6 +902,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         threadBlock,
         taskBlock,
         myTasksBlock,
+        goalsBlock,
         memoryBlock,
         ``,
         `Recent messages in this conversation (most recent last):`,

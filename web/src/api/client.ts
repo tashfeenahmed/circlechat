@@ -176,11 +176,41 @@ export interface AgentRun {
 
 export type TaskStatus = "backlog" | "in_progress" | "review" | "done";
 
+export interface GoalTaskCounts {
+  total: number;
+  done: number;
+  inProgress: number;
+}
+
+export type GoalStatus = "open" | "planning" | "in_progress" | "done" | "archived";
+
+export interface Goal {
+  id: string;
+  workspaceId: string;
+  parentGoalId: string | null;
+  title: string;
+  bodyMd: string;
+  status: GoalStatus;
+  ownerMemberId: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  taskCounts: GoalTaskCounts;
+}
+
+export interface PlanResult {
+  goalId: string;
+  taskCount: number;
+  rootCount: number;
+  tasks: Array<{ id: string; title: string; assigneeHandle: string | null; dependsOn: string[]; reason: string }>;
+}
+
 export interface Task {
   id: string;
   workspaceId: string;
   conversationId: string | null;
   parentId: string | null;
+  goalId: string | null;
   title: string;
   bodyMd: string;
   status: TaskStatus;

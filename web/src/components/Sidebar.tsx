@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid } from "lucide-react";
+import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target } from "lucide-react";
 import { useConversations, useMe, useMembersDirectory, useApprovals, useTasks } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
@@ -117,6 +117,15 @@ export default function Sidebar() {
           </span>
           <span className="sb-name">Board</span>
           {boardUnread > 0 && <span className="sb-badge">{boardUnread}</span>}
+        </Link>
+        <Link
+          to="/goals"
+          className={`sb-item ${location.pathname === "/goals" ? "active" : ""}`}
+        >
+          <span className="sb-glyph">
+            <Target size={14} strokeWidth={2} />
+          </span>
+          <span className="sb-name">Goals</span>
         </Link>
         <Link
           to="/files"

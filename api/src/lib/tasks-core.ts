@@ -8,6 +8,7 @@ import {
   taskComments,
   taskActivity,
   members,
+  goals,
 } from "../db/schema.js";
 import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
@@ -221,6 +222,8 @@ export interface CreateTaskInput {
   bodyMd?: string;
   status?: Status;
   parentId?: string;
+  // Goal this task traces back to (set by the planner during decomposition).
+  goalId?: string | null;
   // Optional pointer back to the channel that spawned the task — not a scope.
   conversationId?: string | null;
   sourceMessageId?: string;
@@ -228,6 +231,10 @@ export interface CreateTaskInput {
   labels?: string[];
   dueAt?: string | null;
   position?: number;
+  // When true, don't fire the task_assigned trigger for assignees on creation.
+  // The planner uses this so a freshly-created but still-blocked task doesn't
+  // wake its agent — advanceWorkflow fires the trigger when the task unblocks.
+  deferAssigneeTrigger?: boolean;
 }
 
 export async function createTask(input: CreateTaskInput, creatorMemberId: string, workspaceId: string) {
@@ -251,6 +258,7 @@ export async function createTask(input: CreateTaskInput, creatorMemberId: string
     workspaceId,
     conversationId: input.conversationId ?? null,
     parentId: input.parentId ?? null,
+    goalId: input.goalId ?? null,
     title: input.title,
     bodyMd: input.bodyMd ?? "",
     status,
@@ -297,8 +305,10 @@ export async function createTask(input: CreateTaskInput, creatorMemberId: string
     workspaceId,
     task: hydrated,
   });
-  for (const mid of validAssignees) {
-    await maybeFireAgentTrigger(mid, taskId, input.conversationId ?? null, "task_assigned");
+  if (!input.deferAssigneeTrigger) {
+    for (const mid of validAssignees) {
+      await maybeFireAgentTrigger(mid, taskId, input.conversationId ?? null, "task_assigned");
+    }
   }
   return { task: hydrated };
 }
@@ -355,11 +365,98 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
     taskId,
     task: hydrated,
   });
-  // Workflow: completing a task can unblock / branch into downstream tasks.
+  // Workflow: completing a task can unblock / branch into downstream tasks,
+  // and can complete the goal it traces back to or unblock a synthesis step
+  // on its parent task.
   if (input.status === "done" && t!.status !== "done" && !input.archived) {
     await advanceWorkflow(taskId, actorMemberId, workspaceId).catch(() => {});
+    await rollUpCompletion(t!, actorMemberId, workspaceId).catch(() => {});
   }
   return { task: hydrated };
+}
+
+// ───── roll-up (Layer 4: delegated work reassembles upward) ─────
+//
+// When a task completes, two things can roll up:
+//   • Goal: if every non-archived task tracing to the task's goal is now done,
+//     the goal closes and its owner is notified — the delegation tree finished.
+//   • Parent: if every sibling subtask of a parent is done, the parent's
+//     assignees are nudged (a synthesis prompt) so a manager assembles the
+//     finished sub-work instead of it silently piling up.
+// Best-effort and non-recursive: it never marks a task done, only a goal.
+async function rollUpCompletion(
+  completed: TaskRow,
+  actorMemberId: string,
+  workspaceId: string,
+): Promise<void> {
+  if (completed.goalId) {
+    const siblings = await db
+      .select({ id: tasks.id, status: tasks.status })
+      .from(tasks)
+      .where(and(eq(tasks.goalId, completed.goalId), eq(tasks.archived, false)));
+    const allDone = siblings.length > 0 && siblings.every((s) => s.status === "done");
+    if (allDone) {
+      const [g] = await db.select().from(goals).where(eq(goals.id, completed.goalId)).limit(1);
+      if (g && g.status !== "done" && g.status !== "archived") {
+        await db
+          .update(goals)
+          .set({ status: "done", updatedAt: new Date() })
+          .where(eq(goals.id, completed.goalId));
+        await publishToWorkspace(workspaceId, {
+          type: "goal.updated",
+          workspaceId,
+          goalId: g.id,
+          status: "done",
+        });
+        if (g.ownerMemberId) {
+          await maybeFireAgentTrigger(g.ownerMemberId, completed.id, completed.conversationId, "task_comment");
+          // Awaited (not fire-and-forget): the goal-completion nudge is the
+          // payoff of the whole delegation tree — it should land before we
+          // return, not race a follow-up read.
+          await notify({
+            workspaceId,
+            memberId: g.ownerMemberId,
+            kind: "system",
+            actorMemberId,
+            title: "Goal complete",
+            body: g.title,
+            link: `/board?goal=${g.id}`,
+            taskId: completed.id,
+          }).catch(() => {});
+        }
+      }
+    }
+  }
+
+  if (completed.parentId) {
+    const subs = await db
+      .select({ id: tasks.id, status: tasks.status })
+      .from(tasks)
+      .where(and(eq(tasks.parentId, completed.parentId), eq(tasks.archived, false)));
+    const allDone = subs.length > 0 && subs.every((s) => s.status === "done");
+    if (allDone) {
+      const [parent] = await db.select().from(tasks).where(eq(tasks.id, completed.parentId)).limit(1);
+      if (parent && parent.status !== "done") {
+        const owners = await db
+          .select({ memberId: taskAssignees.memberId })
+          .from(taskAssignees)
+          .where(eq(taskAssignees.taskId, parent.id));
+        for (const o of owners) {
+          await maybeFireAgentTrigger(o.memberId, parent.id, parent.conversationId, "task_comment");
+          notify({
+            workspaceId,
+            memberId: o.memberId,
+            kind: "task_comment",
+            actorMemberId,
+            title: "All subtasks done — ready to synthesize",
+            body: parent.title,
+            link: `/board?task=${parent.id}`,
+            taskId: parent.id,
+          }).catch(() => {});
+        }
+      }
+    }
+  }
 }
 
 // ───── workflow advancement (deterministic A→B→C with branches) ─────
@@ -416,33 +513,51 @@ export async function advanceWorkflow(
       }
     }
 
-    await db.update(tasks).set({ status: "in_progress", updatedAt: new Date() }).where(eq(tasks.id, targetId));
-    await logActivity(targetId, actorMemberId, "status_changed", {
+    await startBacklogTask(targetId, actorMemberId, workspaceId, {
       from: "backlog",
       to: "in_progress",
       workflow: true,
       fromTask: completedTaskId,
     });
-    const [trow] = await db.select().from(tasks).where(eq(tasks.id, targetId));
-    const [thyd] = await hydrateTasks([trow]);
-    await publishToWorkspace(workspaceId, { type: "task.updated", workspaceId, taskId: targetId, task: thyd });
-    const assignees = await db
-      .select({ memberId: taskAssignees.memberId })
-      .from(taskAssignees)
-      .where(eq(taskAssignees.taskId, targetId));
-    for (const a of assignees) {
-      await maybeFireAgentTrigger(a.memberId, targetId, target.conversationId, "task_assigned");
-      notify({
-        workspaceId,
-        memberId: a.memberId,
-        kind: "task_assigned",
-        actorMemberId,
-        title: "A workflow task is ready for you",
-        body: target.title,
-        link: `/board?task=${targetId}`,
-        taskId: targetId,
-      }).catch(() => {});
-    }
+  }
+}
+
+// Move a backlog task into in_progress and wake it: log the transition,
+// publish the board update, fire each agent assignee's task_assigned trigger,
+// and inbox-nudge human assignees. Shared by advanceWorkflow (downstream
+// unblock) and the goal planner (starting the root tasks of a fresh plan).
+// No-ops on a task that isn't currently in backlog so it can't disturb work
+// already underway. `notice` is the inbox copy shown to human assignees.
+export async function startBacklogTask(
+  taskId: string,
+  actorMemberId: string,
+  workspaceId: string,
+  activityMeta: Record<string, unknown> = { from: "backlog", to: "in_progress" },
+  notice = "A workflow task is ready for you",
+): Promise<void> {
+  const task = await loadTask(taskId);
+  if (!task || task.workspaceId !== workspaceId || task.status !== "backlog") return;
+  await db.update(tasks).set({ status: "in_progress", updatedAt: new Date() }).where(eq(tasks.id, taskId));
+  await logActivity(taskId, actorMemberId, "status_changed", activityMeta);
+  const [trow] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+  const [thyd] = await hydrateTasks([trow]);
+  await publishToWorkspace(workspaceId, { type: "task.updated", workspaceId, taskId, task: thyd });
+  const assignees = await db
+    .select({ memberId: taskAssignees.memberId })
+    .from(taskAssignees)
+    .where(eq(taskAssignees.taskId, taskId));
+  for (const a of assignees) {
+    await maybeFireAgentTrigger(a.memberId, taskId, task.conversationId, "task_assigned");
+    notify({
+      workspaceId,
+      memberId: a.memberId,
+      kind: "task_assigned",
+      actorMemberId,
+      title: notice,
+      body: task.title,
+      link: `/board?task=${taskId}`,
+      taskId,
+    }).catch(() => {});
   }
 }
 
