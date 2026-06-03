@@ -379,53 +379,26 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
 //
 // When a task completes, two things can roll up:
 //   • Goal: if every non-archived task tracing to the task's goal is now done,
-//     the goal closes and its owner is notified — the delegation tree finished.
+//     the goal closes and its owner is notified — then the close cascades
+//     UPWARD: a finished sub-goal can complete its parent goal/project, which
+//     can complete ITS parent, and so on (see tryCloseGoal).
 //   • Parent: if every sibling subtask of a parent is done, the parent's
 //     assignees are nudged (a synthesis prompt) so a manager assembles the
 //     finished sub-work instead of it silently piling up.
-// Best-effort and non-recursive: it never marks a task done, only a goal.
+// Best-effort: it never marks a task done, only goals.
 async function rollUpCompletion(
   completed: TaskRow,
   actorMemberId: string,
   workspaceId: string,
 ): Promise<void> {
   if (completed.goalId) {
-    const siblings = await db
-      .select({ id: tasks.id, status: tasks.status })
-      .from(tasks)
-      .where(and(eq(tasks.goalId, completed.goalId), eq(tasks.archived, false)));
-    const allDone = siblings.length > 0 && siblings.every((s) => s.status === "done");
-    if (allDone) {
-      const [g] = await db.select().from(goals).where(eq(goals.id, completed.goalId)).limit(1);
-      if (g && g.status !== "done" && g.status !== "archived") {
-        await db
-          .update(goals)
-          .set({ status: "done", updatedAt: new Date() })
-          .where(eq(goals.id, completed.goalId));
-        await publishToWorkspace(workspaceId, {
-          type: "goal.updated",
-          workspaceId,
-          goalId: g.id,
-          status: "done",
-        });
-        if (g.ownerMemberId) {
-          await maybeFireAgentTrigger(g.ownerMemberId, completed.id, completed.conversationId, "task_comment");
-          // Awaited (not fire-and-forget): the goal-completion nudge is the
-          // payoff of the whole delegation tree — it should land before we
-          // return, not race a follow-up read.
-          await notify({
-            workspaceId,
-            memberId: g.ownerMemberId,
-            kind: "system",
-            actorMemberId,
-            title: "Goal complete",
-            body: g.title,
-            link: `/board?goal=${g.id}`,
-            taskId: completed.id,
-          }).catch(() => {});
-        }
-      }
-    }
+    await tryCloseGoal(
+      completed.goalId,
+      { taskId: completed.id, conversationId: completed.conversationId },
+      actorMemberId,
+      workspaceId,
+      new Set(),
+    );
   }
 
   if (completed.parentId) {
@@ -456,6 +429,73 @@ async function rollUpCompletion(
         }
       }
     }
+  }
+}
+
+// Close a goal if all the work tracing to it is finished, then cascade the
+// close upward through its ancestors. "Finished" means every non-archived
+// task tracing directly to the goal is `done` AND every non-archived child
+// goal is `done` — with at least one task or child goal present (an empty
+// goal stays open; it's just unplanned, not complete). When a goal closes we
+// recurse into its parent, so a finished leaf goal can complete its parent
+// goal, then the grandparent project, and so on. `seen` guards against a
+// corrupt parent cycle and bounds depth. Best-effort; only marks goals done.
+async function tryCloseGoal(
+  goalId: string,
+  trigger: { taskId: string; conversationId: string | null },
+  actorMemberId: string,
+  workspaceId: string,
+  seen: Set<string>,
+): Promise<void> {
+  if (seen.has(goalId) || seen.size > 16) return;
+  seen.add(goalId);
+
+  const [g] = await db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
+  if (!g || g.workspaceId !== workspaceId) return;
+  if (g.status === "done" || g.status === "archived") return;
+
+  const directTasks = await db
+    .select({ status: tasks.status })
+    .from(tasks)
+    .where(and(eq(tasks.goalId, goalId), eq(tasks.archived, false)));
+  const childGoals = await db
+    .select({ status: goals.status })
+    .from(goals)
+    .where(eq(goals.parentGoalId, goalId));
+  // Archived child goals don't block completion (they were abandoned).
+  const activeChildGoals = childGoals.filter((c) => c.status !== "archived");
+
+  // No work traces here yet → unplanned, not complete.
+  if (directTasks.length === 0 && activeChildGoals.length === 0) return;
+
+  const tasksDone = directTasks.every((t) => t.status === "done");
+  const childGoalsDone = activeChildGoals.every((c) => c.status === "done");
+  if (!tasksDone || !childGoalsDone) return;
+
+  await db.update(goals).set({ status: "done", updatedAt: new Date() }).where(eq(goals.id, goalId));
+  await publishToWorkspace(workspaceId, { type: "goal.updated", workspaceId, goalId, status: "done" });
+
+  if (g.ownerMemberId) {
+    // Wake the owner agent so it can synthesize/report on the finished tree,
+    // and notify the human owner. The triggering task gives the wake context.
+    await maybeFireAgentTrigger(g.ownerMemberId, trigger.taskId, trigger.conversationId, "task_comment");
+    // Awaited (not fire-and-forget): the completion nudge is the payoff of the
+    // whole delegation tree — it should land before we return.
+    await notify({
+      workspaceId,
+      memberId: g.ownerMemberId,
+      kind: "system",
+      actorMemberId,
+      title: g.kind === "project" ? "Project complete" : "Goal complete",
+      body: g.title,
+      link: `/board?goal=${g.id}`,
+      taskId: trigger.taskId,
+    }).catch(() => {});
+  }
+
+  // Cascade: this goal closing may now complete its parent.
+  if (g.parentGoalId) {
+    await tryCloseGoal(g.parentGoalId, trigger, actorMemberId, workspaceId, seen);
   }
 }
 
