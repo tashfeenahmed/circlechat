@@ -1101,6 +1101,19 @@ input, textarea { font: inherit; color: inherit; }
   font-weight: 600; font-size: 16px;
   letter-spacing: -0.01em; color: var(--color-ink);
 }
+/* DM header identity — the avatar + name act as one button that opens the
+   member profile panel. Keeps the inner gap matching the bare header layout. */
+.dm-head-id {
+  display: inline-flex; align-items: center; gap: 14px;
+  padding: 3px 8px; margin: -3px -4px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.dm-head-id:hover { background: var(--color-hi); }
+.dm-head-id:disabled { cursor: default; }
+.dm-head-id:disabled:hover { background: transparent; }
 .chan-head .ch-meta {
   display: flex; align-items: center; gap: 10px;
   color: var(--color-muted); font-size: 13px;
@@ -1619,6 +1632,19 @@ input, textarea { font: inherit; color: inherit; }
 .btn.ghost:hover { color: var(--color-ink); background: var(--color-hi); }
 .btn.sm { padding: 3px 9px; font-size: 12px; }
 .btn.xs { padding: 1px 6px; font-size: 11px; font-family: var(--font-mono); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+
+/* Action toolbar on the agent detail header — groups the run/pause/export
+   controls into one segmented bar so they read as buttons, not links. */
+.agent-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--color-hair);
+  border-radius: 10px;
+  background: var(--color-hi);
+}
 
 /* approval row */
 .approve-row {

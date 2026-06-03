@@ -22,6 +22,7 @@ export default function DMPage() {
   const threadRootId = useBus((s) => s.threadRootId);
   const openThread = useBus((s) => s.openThread);
   const closeThread = useBus((s) => s.closeThread);
+  const openDetails = useBus((s) => s.openDetails);
   const [convId, setConvId] = useState<string | null>(null);
   const creatingRef = useRef<string | null>(null);
 
@@ -97,11 +98,19 @@ export default function DMPage() {
     <main className="flex h-full min-w-0 min-h-0 flex-1 bg-paper overflow-hidden">
       <div className="workspace flex-1 min-w-0">
         <header className="chan-head">
-          <Avatar name={otherName} color="" agent={otherAgent} size="sm" status={otherStatus} />
-          <div className="ch-title">{otherName}</div>
-          <div className="ch-meta">
-            <span className="font-mono text-[12px]">@{otherHandle}</span>
-          </div>
+          <button
+            type="button"
+            className="dm-head-id"
+            onClick={() => otherMemberId && openDetails(otherMemberId)}
+            disabled={!otherMemberId}
+            title={`View ${otherName}'s profile`}
+          >
+            <Avatar name={otherName} color="" agent={otherAgent} size="sm" status={otherStatus} />
+            <span className="ch-title">{otherName}</span>
+            <span className="ch-meta">
+              <span className="font-mono text-[12px]">@{otherHandle}</span>
+            </span>
+          </button>
           <div className="ch-right">
             <button
               className="ch-btn"

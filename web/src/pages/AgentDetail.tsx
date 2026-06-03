@@ -1,7 +1,8 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { FlaskConical, HeartPulse, Pause, Play, Download } from "lucide-react";
 import { useAgent } from "../lib/hooks";
-import { api } from "../api/client";
+import { api, type AgentRun } from "../api/client";
 import Avatar from "../components/Avatar";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -100,36 +101,45 @@ export default function AgentDetailPage() {
               {agent.kind} · {agent.adapter} · {agent.model || "unspecified model"}
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="agent-toolbar">
             <button
               onClick={runTest}
               disabled={!!pending}
               title="Synthetic test trigger — smoke-tests the bridge and prompt pipeline"
-              className="text-[12px] border border-[var(--color-hair-2)] rounded px-3 py-1.5 hover:bg-[var(--color-hi)]"
+              className="btn sm btn-scale"
             >
-              Test heartbeat
+              <FlaskConical size={13} strokeWidth={2} /> Test heartbeat
             </button>
             <button
               onClick={runHeartbeat}
               disabled={!!pending}
               title="Fire a real scheduled beat right now — same trigger the cron uses"
-              className="text-[12px] border border-[var(--color-hair-2)] rounded px-3 py-1.5 hover:bg-[var(--color-hi)]"
+              className="btn sm btn-scale"
             >
-              Run heartbeat
+              <HeartPulse size={13} strokeWidth={2} /> Run heartbeat
             </button>
             <button
               onClick={togglePause}
               disabled={!!pending}
-              className="text-[12px] border border-[var(--color-hair-2)] rounded px-3 py-1.5 hover:bg-[var(--color-hi)]"
+              title={agent.status === "paused" ? "Resume scheduled heartbeats" : "Pause scheduled heartbeats"}
+              className="btn sm btn-scale"
             >
-              {agent.status === "paused" ? "Resume" : "Pause"}
+              {agent.status === "paused" ? (
+                <>
+                  <Play size={13} strokeWidth={2} /> Resume
+                </>
+              ) : (
+                <>
+                  <Pause size={13} strokeWidth={2} /> Pause
+                </>
+              )}
             </button>
             <button
               onClick={exportYaml}
               title="Download this agent's definition as reviewable YAML (agent-as-code)"
-              className="text-[12px] border border-[var(--color-hair-2)] rounded px-3 py-1.5 hover:bg-[var(--color-hi)]"
+              className="btn sm btn-scale"
             >
-              Export YAML
+              <Download size={13} strokeWidth={2} /> Export YAML
             </button>
           </div>
         </div>
@@ -213,41 +223,78 @@ export default function AgentDetailPage() {
 
         <section className="mt-8">
           <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Recent runs</h2>
-          <div className="mt-2 space-y-2">
-            {recentRuns.length === 0 && (
-              <p className="text-[13px] text-[var(--color-muted-2)] italic">no runs yet</p>
-            )}
-            {recentRuns.map((r) => (
-              <div
-                key={r.id}
-                className="border border-[var(--color-hair)] rounded p-3 flex items-start gap-3 text-[12px]"
-              >
-                <span
-                  className={`chip ${
-                    r.status === "ok" ? "text-[var(--color-ok)]" : r.status === "failed" ? "text-[var(--color-err)]" : ""
-                  }`}
-                >
-                  {r.status}
-                </span>
-                <span className="font-mono text-[var(--color-muted)]">{r.trigger}</span>
-                <span className="flex-1">
-                  {r.errorText ? (
-                    <span className="text-[var(--color-err)]">{r.errorText}</span>
-                  ) : (
-                    <>
-                      {(r.traceJson ?? []).slice(0, 4).join(" · ")}
-                    </>
-                  )}
-                </span>
-                <span className="text-[var(--color-muted)] font-mono">
-                  {new Date(r.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-            ))}
-          </div>
+          <RecentRuns runs={recentRuns} />
         </section>
       </div>
     </main>
+  );
+}
+
+// Recent runs can pile up (the API returns the latest batch), which made the
+// page scroll forever. Cap the visible list and reveal more as the user
+// scrolls a sentinel into view at the bottom of a fixed-height pane.
+const RUNS_PAGE = 8;
+
+function RecentRuns({ runs }: { runs: AgentRun[] }) {
+  const [visible, setVisible] = useState(RUNS_PAGE);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset the window whenever the underlying run list changes (e.g. a refresh
+  // after firing a heartbeat) so we don't strand the user deep in a stale list.
+  useEffect(() => setVisible(RUNS_PAGE), [runs]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || visible >= runs.length) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisible((v) => Math.min(v + RUNS_PAGE, runs.length));
+        }
+      },
+      { rootMargin: "80px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible, runs.length]);
+
+  if (runs.length === 0) {
+    return <p className="text-[13px] text-[var(--color-muted-2)] italic mt-2">no runs yet</p>;
+  }
+
+  return (
+    <div className="mt-2 max-h-[420px] overflow-auto space-y-2 pr-1">
+      {runs.slice(0, visible).map((r) => (
+        <div
+          key={r.id}
+          className="border border-[var(--color-hair)] rounded p-3 flex items-start gap-3 text-[12px]"
+        >
+          <span
+            className={`chip ${
+              r.status === "ok" ? "text-[var(--color-ok)]" : r.status === "failed" ? "text-[var(--color-err)]" : ""
+            }`}
+          >
+            {r.status}
+          </span>
+          <span className="font-mono text-[var(--color-muted)]">{r.trigger}</span>
+          <span className="flex-1">
+            {r.errorText ? (
+              <span className="text-[var(--color-err)]">{r.errorText}</span>
+            ) : (
+              <>{(r.traceJson ?? []).slice(0, 4).join(" · ")}</>
+            )}
+          </span>
+          <span className="text-[var(--color-muted)] font-mono">
+            {new Date(r.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        </div>
+      ))}
+      {visible < runs.length && (
+        <div ref={sentinelRef} className="py-2 text-center text-[11px] text-[var(--color-muted-2)] font-mono">
+          scroll for more · {runs.length - visible} older
+        </div>
+      )}
+    </div>
   );
 }
 
