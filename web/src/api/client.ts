@@ -184,10 +184,13 @@ export interface GoalTaskCounts {
 
 export type GoalStatus = "open" | "planning" | "in_progress" | "done" | "archived";
 
+export type GoalKind = "goal" | "project";
+
 export interface Goal {
   id: string;
   workspaceId: string;
   parentGoalId: string | null;
+  kind: GoalKind;
   title: string;
   bodyMd: string;
   status: GoalStatus;

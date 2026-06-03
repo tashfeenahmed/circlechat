@@ -17,7 +17,7 @@ import {
   workspaces,
 } from "../db/schema.js";
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
-import { listGoals } from "../lib/goals-core.js";
+import { listGoals, getGoalAncestry } from "../lib/goals-core.js";
 
 export interface MemberInfo {
   memberId: string;
@@ -118,6 +118,8 @@ export interface ContextPacket {
     id: string;
     title: string;
     status: string;
+    kind: string; // 'project' | 'goal'
+    parentGoalId: string | null;
     ownerMemberId: string | null;
     taskCounts: { total: number; done: number; inProgress: number };
   }>;
@@ -157,6 +159,10 @@ export interface ContextPacket {
     createdBy: string;
     subtasks: Array<{ id: string; title: string; status: string; assignees: string[] }>;
     recentComments: Array<{ id: string; memberId: string; memberHandle: string; bodyMd: string; ts: string }>;
+    // The goal chain this task serves, top-first (root project → … → direct
+    // goal), so the agent sees the "why", not just a title. Empty when the
+    // task isn't attached to a goal.
+    goalAncestry: Array<{ id: string; title: string; kind: string; status: string }>;
   };
 }
 
@@ -464,6 +470,8 @@ export async function buildContext(opts: {
       id: g.id,
       title: g.title,
       status: g.status,
+      kind: g.kind ?? "goal",
+      parentGoalId: g.parentGoalId ?? null,
       ownerMemberId: g.ownerMemberId ?? null,
       taskCounts: g.taskCounts,
     }));
@@ -535,6 +543,16 @@ export async function buildContext(opts: {
         .where(and(eq(taskComments.taskId, opts.taskId)))
         .orderBy(desc(taskComments.ts))
         .limit(10);
+      // Full "why" chain: the goal this task serves, up through its parent
+      // goals/project. Top-first so the prompt reads mission ▸ project ▸ goal.
+      const goalAncestry = t.goalId
+        ? (await getGoalAncestry(t.goalId)).map((g) => ({
+            id: g.id,
+            title: g.title,
+            kind: g.kind ?? "goal",
+            status: g.status,
+          }))
+        : [];
       taskCtx = {
         id: t.id,
         conversationId: t.conversationId,
@@ -565,6 +583,7 @@ export async function buildContext(opts: {
             bodyMd: c.bodyMd,
             ts: c.ts.toISOString(),
           })),
+        goalAncestry,
       };
     }
   }

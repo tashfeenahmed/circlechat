@@ -9,11 +9,34 @@ import { enqueueGoalPlan } from "./goal-queue.js";
 export const GOAL_STATUSES = ["open", "planning", "in_progress", "done", "archived"] as const;
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 
+// A 'project' is a top-level container; a 'goal' is a unit of intent the
+// planner decomposes into tasks. The mission → project → goal tier.
+export const GOAL_KINDS = ["goal", "project"] as const;
+export type GoalKind = (typeof GOAL_KINDS)[number];
+
 type GoalRow = typeof goals.$inferSelect;
 
 export async function loadGoal(goalId: string): Promise<GoalRow | null> {
   const [g] = await db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
   return g ?? null;
+}
+
+// Walk parent_goal_id from a goal up to its root, returning the chain
+// top-first: [rootProject, …, directGoal]. Gives agents the full "why"
+// ancestry of a task, not just its immediate goal. Bounded so a corrupt
+// cycle can't loop forever.
+export async function getGoalAncestry(goalId: string): Promise<GoalRow[]> {
+  const chain: GoalRow[] = [];
+  const seen = new Set<string>();
+  let cur: string | null = goalId;
+  while (cur && !seen.has(cur) && chain.length < 16) {
+    seen.add(cur);
+    const g = await loadGoal(cur);
+    if (!g) break;
+    chain.push(g);
+    cur = g.parentGoalId;
+  }
+  return chain.reverse();
 }
 
 function guard(
@@ -61,6 +84,7 @@ export interface CreateGoalInput {
   parentGoalId?: string | null;
   ownerMemberId?: string | null;
   status?: GoalStatus;
+  kind?: GoalKind;
 }
 
 export async function createGoal(
@@ -87,6 +111,7 @@ export async function createGoal(
     id: goalId,
     workspaceId,
     parentGoalId: input.parentGoalId ?? null,
+    kind: input.kind ?? "goal",
     title: input.title,
     bodyMd: input.bodyMd ?? "",
     status: input.status ?? "open",
@@ -152,6 +177,7 @@ export interface UpdateGoalInput {
   bodyMd?: string;
   status?: GoalStatus;
   ownerMemberId?: string | null;
+  kind?: GoalKind;
 }
 
 export async function updateGoal(
@@ -167,6 +193,7 @@ export async function updateGoal(
   if (input.bodyMd !== undefined) patch.bodyMd = input.bodyMd;
   if (input.status !== undefined) patch.status = input.status;
   if (input.ownerMemberId !== undefined) patch.ownerMemberId = input.ownerMemberId;
+  if (input.kind !== undefined) patch.kind = input.kind;
   await db.update(goals).set(patch).where(eq(goals.id, goalId));
   const [row] = await db.select().from(goals).where(eq(goals.id, goalId));
   const [hydrated] = await withCounts([row]);

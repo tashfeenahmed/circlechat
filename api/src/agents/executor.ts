@@ -87,7 +87,7 @@ export type AgentAction =
   | { type: "assign_task"; task_id: string; member_id: string }
   // Goal actions — set a goal and have the planner auto-decompose it into a
   // delegation tree of tasks routed across the team (the manager move).
-  | { type: "create_goal"; title: string; body_md?: string; parent_goal_id?: string }
+  | { type: "create_goal"; title: string; body_md?: string; parent_goal_id?: string; kind?: "goal" | "project" }
   | { type: "decompose_goal"; goal_id: string }
   | {
       type: "task_comment";
@@ -689,7 +689,7 @@ async function applyOne(
       const ws = await loadAgentWorkspace(agentMemberId);
       if (!ws) throw new Error("agent_workspace_missing");
       const r = await createGoal(
-        { title: a.title, bodyMd: a.body_md, parentGoalId: a.parent_goal_id },
+        { title: a.title, bodyMd: a.body_md, parentGoalId: a.parent_goal_id, kind: a.kind },
         agentMemberId,
         ws,
       );

@@ -120,6 +120,13 @@
       "when": 1777190000000,
       "tag": "0016_auto_plan",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1777200000000,
+      "tag": "0017_goal_kind",
+      "breakpoints": true
     }
   ]
 }

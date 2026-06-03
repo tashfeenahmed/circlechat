@@ -695,7 +695,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  {"type":"update_task","task_id":"task_…","status":"in_progress|review|done","progress":50,"title":"…","body_md":"…","due_at":"2026-05-01","archived":true}`,
     `                                                                — moving to "done" REQUIRES EVIDENCE: the task must already have either (a) a SUBSTANTIVE deliverable in its artifacts store (use share_to_task to drop the real file — a stub/title-only placeholder is REJECTED), or (b) a human-authored comment after your most recent comment (review/sign-off). If neither is true, the server rejects the update with done_requires_evidence — first share the actual work product (the real script/report/draft, not its title), THEN flip status. To request human review without a finished deliverable, set status="review" instead.`,
     `  {"type":"assign_task","task_id":"task_…","member_id":"m_…"}`,
-    `  {"type":"create_goal","title":"…","body_md":"<optional detail>","parent_goal_id":"<optional goal_…>"}  — state a multi-step objective for the team. Use for real initiatives, not a single action you can just do.`,
+    `  {"type":"create_goal","title":"…","body_md":"<optional detail>","parent_goal_id":"<optional goal_…>","kind":"goal|project"}  — state a multi-step objective for the team. Use for real initiatives, not a single action you can just do. Set kind:"project" for a big top-level initiative that holds several goals; nest goals under it via parent_goal_id so tasks trace mission ▸ project ▸ goal.`,
     `  {"type":"decompose_goal","goal_id":"goal_…"}              — THE MANAGER MOVE: auto-decompose a goal into a task tree, route each subtask to the best-fit teammate by capability, wire the dependency edges, and start the unblocked tasks (waking their assignees). As tasks complete, dependents auto-start; when all finish, the goal closes. Use create_goal then decompose_goal when a human hands YOU (a lead with direct reports) an objective — don't hand-create every task or do it all yourself.`,
     `  {"type":"task_comment","task_id":"task_…","body_md":"…","mentions":["m_…"],"attachments":[<optional, hand-rolled descriptors from /uploads>]}`,
     `  {"type":"share_to_task","task_id":"task_…","body_md":"progress note","files":[{"url":"https://…","name":"snapshot.png"},{"path":"/workspace/report.pdf","name":"Q3.pdf"}]}`,
@@ -748,10 +748,22 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
       ? `\nRecent comments:\n${t.recentComments.map((c) => `  @${c.memberHandle}: ${String(c.bodyMd).slice(0, 200)}`).join("\n")}`
       : "";
     const sourceLine = t.conversationName ? `From channel: #${t.conversationName}` : null;
+    // The "why" chain: mission ▸ project ▸ goal ▸ … ▸ the goal this task
+    // serves. Lets the agent judge scope/trade-offs against the real objective
+    // instead of optimizing a bare title. Mission comes from the workspace.
+    const chain = Array.isArray(t.goalAncestry) ? t.goalAncestry : [];
+    let whyLine = null;
+    if (chain.length || (packet.workspace && packet.workspace.mission)) {
+      const parts = [];
+      if (packet.workspace && packet.workspace.mission) parts.push(`Mission: ${packet.workspace.mission}`);
+      for (const g of chain) parts.push(`${g.kind === "project" ? "Project" : "Goal"} “${g.title}”`);
+      whyLine = `Why this matters (chain): ${parts.join(" ▸ ")}`;
+    }
     taskBlock = [
       ``,
       `TASK (id ${t.id}) — status: ${t.status}${t.progress ? ` · progress ${t.progress}%` : ""}${t.dueAt ? ` · due ${t.dueAt.slice(0, 10)}` : ""}`,
       `Title: ${t.title}`,
+      whyLine,
       t.bodyMd ? `Description: ${t.bodyMd}` : null,
       sourceLine,
       t.labels?.length ? `Labels: ${t.labels.join(", ")}` : null,
@@ -811,10 +823,14 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
   let goalsBlock = "";
   const gs = Array.isArray(packet.goals) ? packet.goals : [];
   if (gs.length) {
+    const byId = new Map(gs.map((g) => [g.id, g]));
     const lines = gs.slice(0, 10).map((g) => {
       const c = g.taskCounts || { total: 0, done: 0, inProgress: 0 };
       const tally = c.total ? ` · ${c.done}/${c.total} done` : ` · UNPLANNED — decompose_goal to fan it out`;
-      return `  ◆ ${g.id} [${g.status}${tally}] ${g.title}`;
+      const kindTag = g.kind === "project" ? "PROJECT " : "";
+      const parent = g.parentGoalId ? byId.get(g.parentGoalId) : null;
+      const underLine = parent ? ` · under “${parent.title}”` : "";
+      return `  ◆ ${g.id} [${kindTag}${g.status}${tally}] ${g.title}${underLine}`;
     });
     goalsBlock = [
       ``,

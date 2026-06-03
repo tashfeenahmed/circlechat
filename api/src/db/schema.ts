@@ -361,6 +361,10 @@ export const goals = pgTable(
     id: varchar("id", { length: 32 }).primaryKey(),
     workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
     parentGoalId: varchar("parent_goal_id", { length: 32 }),
+    // 'project' = a top-level container; 'goal' = a unit of intent the planner
+    // decomposes. Makes the mission → project → goal tier real instead of
+    // inferred from tree depth.
+    kind: varchar("kind", { length: 16 }).notNull().default("goal"),
     title: varchar("title", { length: 300 }).notNull(),
     bodyMd: text("body_md").notNull().default(""),
     status: varchar("status", { length: 20 }).notNull().default("open"),
