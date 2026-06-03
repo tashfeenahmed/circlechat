@@ -42,6 +42,9 @@ export function renderMarkdown(
   );
   return DOMPurify.sanitize(withMentions, {
     ADD_ATTR: ["target", "rel"],
-    ALLOWED_ATTR: ["class", "href", "title", "target", "rel"],
+    // `style` is allowed so GFM table column alignment (markdown-it emits
+    // `style="text-align:…"` on th/td) survives — DOMPurify sanitizes the
+    // CSS value, so this stays safe.
+    ALLOWED_ATTR: ["class", "href", "title", "target", "rel", "style"],
   });
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { X, Plus, Trash2, Paperclip, Bold, Italic, Code, ChevronDown, Upload } from "lucide-react";
+import { X, Plus, Trash2, Paperclip, Bold, Italic, Code, ChevronDown, Upload, Maximize2, Minimize2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useTaskDetail,
@@ -57,6 +57,7 @@ export default function TaskModal({
   const [busy, setBusy] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
+  const [maximized, setMaximized] = useState(false);
   const composerTaRef = useRef<HTMLTextAreaElement>(null);
   const bodyTouched = useRef(false);
   const titleTouched = useRef(false);
@@ -273,12 +274,19 @@ export default function TaskModal({
 
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`modal task-modal${maximized ? " task-modal--max" : ""}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="task-modal-head">
           <span className="mono text-[11px] text-[var(--color-muted)]">{t.id}</span>
           <span className="tm-head-spacer" />
-          <button className="tb-btn" onClick={deleteTask} title="Delete task">
-            <Trash2 size={14} />
+          <button
+            className="tb-btn"
+            onClick={() => setMaximized((m) => !m)}
+            title={maximized ? "Restore size" : "Maximize"}
+          >
+            {maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
           <button className="tb-btn" onClick={onClose} title="Close">
             <X size={14} />
@@ -722,6 +730,9 @@ export default function TaskModal({
                   day: "numeric",
                 })}
               </div>
+              <button className="tm-delete-btn" onClick={deleteTask} title="Delete task">
+                <Trash2 size={13} strokeWidth={2} /> Delete task
+              </button>
             </div>
           </aside>
         </div>
