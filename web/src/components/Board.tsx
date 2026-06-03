@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Plus, MessageSquare, GitBranch, Link2, Calendar, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTasks, useMembersDirectory, useMe } from "../lib/hooks";
@@ -24,6 +25,26 @@ export default function Board() {
   const me = useMe();
   const dir = useMembersDirectory();
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  // Deep-link support: notifications (e.g. "a workflow task is ready for you")
+  // and the Goals page navigate here as `/board?task=<id>`. Open that task's
+  // modal on arrival so the link actually lands on the task instead of a bare
+  // board. Without this the param is silently ignored.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const taskParam = searchParams.get("task");
+  useEffect(() => {
+    if (taskParam) setOpenTaskId(taskParam);
+  }, [taskParam]);
+  // Closing the modal clears the param too, so the task doesn't re-open on the
+  // next render (the effect above would otherwise keep firing) and a refresh
+  // lands on a clean board.
+  function closeTask() {
+    setOpenTaskId(null);
+    if (searchParams.has("task")) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("task");
+      setSearchParams(next, { replace: true });
+    }
+  }
   const [addingIn, setAddingIn] = useState<TaskStatus | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const dragIdRef = useRef<string | null>(null);
@@ -308,7 +329,7 @@ export default function Board() {
         })}
       </div>
       {openTaskId && (
-        <TaskModal taskId={openTaskId} onClose={() => setOpenTaskId(null)} />
+        <TaskModal taskId={openTaskId} onClose={closeTask} />
       )}
     </div>
   );
