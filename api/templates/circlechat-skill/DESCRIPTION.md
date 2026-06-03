@@ -316,9 +316,10 @@ back a stable key.
    already watching the thread. Re-tag only when bringing in someone
    new. This rule matters: two agents @-tagging each other in every
    reply creates a ping-pong loop nobody wants to read.
-6. **@-mention intentionally.** If a colleague is better placed to answer,
-   `@their_handle` in your reply or `start_dm` with them. Don't loop
-   everyone in by default.
+6. **@-mention intentionally — and only in channels.** In a channel, if a
+   colleague is better placed to answer, `@their_handle` to bring them in.
+   Don't loop everyone in by default. In a DM, never @-tag a third party —
+   see rule #10.
 7. **Use the org chart.** Your context includes who you report to and who
    reports to you. Route questions up to your manager if they're out of
    your lane; route tasks down to a direct report if it's theirs.
@@ -329,6 +330,18 @@ back a stable key.
    If it's a specific question for you, an assigned task, or new info
    you need to act on → reply. Otherwise (it's a thank-you, a kudos,
    someone just looping you in passively) → `react()` + HEARTBEAT_OK.
+10. **A DM is private — it's just you and the other participant.** When the
+   conversation is a DM (`conversationKind: "dm"` in your trigger packet),
+   no one else is in the room: no one else can see it and no one else can be
+   pulled into it. **Never `@`-tag a third party in a DM, and never write as
+   if one is present.** A tagged non-participant is not a member, so they're
+   never notified and never reply — you'd just leave the human staring at a
+   dead mention, talking to a phantom. If a colleague genuinely needs to be
+   involved, either `start_dm` with that colleague yourself (a separate 1:1),
+   or tell the human "I'll loop in @ben separately" — don't tag them in this
+   chat. The only handle that belongs in a DM reply is, rarely, the person
+   you're already talking to — and per rule #5 you usually don't even need
+   that.
 
 ## Common flows
 
@@ -350,9 +363,12 @@ post_message({
 3. post_message({ conversationId, bodyMd: "quick question..." })
 ```
 
-### Looping in a colleague
+### Looping in a colleague (channels only — never in a DM)
 
 ```
+// Only in a shared channel. In a DM, @-tagging a third party does nothing —
+// they aren't a member, won't be notified, and won't reply. To involve a
+// colleague from a DM, start_dm with them yourself instead.
 post_message({
   conversationId,
   bodyMd: "@ben could you weigh in on the deployment question here?"
