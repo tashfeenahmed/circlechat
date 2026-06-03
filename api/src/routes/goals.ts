@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireWorkspace } from "../auth/session.js";
 import {
   GOAL_STATUSES,
+  GOAL_KINDS,
   createGoal,
   listGoals,
   getGoalDetail,
@@ -16,6 +17,7 @@ const CreateBody = z.object({
   bodyMd: z.string().max(20000).optional(),
   parentGoalId: z.string().nullable().optional(),
   ownerMemberId: z.string().nullable().optional(),
+  kind: z.enum(GOAL_KINDS).optional(),
 });
 
 const UpdateBody = z.object({
@@ -23,6 +25,7 @@ const UpdateBody = z.object({
   bodyMd: z.string().max(20000).optional(),
   status: z.enum(GOAL_STATUSES).optional(),
   ownerMemberId: z.string().nullable().optional(),
+  kind: z.enum(GOAL_KINDS).optional(),
 });
 
 const ERR_CODE: Record<string, number> = {

@@ -31,6 +31,8 @@ export default function GoalsPage() {
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [newKind, setNewKind] = useState<"goal" | "project">("goal");
+  const [newParent, setNewParent] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [planning, setPlanning] = useState<string | null>(null);
@@ -64,9 +66,17 @@ export default function GoalsPage() {
     if (!t || busy) return;
     setBusy(true);
     try {
-      await api.post<{ goal: Goal }>("/goals", { title: t, bodyMd: body.trim() || undefined });
+      await api.post<{ goal: Goal }>("/goals", {
+        title: t,
+        bodyMd: body.trim() || undefined,
+        kind: newKind,
+        // A project is a top-level container — never nest it under a goal.
+        parentGoalId: newKind === "goal" && newParent ? newParent : undefined,
+      });
       setTitle("");
       setBody("");
+      setNewParent("");
+      setNewKind("goal");
       setAdding(false);
     } catch (e) {
       flash("err", humanizeError(e));
@@ -145,9 +155,49 @@ export default function GoalsPage() {
               value={body}
               onChange={(e) => setBody(e.target.value)}
             />
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {/* Kind toggle — a project is a top-level container; a goal is a
+                  unit of intent the planner decomposes (and can nest under a project). */}
+              <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-[12px]">
+                {(["goal", "project"] as const).map((k) => (
+                  <button
+                    key={k}
+                    className={`px-2.5 py-1 ${newKind === k ? "bg-[var(--color-accent,#1a73e8)] text-white" : "text-[var(--color-muted)]"}`}
+                    onClick={() => setNewKind(k)}
+                    type="button"
+                  >
+                    {k === "project" ? "Project" : "Goal"}
+                  </button>
+                ))}
+              </div>
+              {newKind === "goal" && (
+                <select
+                  className="text-[12px] bg-transparent border border-[var(--color-border)] rounded-md px-2 py-1 outline-none"
+                  value={newParent}
+                  onChange={(e) => setNewParent(e.target.value)}
+                  title="Nest this goal under a project or parent goal"
+                >
+                  <option value="">No parent (top-level)</option>
+                  {active
+                    .filter((p) => p.kind === "project")
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        ◇ Project: {p.title}
+                      </option>
+                    ))}
+                  {active
+                    .filter((p) => p.kind !== "project")
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        Goal: {p.title}
+                      </option>
+                    ))}
+                </select>
+              )}
+            </div>
             <div className="mt-2 flex gap-2">
               <button className="btn sm primary" disabled={!title.trim() || busy} onClick={createGoal}>
-                Create
+                Create {newKind === "project" ? "project" : "goal"}
               </button>
               <button className="btn sm ghost" onClick={() => setAdding(false)}>
                 Cancel
@@ -180,15 +230,32 @@ export default function GoalsPage() {
             // show a manual control when planning is OFF, or to retry a goal the
             // planner gave up on.
             const showPlanBtn = unplanned && (!autoPlan || failed);
+            const isProject = g.kind === "project";
+            const parent = g.parentGoalId ? goals.find((p) => p.id === g.parentGoalId) : null;
             return (
-              <div key={g.id} className="rounded-lg border border-[var(--color-border)]">
+              <div
+                key={g.id}
+                className={`rounded-lg border ${isProject ? "border-[var(--color-accent,#1a73e8)]/40 bg-[var(--color-accent-soft,#f3f7ff)]" : "border-[var(--color-border)]"}`}
+              >
                 <div className="flex items-center gap-3 p-3">
                   <button className="btn xs ghost p-1" onClick={() => toggle(g.id)} title="Expand tasks">
                     {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                   </button>
                   <div className="min-w-0 flex-1">
-                    <div className="text-[14px] font-medium truncate">{g.title}</div>
-                    <div className="text-[12px] text-[var(--color-muted)] inline-flex items-center gap-2">
+                    <div className="text-[14px] font-medium truncate inline-flex items-center gap-2">
+                      {isProject && (
+                        <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--color-accent,#1a73e8)] text-white shrink-0">
+                          Project
+                        </span>
+                      )}
+                      <span className="truncate">{g.title}</span>
+                    </div>
+                    <div className="text-[12px] text-[var(--color-muted)] inline-flex items-center gap-2 flex-wrap">
+                      {parent && (
+                        <span className="inline-flex items-center gap-1">
+                          {parent.kind === "project" ? "in project" : "under"} “{parent.title}” ·
+                        </span>
+                      )}
                       <span>{STATUS_LABEL[g.status] ?? g.status}</span>
                       {c.total > 0 && (
                         <span>

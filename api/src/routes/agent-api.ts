@@ -24,7 +24,7 @@ import {
   MAX_ARTIFACTS_PER_TASK,
 } from "../lib/task-artifacts.js";
 import { loadTask } from "../lib/tasks-core.js";
-import { createGoal, listGoals, getGoalDetail } from "../lib/goals-core.js";
+import { createGoal, listGoals, getGoalDetail, GOAL_KINDS } from "../lib/goals-core.js";
 import { planGoal } from "../lib/planner.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
@@ -650,6 +650,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
         bodyMd: z.string().max(20000).optional(),
         parentGoalId: z.string().nullable().optional(),
         ownerMemberId: z.string().nullable().optional(),
+        kind: z.enum(GOAL_KINDS).optional(),
       })
       .parse(req.body);
     const ws = await agentWorkspaceId(req.agentCtx!.agentId);
