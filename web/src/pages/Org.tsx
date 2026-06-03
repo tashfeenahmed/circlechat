@@ -420,12 +420,14 @@ export function AssignDialog({
             />
           </div>
           {err && <p className="text-[12px] text-[var(--color-err)]">{err}</p>}
-          <div className="max-h-[320px] overflow-auto border border-[var(--color-hair)] rounded">
+          <div className="max-h-[320px] overflow-auto border border-[var(--color-hair)] rounded-md divide-y divide-[var(--color-hair)]">
             <button
               type="button"
               disabled={busy || target.reportsTo === null}
               onClick={() => apply(null)}
-              className="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2 border-b border-[var(--color-hair)] hover:bg-[var(--color-hi)]"
+              className={`w-full text-left px-3 py-2.5 text-[13px] flex items-center gap-2.5 border-l-2 transition-colors hover:bg-[var(--color-hi)] ${
+                target.reportsTo === null ? "border-[var(--color-ink)] bg-[var(--color-hi)] font-medium" : "border-transparent"
+              } ${busy ? "opacity-60" : ""}`}
             >
               <Unlink size={13} strokeWidth={2} className="text-[var(--color-muted)]" />
               <span>Top of tree (no manager)</span>
@@ -438,8 +440,8 @@ export function AssignDialog({
                   type="button"
                   disabled={busy}
                   onClick={() => apply(n.memberId)}
-                  className={`w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-[var(--color-hi)] ${
-                    active ? "bg-[var(--color-hi)]" : ""
+                  className={`w-full text-left px-3 py-2.5 flex items-center gap-3 border-l-2 transition-colors hover:bg-[var(--color-hi)] disabled:opacity-60 ${
+                    active ? "border-[var(--color-ink)] bg-[var(--color-hi)]" : "border-transparent"
                   }`}
                 >
                   <Avatar
