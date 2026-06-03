@@ -37,6 +37,7 @@ export default function GoalsPage() {
   const [toast, setToast] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
 
   const goals = goalsQ.data?.goals ?? [];
+  const autoPlan = (goalsQ.data?.autoPlan ?? "auto") === "auto";
   const tasksByGoal = useMemo(() => {
     const m = new Map<string, Task[]>();
     for (const t of tasksQ.data?.tasks ?? []) {
@@ -158,8 +159,12 @@ export default function GoalsPage() {
         {goalsQ.isLoading && <div className="text-[13px] text-[var(--color-muted)]">Loading…</div>}
         {!goalsQ.isLoading && active.length === 0 && (
           <div className="text-[13px] text-[var(--color-muted)]">
-            No goals yet. A goal is an objective the team drives toward — create one, then{" "}
-            <strong>Plan</strong> it to auto-decompose it into a task tree routed across your agents.
+            No goals yet. A goal is an objective the team drives toward — create one and{" "}
+            {autoPlan ? (
+              <>it <strong>plans itself</strong>: auto-decomposed into a task tree and routed across your agents.</>
+            ) : (
+              <>hit <strong>Plan</strong> to decompose it into a task tree routed across your agents.</>
+            )}
           </div>
         )}
 
@@ -170,6 +175,11 @@ export default function GoalsPage() {
             const isOpen = expanded.has(g.id);
             const gTasks = tasksByGoal.get(g.id) ?? [];
             const unplanned = c.total === 0 && g.status !== "planning";
+            const failed = unplanned && !!g.lastPlanError;
+            // In an auto workspace the planner runs itself — no button. We only
+            // show a manual control when planning is OFF, or to retry a goal the
+            // planner gave up on.
+            const showPlanBtn = unplanned && (!autoPlan || failed);
             return (
               <div key={g.id} className="rounded-lg border border-[var(--color-border)]">
                 <div className="flex items-center gap-3 p-3">
@@ -185,6 +195,8 @@ export default function GoalsPage() {
                           · {c.done}/{c.total} tasks done
                         </span>
                       )}
+                      {unplanned && autoPlan && !failed && <span>· auto-planning…</span>}
+                      {failed && <span className="text-[#c0392b]">· couldn't plan ({g.lastPlanError})</span>}
                     </div>
                     {c.total > 0 && (
                       <div className="mt-1.5 h-1.5 w-full rounded-full bg-[var(--color-border)] overflow-hidden">
@@ -195,15 +207,17 @@ export default function GoalsPage() {
                       </div>
                     )}
                   </div>
-                  <button
-                    className="btn sm primary inline-flex items-center gap-1 whitespace-nowrap"
-                    disabled={!unplanned || planning === g.id}
-                    onClick={() => planGoal(g)}
-                    title={unplanned ? "Decompose into a task tree and start it" : "Already planned"}
-                  >
-                    <Wand2 size={14} />
-                    {planning === g.id ? "Planning…" : unplanned ? "Plan" : "Planned"}
-                  </button>
+                  {showPlanBtn && (
+                    <button
+                      className="btn sm primary inline-flex items-center gap-1 whitespace-nowrap"
+                      disabled={planning === g.id}
+                      onClick={() => planGoal(g)}
+                      title={failed ? "Try planning this goal again" : "Decompose into a task tree and start it"}
+                    >
+                      <Wand2 size={14} />
+                      {planning === g.id ? "Planning…" : failed ? "Retry" : "Plan"}
+                    </button>
+                  )}
                 </div>
 
                 {isOpen && (
@@ -213,7 +227,8 @@ export default function GoalsPage() {
                     )}
                     {gTasks.length === 0 ? (
                       <div className="text-[12px] text-[var(--color-muted)] py-1">
-                        No tasks yet. {unplanned && "Hit Plan to fan this goal out across the team."}
+                        No tasks yet.{" "}
+                        {unplanned && (autoPlan && !failed ? "Auto-planning — tasks will appear shortly." : "Plan this goal to fan it out across the team.")}
                       </div>
                     ) : (
                       <ul className="flex flex-col gap-1">

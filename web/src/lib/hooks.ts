@@ -275,7 +275,7 @@ export function usePostMessage(convId: string | undefined, parentId?: string | n
 
 export function useGoals() {
   const qc = useQueryClient();
-  const q = useQuery<{ goals: Goal[] }>({
+  const q = useQuery<{ goals: Goal[]; autoPlan?: string }>({
     queryKey: ["goals"],
     queryFn: () => api.get("/goals"),
     staleTime: 15_000,
@@ -283,27 +283,28 @@ export function useGoals() {
   useEffect(() => {
     return bus.on((ev) => {
       if (typeof ev.type !== "string" || !String(ev.type).startsWith("goal.")) return;
+      type GoalsData = { goals: Goal[]; autoPlan?: string };
       if (ev.type === "goal.new") {
         const g = ev.goal as Goal;
-        qc.setQueryData<{ goals: Goal[] }>(["goals"], (old) => {
+        qc.setQueryData<GoalsData>(["goals"], (old) => {
           if (!old) return { goals: [g] };
           if (old.goals.some((x) => x.id === g.id)) return old;
-          return { goals: [g, ...old.goals] };
+          return { ...old, goals: [g, ...old.goals] };
         });
       } else if (ev.type === "goal.updated") {
         // The event may carry the full goal (with counts) or just a status —
         // refetch to stay authoritative on the task tally either way.
         if (ev.goal) {
           const g = ev.goal as Goal;
-          qc.setQueryData<{ goals: Goal[] }>(["goals"], (old) =>
-            old ? { goals: old.goals.map((x) => (x.id === g.id ? g : x)) } : old,
+          qc.setQueryData<GoalsData>(["goals"], (old) =>
+            old ? { ...old, goals: old.goals.map((x) => (x.id === g.id ? g : x)) } : old,
           );
         } else {
           qc.invalidateQueries({ queryKey: ["goals"] });
         }
       } else if (ev.type === "goal.deleted") {
-        qc.setQueryData<{ goals: Goal[] }>(["goals"], (old) =>
-          old ? { goals: old.goals.filter((x) => x.id !== ev.goalId) } : old,
+        qc.setQueryData<GoalsData>(["goals"], (old) =>
+          old ? { ...old, goals: old.goals.filter((x) => x.id !== ev.goalId) } : old,
         );
       }
     });

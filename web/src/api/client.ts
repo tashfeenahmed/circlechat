@@ -192,6 +192,8 @@ export interface Goal {
   bodyMd: string;
   status: GoalStatus;
   ownerMemberId: string | null;
+  planAttempts?: number;
+  lastPlanError?: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;

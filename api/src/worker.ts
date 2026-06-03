@@ -19,6 +19,8 @@ import { applyActions, type AgentAction } from "./agents/executor.js";
 import { materialiseScheduledRun, cancelAgentHeartbeat } from "./agents/scheduler.js";
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 import { exportRunTrace } from "./lib/tracing.js";
+import { startGoalPlanWorker } from "./agents/goal-planner-worker.js";
+import { scheduleGoalSweep } from "./lib/goal-queue.js";
 
 const worker = new Worker<AgentJobPayload>(
   AGENT_QUEUE,
@@ -287,3 +289,8 @@ worker.on("error", (e) => console.error("[worker] error", e));
 worker.on("failed", (job, err) => console.error("[worker] job failed", job?.id, err?.message));
 
 console.log(`[worker] circlechat agent-runs worker up, concurrency=10`);
+
+// Automatic goal planning: a worker that decomposes goals off the HTTP path,
+// plus a repeatable sweeper that reconciles unplanned/stuck goals.
+startGoalPlanWorker();
+scheduleGoalSweep().catch((e) => console.error("[goal-planner] sweep schedule failed", e));
