@@ -1278,6 +1278,32 @@ input, textarea { font: inherit; color: inherit; }
   text-decoration-color: rgba(35, 131, 226, 0.4);
   text-underline-offset: 3px;
 }
+/* GFM tables — markdown-it parses them by default, but with no styling they
+   collapse into run-together text. Give them borders, padding, and a header
+   tint so they read as tables in messages, threads, comments, and cards. */
+.msg-body table {
+  border-collapse: collapse;
+  width: auto;
+  max-width: 100%;
+  margin: 6px 0;
+  font-size: 13px;
+  display: block;
+  overflow-x: auto;
+}
+.msg-body th,
+.msg-body td {
+  border: 1px solid var(--color-hair-2);
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.45;
+}
+.msg-body th {
+  background: var(--color-hi);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.msg-body tbody tr:nth-child(even) td { background: var(--color-hi-2); }
 
 /* reactions */
 .reactions { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
@@ -1954,6 +1980,13 @@ input, textarea { font: inherit; color: inherit; }
   display: flex; flex-direction: column;
   overflow: hidden;
 }
+/* Maximized: take over the viewport (minus the backdrop padding). */
+.modal.task-modal--max {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+}
 .task-modal-head {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px;
@@ -2040,6 +2073,24 @@ input, textarea { font: inherit; color: inherit; }
   text-align: right;
 }
 .tm-rail-meta { border-top: 1px solid var(--color-hair); padding-top: 12px; }
+/* Small delete button tucked under Created in the rail (moved out of the
+   header, which now holds maximize). Quiet by default, red on hover. */
+.tm-delete-btn {
+  margin-top: 4px;
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-hair-2);
+  background: var(--color-paper);
+  color: var(--color-muted);
+}
+.tm-delete-btn:hover {
+  border-color: var(--color-err);
+  color: var(--color-err);
+  background: var(--color-hi);
+}
 @media (max-width: 780px) {
   .modal.task-modal { width: 96vw; }
   .task-modal-body.tm-split {

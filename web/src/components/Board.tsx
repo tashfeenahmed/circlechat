@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Plus, MessageSquare, GitBranch, Link2, Calendar, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -24,26 +24,23 @@ export default function Board() {
   const qc = useQueryClient();
   const me = useMe();
   const dir = useMembersDirectory();
-  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
-  // Deep-link support: notifications (e.g. "a workflow task is ready for you")
-  // and the Goals page navigate here as `/board?task=<id>`. Open that task's
-  // modal on arrival so the link actually lands on the task instead of a bare
-  // board. Without this the param is silently ignored.
+  // The open task lives in the URL as `/board?task=<id>`, so every task has its
+  // own unique, shareable, back-button-friendly address. Opening a card (or a
+  // deep-link from a notification / the Goals page) is just a URL change; the
+  // param is the single source of truth for which modal is open.
   const [searchParams, setSearchParams] = useSearchParams();
-  const taskParam = searchParams.get("task");
-  useEffect(() => {
-    if (taskParam) setOpenTaskId(taskParam);
-  }, [taskParam]);
-  // Closing the modal clears the param too, so the task doesn't re-open on the
-  // next render (the effect above would otherwise keep firing) and a refresh
-  // lands on a clean board.
+  const openTaskId = searchParams.get("task");
+  function openTask(id: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set("task", id);
+    setSearchParams(next); // push, so browser Back closes the task
+  }
+  // Closing clears the param (replace, so we don't pile up history) and lands
+  // on a clean board on refresh.
   function closeTask() {
-    setOpenTaskId(null);
-    if (searchParams.has("task")) {
-      const next = new URLSearchParams(searchParams);
-      next.delete("task");
-      setSearchParams(next, { replace: true });
-    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("task");
+    setSearchParams(next, { replace: true });
   }
   const [addingIn, setAddingIn] = useState<TaskStatus | null>(null);
   const [newTitle, setNewTitle] = useState("");
@@ -249,7 +246,7 @@ export default function Board() {
                       setDragId(null);
                       moveTask(id, col.id, c.id);
                     }}
-                    onClick={() => setOpenTaskId(c.id)}
+                    onClick={() => openTask(c.id)}
                     title={c.id}
                   >
                     <div className="kc-title">{c.title}</div>
