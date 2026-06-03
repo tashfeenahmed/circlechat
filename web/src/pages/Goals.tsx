@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Target, Plus, Wand2, ChevronRight, ChevronDown } from "lucide-react";
+import { Target, Plus, Wand2, ChevronRight, ChevronDown, FolderKanban } from "lucide-react";
 import { api, type Goal, type Task, type PlanResult } from "../api/client";
 import { humanizeError } from "../api/errors";
 import { useGoals, useTasks, useMembersDirectory } from "../lib/hooks";
+import Segmented from "../components/Segmented";
 
 const STATUS_LABEL: Record<string, string> = {
   open: "Open",
@@ -163,18 +164,15 @@ export default function GoalsPage() {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {/* Kind toggle — a project is a top-level container; a goal is a
                   unit of intent the planner decomposes (and can nest under a project). */}
-              <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-[12px]">
-                {(["goal", "project"] as const).map((k) => (
-                  <button
-                    key={k}
-                    className={`px-2.5 py-1 ${newKind === k ? "bg-[var(--color-accent,#1a73e8)] text-white" : "text-[var(--color-muted)]"}`}
-                    onClick={() => setNewKind(k)}
-                    type="button"
-                  >
-                    {k === "project" ? "Project" : "Goal"}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                ariaLabel="Goal or project"
+                value={newKind}
+                onChange={setNewKind}
+                options={[
+                  { value: "goal", label: "Goal", icon: <Target size={13} strokeWidth={2} /> },
+                  { value: "project", label: "Project", icon: <FolderKanban size={13} strokeWidth={2} /> },
+                ]}
+              />
               {newKind === "goal" && (
                 <select
                   className="text-[12px] bg-transparent border border-[var(--color-border)] rounded-md px-2 py-1 outline-none"
