@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { X, MessageSquare, ExternalLink, Pencil } from "lucide-react";
+import { X, Pencil } from "lucide-react";
 import { useBus } from "../state/store";
 import { api } from "../api/client";
 import Avatar from "./Avatar";
@@ -87,12 +87,12 @@ export default function MemberDetailsPanel() {
         </div>
 
         <div className="details-actions">
-          <button onClick={() => { nav(`/d/${memberId}`); close(); }} className="btn sm inline-flex items-center gap-1.5 flex-1 justify-center">
-            <MessageSquare size={13} strokeWidth={2} /> Message
+          <button onClick={() => { nav(`/d/${memberId}`); close(); }} className="btn sm flex-1 justify-center">
+            Message
           </button>
           {isAgent && agentId && (
-            <button onClick={() => { nav(`/agents/${agentId}`); close(); }} className="btn sm ghost inline-flex items-center gap-1.5 flex-1 justify-center">
-              <ExternalLink size={13} strokeWidth={2} /> Agent page
+            <button onClick={() => { nav(`/agents/${agentId}`); close(); }} className="btn sm ghost flex-1 justify-center">
+              Agent page
             </button>
           )}
         </div>
