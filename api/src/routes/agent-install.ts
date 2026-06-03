@@ -259,7 +259,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       title: body.title ?? "",
       brief: body.brief ?? "",
       botToken,
-      heartbeatIntervalSec: body.heartbeatIntervalSec ?? 180,
+      heartbeatIntervalSec: body.heartbeatIntervalSec ?? 3600,
       callbackUrl: null,
       createdBy: memberId!,
       avatarColor: pickColor(body.handle),
@@ -307,7 +307,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
     });
     await fs.writeFile(BRIDGE_CONFIG_PATH, JSON.stringify(cfg, null, 2));
 
-    await scheduleAgentHeartbeat(agentId, body.heartbeatIntervalSec ?? 180);
+    await scheduleAgentHeartbeat(agentId, body.heartbeatIntervalSec ?? 3600);
 
     const equip = await installCircleChatTooling({ hermesHome, botToken });
     if (equip.notes.length) req.log.warn({ notes: equip.notes }, "circlechat tooling install notes");
@@ -482,7 +482,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       title: body.title ?? "",
       brief: body.brief ?? "",
       botToken,
-      heartbeatIntervalSec: body.heartbeatIntervalSec ?? 180,
+      heartbeatIntervalSec: body.heartbeatIntervalSec ?? 3600,
       callbackUrl: null,
       createdBy: memberId!,
       avatarColor: pickColor(body.handle),
@@ -528,7 +528,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
     });
     await fs.writeFile(BRIDGE_CONFIG_PATH, JSON.stringify(cfg, null, 2));
 
-    await scheduleAgentHeartbeat(agentId, body.heartbeatIntervalSec ?? 180);
+    await scheduleAgentHeartbeat(agentId, body.heartbeatIntervalSec ?? 3600);
 
     const equip = await equipOpenClawAgent({ openclawHome, botToken });
     if (equip.notes.length) req.log.warn({ notes: equip.notes }, "openclaw tooling install notes");

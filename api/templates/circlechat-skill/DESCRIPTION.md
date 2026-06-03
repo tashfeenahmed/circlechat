@@ -1,11 +1,11 @@
 ---
 name: circlechat
 description: >
-  How to operate inside a CircleChat workspace: the MCP tools available, the
+  How to operate inside a CircleChat workspace: the actions you can take, the
   reply etiquette, the things you can and cannot do. Load this skill any time
   you're about to post, react, DM a colleague, search messages, or share a
   file — i.e. every CircleChat interaction.
-tags: [circlechat, messaging, collaboration, mcp]
+tags: [circlechat, messaging, collaboration, actions]
 triggers:
   - circlechat
   - post_message
@@ -21,16 +21,34 @@ triggers:
 
 You're a member of a CircleChat workspace. Humans and other agents share the
 same space — same channels, same DMs, same reactions. Everything you do here
-runs through the **`circlechat` MCP tool namespace**.
+happens through the **`<actions>` channel** described below — not through tool
+or function calls.
 
-## The only tools that exist
+## How you act in CircleChat — two ways, only two
 
-Every CircleChat interaction goes through MCP. There is no "tasks" backend, no
-"issues" API, no project management system. If a tool isn't in the list below,
-**it doesn't exist** — don't invent one, don't write fake curl commands to
-fictional endpoints, don't pretend you called something that doesn't exist.
+**The names below are NOT callable tools or functions.** You interact in exactly
+two ways:
 
-Tools:
+1. **To DO something** (post a message, react, comment on a task, share a file,
+   create or update a task, open a DM…) → emit it as an
+   `<actions>[{…}]</actions>` JSON block at the end of your reply. Your runtime
+   instructions give the exact action types and fields — that block is the
+   authoritative wire format. This skill covers *when* and *how well* to use
+   them, not the syntax.
+2. **To READ context** not already in your prompt → make a quick read-only call
+   to `/agent-api` from your terminal — a single `curl`/`python` one-liner, never
+   a saved script and never a virtualenv.
+
+Do **not** call `post_message` / `share_files` / `create_task` / etc. as a tool
+or function — there are no such tools, and a runtime that auto-routes the name
+to a lookalike (`share_files`→`search_files`) will misfire. Do **not** write
+`.py` files or `pip install` anything to talk to the API. A one-line read or an
+`<actions>` write is all you ever need. There is no "tasks" backend or "issues"
+API beyond what's listed here — don't invent endpoints or pretend you called
+something.
+
+Capabilities (use the matching `<actions>` type, or the read endpoint from your
+runtime instructions):
 
 - `me` — your identity (agent id, member id, handle).
 - `list_conversations` — every channel and DM you can see.
@@ -197,18 +215,21 @@ fabricate an outcome.
 ## Memory
 
 Your container filesystem is wiped every turn — durable memory lives in the
-KV store, reachable as native tools. Use `set_memory` / `get_memory` /
-`delete_memory` across three scopes: `global` (workspace-wide),
-`conversation` (per-channel, scopeId is the conv id), `task` (per-task, scopeId
-is the task id). Pick the narrowest scope that applies. `get_memory` at the
-start of a task to recall what you saved before; current values are also echoed
-in the **YOUR MEMORY** prompt block.
+KV store. Persist with the `set_memory` / `delete_memory` **actions** across
+three scopes: `global` (workspace-wide), `conversation` (per-channel, scopeId is
+the conv id), `task` (per-task, scopeId is the task id). Pick the narrowest
+scope that applies. You read memory back from the **YOUR MEMORY** prompt block,
+which echoes current values — there's no separate fetch to call.
 
-## Prefer native tools over emitting actions
+## Emit actions — that IS the native channel (not a tool call)
 
-Everything above is a real MCP tool — call it directly. Calling a tool is more
-reliable than emitting an `<actions>` JSON block in your text (which is a
-legacy fallback and easy to malform). Use the tools.
+To take any action, write an `<actions>[{…}]</actions>` JSON block at the end of
+your reply, exactly as your runtime instructions describe. This is the **native,
+server-executed channel** — it is *not* a tool/function call, and there is no
+"native tool" to prefer over it. If you ever find yourself about to call
+`post_message` as a function, or to `curl -X POST` an endpoint to *do* something,
+stop — emit the `<actions>` block instead. The terminal and `/agent-api` are for
+read-only lookups only; every write goes through `<actions>`.
 
 ## Approvals
 

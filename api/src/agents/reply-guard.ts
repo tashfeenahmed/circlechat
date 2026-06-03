@@ -103,6 +103,32 @@ const PURE_JSON_FENCE_RE = /^\s*```(?:json)?\s*\n\s*[\[{][\s\S]*?[\]}]\s*\n\s*``
 const ATTACHMENT_CLAIM_RE =
   /\b(?:see\s+(?:the\s+)?attached|attached\s+(?:please\s+find|is\s+(?:the|a|my)|herewith|file|files|document|doc|list|report|pdf|spreadsheet|csv|json|markdown)|please\s+find\s+attached|find\s+attached|I(?:'ve|\s+have)\s+attached|attaching\s+(?:the|a|my)|file\s+attached|📎\s*attached)\b/i;
 
+// Leaked chain-of-thought: the model narrating its plan / the prompt it was
+// given instead of replying. Observed verbatim in #neu-site: "The user wants
+// me to respond to the conversation…", "I am acting as Rachel (@rachel), the
+// Researcher.", "Looking at the conversation history:", "Recent Messages
+// Analysis:". A real chat reply never opens by describing what "the user"
+// asked or announcing which persona it's playing. Anchored to the start and
+// narrow so genuine replies aren't caught.
+const COT_LEAK_RE =
+  /^\s*(?:The user (?:wants|is asking|is providing|has provided|just|now)\b|I (?:am|'m) (?:acting as|currently|now acting)\b|I am [A-Z][a-z]+ \(@[a-z0-9_]+\)|Looking at the (?:conversation|recent|message|context|thread)|Recent [Mm]essages?\s+[Aa]nalysis|(?:The|Recent) (?:messages?|conversation|context)(?: in (?:the|this) channel)? (?:show|shows|indicate)\b|Current (?:Goal|Task|Context)\s*[:`])/;
+// Raw API-call script leaked as a reply — the agent printed the Python it wrote
+// to hit /agent-api instead of replying. CC_API_BASE / CC_BOT_TOKEN / urllib
+// never appear in an organic chat message.
+const API_SCRIPT_RE =
+  /\bos\.environ(?:\.get)?\s*[([]\s*["']CC_(?:API_BASE|BOT_TOKEN)["']|\burllib\.request\b|^\s*import\s+urllib\b/im;
+// Code/diff dump: 3+ `+`-prefixed source lines (a pasted diff of a script).
+// Only counts `+` lines that look like code (import/def/assignment/call) so
+// markdown bullets ("- foo") and "+1" acks don't trip it.
+function looksLikeCodeDiffDump(s: string): boolean {
+  const codePlus = (
+    s.match(
+      /^\s*\+\s*(?:import |from |def |class |with |try:|except|return |print\(|req\b|resp\b|headers\b|url\b|token\b|api_base\b|[A-Za-z_][\w.]*\s*=\s*\S)/gim,
+    ) || []
+  ).length;
+  return codePlus >= 3;
+}
+
 function scrubSecrets(s: string): string {
   return s
     .replace(BEARER_LEAK_RE, "Authorization: Bearer ***")
@@ -126,6 +152,9 @@ export function checkReplyBody(
   if (ASSISTANT_REFUSAL_RE.test(trimmed)) return { ok: false, reason: "assistant_refusal" };
   if (HISTORY_ECHO_RE.test(trimmed)) return { ok: false, reason: "history_format_echo" };
   if (META_NARRATION_RE.test(trimmed)) return { ok: false, reason: "meta_narration" };
+  if (COT_LEAK_RE.test(trimmed)) return { ok: false, reason: "cot_leak" };
+  if (API_SCRIPT_RE.test(trimmed)) return { ok: false, reason: "api_script_leak" };
+  if (looksLikeCodeDiffDump(trimmed)) return { ok: false, reason: "code_diff_leak" };
   if (hasRunawayRepetition(trimmed)) return { ok: false, reason: "runaway_repetition" };
   if (CURL_BLOCK_RE.test(trimmed)) return { ok: false, reason: "curl_transcript" };
   if (PURE_JSON_FENCE_RE.test(trimmed) && trimmed.length > 400) {
