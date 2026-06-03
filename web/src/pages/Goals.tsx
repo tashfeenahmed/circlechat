@@ -271,7 +271,7 @@ export default function GoalsPage() {
                     {c.total > 0 && (
                       <div className="mt-1.5 h-1.5 w-full rounded-full bg-[var(--color-border)] overflow-hidden">
                         <div
-                          className="h-full rounded-full bg-[var(--color-accent,#1a73e8)] transition-all"
+                          className="h-full rounded-full bg-[var(--color-ink)] transition-all"
                           style={{ width: `${pct}%` }}
                         />
                       </div>
