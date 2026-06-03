@@ -24,6 +24,9 @@ export const workspaces = pgTable(
     // Workspace-level "what we build" prose, inherited by every agent's
     // runtime prompt. Set once per workspace; new agents auto-pick it up.
     mission: text("mission").notNull().default(""),
+    // Auto-planning policy: 'auto' = a new goal is decomposed + started
+    // automatically (no manual Plan button); 'off' = manual planning only.
+    autoPlan: varchar("auto_plan", { length: 10 }).notNull().default("auto"),
   },
   (t) => ({
     handleIdx: uniqueIndex("workspaces_handle_key").on(t.handle),
@@ -364,6 +367,11 @@ export const goals = pgTable(
     // The member accountable for the goal — usually a manager agent or the human
     // who set it. Gets the roll-up notification when the goal completes.
     ownerMemberId: varchar("owner_member_id", { length: 32 }),
+    // Auto-planning bookkeeping: how many times the planner has tried this goal
+    // and the last failure code, so the sweeper can retry-with-backoff and give
+    // up after a cap instead of looping (a cost bomb).
+    planAttempts: integer("plan_attempts").notNull().default(0),
+    lastPlanError: text("last_plan_error"),
     createdBy: varchar("created_by", { length: 32 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

@@ -1,9 +1,10 @@
 import { and, eq, inArray, desc, asc, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { goals, tasks, members } from "../db/schema.js";
+import { goals, tasks, members, workspaces } from "../db/schema.js";
 import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
 import { hydrateTasks } from "./tasks-core.js";
+import { enqueueGoalPlan } from "./goal-queue.js";
 
 export const GOAL_STATUSES = ["open", "planning", "in_progress", "done", "archived"] as const;
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
@@ -95,7 +96,24 @@ export async function createGoal(
   const [row] = await db.select().from(goals).where(eq(goals.id, goalId));
   const [hydrated] = await withCounts([row]);
   await publishToWorkspace(workspaceId, { type: "goal.new", workspaceId, goal: hydrated });
+
+  // Auto-planning: in an 'auto' workspace, a brand-new open goal decomposes
+  // itself (debounced, off the request path). No manual Plan click. The
+  // sweeper backstops anything missed. Fire-and-forget — never blocks create.
+  if ((row.status ?? "open") === "open") {
+    const [ws] = await db.select({ autoPlan: workspaces.autoPlan }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+    if (ws?.autoPlan === "auto") {
+      enqueueGoalPlan(goalId, workspaceId).catch(() => {});
+    }
+  }
   return { goal: hydrated };
+}
+
+// The workspace's auto-planning policy ('auto' | 'off'), so the UI knows
+// whether to show a manual Plan button.
+export async function workspaceAutoPlan(workspaceId: string): Promise<string> {
+  const [ws] = await db.select({ autoPlan: workspaces.autoPlan }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+  return ws?.autoPlan ?? "auto";
 }
 
 export async function listGoals(workspaceId: string) {
@@ -104,7 +122,7 @@ export async function listGoals(workspaceId: string) {
     .from(goals)
     .where(eq(goals.workspaceId, workspaceId))
     .orderBy(desc(goals.createdAt));
-  return { goals: await withCounts(rows) };
+  return { goals: await withCounts(rows), autoPlan: await workspaceAutoPlan(workspaceId) };
 }
 
 export async function getGoalDetail(goalId: string, workspaceId: string) {
