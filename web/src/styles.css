@@ -12,6 +12,11 @@
   --color-muted-2: #9b9b99;
   --color-hair: #e7e6e3;
   --color-hair-2: #d8d7d3;
+  /* Subtle card/divider line. Several views reference var(--color-border)
+     with no fallback; left undefined it resolved to currentColor (near-black
+     ink), which is why goal cards drew hard black borders. Point it at the
+     hairline so it stays subtle and theme-aware. */
+  --color-border: var(--color-hair);
   --color-hi: #efefed;
   --color-hi-2: #e8e7e4;
   --color-warn: rgb(203, 145, 47);
@@ -2658,4 +2663,59 @@ input, textarea { font: inherit; color: inherit; }
 }
 .tm-deliverable-meta {
   display: inline-flex; gap: 5px; flex: 1; min-width: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   Smooth open/close motion
+   ────────────────────────────────────────────────────────────────────── */
+
+/* Dropdowns / popovers / menus — consistent entrance everywhere. These
+   panels unmount on close (conditional render), so only the enter is
+   animated; that's the same approach the tooltip already uses. */
+@keyframes cc-pop-in {
+  from { opacity: 0; transform: scale(0.97) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes cc-pop-in-up {
+  from { opacity: 0; transform: scale(0.97) translateY(4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.menu-popover,
+.search-panel,
+.tm-popover,
+.hover-card {
+  animation: cc-pop-in 130ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  transform-origin: top center;
+}
+/* the @-mention menu opens upward, so grow from its bottom edge */
+.mention-menu {
+  animation: cc-pop-in-up 130ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  transform-origin: bottom center;
+}
+
+/* Goal card expand/collapse — animates height + fade in BOTH directions.
+   The grid-rows 0fr→1fr trick gives a smooth height:auto transition while
+   the panel stays mounted (a conditionally-rendered panel can't ease out). */
+.goal-expand {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 220ms cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 160ms ease;
+}
+.goal-expand.open { grid-template-rows: 1fr; opacity: 1; }
+.goal-expand > .goal-expand-inner { overflow: hidden; min-height: 0; }
+
+/* Add-style button micro-interaction — subtle scale on hover/press. */
+.btn-scale { transition: transform 120ms ease, background 120ms ease; }
+.btn-scale:hover { transform: scale(1.04); }
+.btn-scale:active { transform: scale(0.96); }
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-popover, .search-panel, .tm-popover, .hover-card, .mention-menu {
+    animation: none;
+  }
+  .goal-expand { transition: none; }
+  .btn-scale { transition: none; }
+  .btn-scale:hover, .btn-scale:active { transform: none; }
 }
