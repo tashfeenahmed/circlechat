@@ -1660,9 +1660,10 @@ input, textarea { font: inherit; color: inherit; }
 .btn.xs { padding: 1px 6px; font-size: 11px; font-family: var(--font-mono); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 
-/* Segmented toggle (components/Segmented.tsx) — a tinted track with the
-   active option lifted onto a paper pill. Used for Goal/Project and any
-   small either/or choice. */
+/* Segmented toggle (components/Segmented.tsx) — a tinted track; the active
+   option fills solid ink with paper text/icon (matches .btn.primary). No
+   shadows — the app uses borders + fills, not elevation. Used for
+   Goal/Project and any small either/or choice. */
 .seg {
   display: inline-flex;
   align-items: center;
@@ -1670,7 +1671,7 @@ input, textarea { font: inherit; color: inherit; }
   padding: 3px;
   background: var(--color-hi);
   border: 1px solid var(--color-hair);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
 }
 .seg-opt {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1681,16 +1682,16 @@ input, textarea { font: inherit; color: inherit; }
   white-space: nowrap;
   color: var(--color-muted);
   border: 1px solid transparent;
-  border-radius: 7px;
-  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  border-radius: var(--radius-sm);
+  transition: background 120ms ease, color 120ms ease;
 }
 .seg--sm .seg-opt { padding: 3px 10px; font-size: 12px; gap: 5px; }
 .seg-opt:hover { color: var(--color-ink); }
-.seg-opt.active {
-  background: var(--color-paper);
-  color: var(--color-ink);
-  border-color: var(--color-hair-2);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+.seg-opt.active,
+.seg-opt.active:hover {
+  background: var(--color-ink);
+  color: var(--color-paper);
+  border-color: var(--color-ink);
 }
 .seg-opt-icon { display: inline-flex; }
 @media (prefers-reduced-motion: reduce) {
