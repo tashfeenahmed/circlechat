@@ -119,7 +119,12 @@ export default function GoalsPage() {
         </div>
         <div className="ch-meta">
           <span>{active.length} active</span>
-          <button className="btn sm ghost ml-3 inline-flex items-center gap-1" onClick={() => setAdding((v) => !v)}>
+        </div>
+        <div className="ch-right">
+          <button
+            className="btn sm primary btn-scale inline-flex items-center gap-1"
+            onClick={() => setAdding((v) => !v)}
+          >
             <Plus size={14} /> New goal
           </button>
         </div>
@@ -242,15 +247,15 @@ export default function GoalsPage() {
                     {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                   </button>
                   <div className="min-w-0 flex-1">
-                    <div className="text-[14px] font-medium truncate inline-flex items-center gap-2">
+                    <div className="text-[14px] font-medium flex items-center gap-2">
                       {isProject && (
                         <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--color-accent,#1a73e8)] text-white shrink-0">
                           Project
                         </span>
                       )}
-                      <span className="truncate">{g.title}</span>
+                      <span className="truncate min-w-0">{g.title}</span>
                     </div>
-                    <div className="text-[12px] text-[var(--color-muted)] inline-flex items-center gap-2 flex-wrap">
+                    <div className="text-[12px] text-[var(--color-muted)] flex items-center gap-2 flex-wrap mt-0.5">
                       {parent && (
                         <span className="inline-flex items-center gap-1">
                           {parent.kind === "project" ? "in project" : "under"} “{parent.title}” ·
@@ -287,7 +292,8 @@ export default function GoalsPage() {
                   )}
                 </div>
 
-                {isOpen && (
+                <div className={`goal-expand ${isOpen ? "open" : ""}`}>
+                  <div className="goal-expand-inner">
                   <div className="border-t border-[var(--color-border)] px-3 py-2">
                     {g.bodyMd && (
                       <div className="text-[12px] text-[var(--color-muted)] mb-2 whitespace-pre-wrap">{g.bodyMd}</div>
@@ -323,7 +329,8 @@ export default function GoalsPage() {
                       </ul>
                     )}
                   </div>
-                )}
+                  </div>
+                </div>
               </div>
             );
           })}
