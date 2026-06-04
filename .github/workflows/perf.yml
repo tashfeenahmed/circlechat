@@ -2,8 +2,10 @@ name: perf
 
 # Report-only performance check (PLAN.html §16). Runs Lighthouse + bundle-size
 # on the public pages and a backend/WS latency benchmark against an ephemeral
-# stack, compares to perf/baseline.json, and posts the result. It never blocks a
-# merge (the run always exits 0). Update the baseline on main with:
+# stack, compares to perf/baseline.json. The full report is always uploaded as
+# the `perf-report` artifact; a PR comment is posted ONLY when a gated metric
+# regresses (so it doesn't email a report on every PR). It never blocks a merge
+# (the run always exits 0). Update the baseline on main with:
 #   cd perf && node run.mjs --update-baseline   (then commit perf/baseline.json)
 
 on:
@@ -69,7 +71,11 @@ jobs:
             perf/results.json
           if-no-files-found: ignore
 
-      - name: Comment report on PR
+      # Comment ONLY when a gated metric actually regressed vs baseline.
+      # Routine PRs (no regression) stay silent — the full report is always
+      # available as the uploaded `perf-report` artifact. This stops the bot
+      # from emailing a perf comment on every single PR.
+      - name: Comment report on PR (regressions only)
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
         with:
@@ -79,11 +85,22 @@ jobs:
             try { body = fs.readFileSync('perf/report.md', 'utf8'); }
             catch { body = '_perf report not produced._'; }
             const marker = '<!-- circlechat-perf-report -->';
-            body = marker + '\n' + body;
+            // run.mjs prints "**⚠️ N gated metric(s) REGRESSED vs baseline.**"
+            // only when a gated metric regressed; otherwise "No gated regressions".
+            const regressed = /\bREGRESSED\b/.test(body);
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
             const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (!regressed) {
+              // No regression — don't spam. Clean up a stale regression comment
+              // from an earlier push so the PR doesn't keep showing it.
+              if (existing) {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id });
+              }
+              return;
+            }
+            body = marker + '\n' + body;
             if (existing) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
             } else {
