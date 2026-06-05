@@ -30,7 +30,7 @@ export default function Menu({ items, title = "More", className, align = "end", 
         {children ?? <MoreHorizontal size={14} strokeWidth={2} />}
       </BaseMenu.Trigger>
       <BaseMenu.Portal>
-        <BaseMenu.Positioner side="bottom" align={align} sideOffset={4} collisionPadding={8}>
+        <BaseMenu.Positioner className="cc-z-menu" side="bottom" align={align} sideOffset={4} collisionPadding={8}>
           <BaseMenu.Popup className="menu-popover">
             {items.map((it, i) => (
               <BaseMenu.Item

@@ -38,13 +38,22 @@ export default function Sidebar() {
       setBoardLastSeen(now);
     }
   }, [workspaceId]);
-  // When the user navigates to /board, mark everything as seen.
+  // While the user is ON /board, keep advancing the seen marker as tasks
+  // change — not just once on arrival. Two bugs lived here: (1) dragging a
+  // card stamps a NEW server updatedAt after the arrival snapshot, so your
+  // own move showed as "unread" the moment you left; (2) updatedAt is server
+  // time but Date.now() is client time, so with any clock skew a fresh
+  // update stayed ahead of every later visit and the badge never cleared.
+  // Anchoring the marker to max(now, newest updatedAt actually rendered)
+  // fixes both: anything you've had on screen is seen, regardless of clocks.
   useEffect(() => {
     if (location.pathname !== "/board" || !workspaceId) return;
-    const now = Date.now();
-    localStorage.setItem(`cc:boardLastSeen:${workspaceId}`, String(now));
-    setBoardLastSeen(now);
-  }, [location.pathname, workspaceId]);
+    const rows = tasksQ.data?.tasks ?? [];
+    const newest = rows.reduce((m, t) => Math.max(m, Date.parse(t.updatedAt) || 0), 0);
+    const seen = Math.max(Date.now(), newest);
+    localStorage.setItem(`cc:boardLastSeen:${workspaceId}`, String(seen));
+    setBoardLastSeen(seen);
+  }, [location.pathname, workspaceId, tasksQ.data]);
   const boardUnread = useMemo(() => {
     if (location.pathname === "/board") return 0;
     const rows = tasksQ.data?.tasks ?? [];

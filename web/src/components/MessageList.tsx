@@ -54,7 +54,11 @@ export default function MessageList({ messages, meMemberId, onOpenThread, inThre
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     const grew = visible.length > prevCount.current;
     const latest = visible[visible.length - 1];
-    const latestIsMine = !!latest && !!meMemberId && latest.memberId === meMemberId;
+    // usePostMessage inserts optimistic rows with the literal placeholder
+    // memberId "me" before the server echo replaces it — both spellings are
+    // "I just sent this".
+    const latestIsMine =
+      !!latest && (latest.memberId === "me" || (!!meMemberId && latest.memberId === meMemberId));
     // Always jump when the newest message is mine (I just sent it) —
     // otherwise only follow along if I was already near the bottom.
     if (grew && (atBottom || latestIsMine)) {

@@ -43,7 +43,7 @@ export default function MemberHoverCard({ memberId, children, className }: Props
         {children}
       </PreviewCard.Trigger>
       <PreviewCard.Portal>
-        <PreviewCard.Positioner side="bottom" align="start" sideOffset={6} collisionPadding={8}>
+        <PreviewCard.Positioner className="cc-z-card" side="bottom" align="start" sideOffset={6} collisionPadding={8}>
           <PreviewCard.Popup className="hover-card">
             <div className="hc-top">
               <Avatar

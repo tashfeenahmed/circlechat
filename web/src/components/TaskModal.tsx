@@ -535,7 +535,7 @@ export default function TaskModal({
                     <ChevronDown size={12} strokeWidth={2.2} />
                   </Popover.Trigger>
                   <Popover.Portal>
-                    <Popover.Positioner side="bottom" align="start" sideOffset={4} collisionPadding={8}>
+                    <Popover.Positioner className="cc-z-pop" side="bottom" align="start" sideOffset={4} collisionPadding={8}>
                       <Popover.Popup className="tm-popover tm-status-popover">
                         <ul className="tm-popover-list">
                           {ALL_STATUSES.map((s) => (
@@ -589,7 +589,7 @@ export default function TaskModal({
                     <Plus size={11} /> add
                   </Popover.Trigger>
                   <Popover.Portal>
-                    <Popover.Positioner side="bottom" align="start" sideOffset={4} collisionPadding={8}>
+                    <Popover.Positioner className="cc-z-pop" side="bottom" align="start" sideOffset={4} collisionPadding={8}>
                       <Popover.Popup className="tm-popover">
                         <input
                           autoFocus

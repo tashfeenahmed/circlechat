@@ -17,7 +17,7 @@ export default function Tooltip({ content, children, placement = "top", delay = 
     <BaseTooltip.Root>
       <BaseTooltip.Trigger delay={delay} render={children} />
       <BaseTooltip.Portal>
-        <BaseTooltip.Positioner side={placement} sideOffset={6} collisionPadding={8}>
+        <BaseTooltip.Positioner className="cc-z-tip" side={placement} sideOffset={6} collisionPadding={8}>
           <BaseTooltip.Popup className={`tooltip ${className ?? ""}`}>{content}</BaseTooltip.Popup>
         </BaseTooltip.Positioner>
       </BaseTooltip.Portal>

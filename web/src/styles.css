@@ -98,6 +98,15 @@ input, textarea { font: inherit; color: inherit; }
 #root { isolation: isolate; }
 body { position: relative; }
 
+/* Base UI Positioners place popups with a transform, which creates a
+   stacking context — so a z-index on the popup INSIDE is trapped and loses
+   to sibling layers (e.g. the dialog popup at z-index 61 swallowed the task
+   status dropdown). The layer order must be set on the positioner itself. */
+.cc-z-pop { z-index: 70; }   /* popovers (incl. inside dialogs) */
+.cc-z-menu { z-index: 80; }  /* dropdown menus */
+.cc-z-tip { z-index: 80; }   /* tooltips */
+.cc-z-card { z-index: 50; }  /* hover preview cards */
+
 .brand {
   font-family: var(--font-mono);
   font-style: normal;
@@ -1668,7 +1677,11 @@ body { position: relative; }
   border-radius: 9px;
 }
 .thread-head .th-close:hover { background: var(--color-hi); color: var(--color-ink); }
-.thread-body { flex: 1 1 0; min-height: 0; overflow: hidden auto; }
+/* Flex column (not block) so the inner .messages element is the one that
+   scrolls — the virtualizer pins/auto-scrolls .messages, and with a block
+   wrapper the wrapper scrolled instead and scroll-to-bottom silently
+   no-opped in threads. */
+.thread-body { flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 
 /* generic buttons */
 .btn {
