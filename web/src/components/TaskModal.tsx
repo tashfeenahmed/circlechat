@@ -435,6 +435,27 @@ export default function TaskModal({
                   Add a comment…
                 </button>
               ) : (
+                <div className="relative">
+                  {/* The mention menu must live OUTSIDE .tm-composer-editor:
+                      that box is overflow:hidden (for its rounded border), so
+                      the upward-opening menu was clipped to a sliver. From
+                      here bottom:100% floats it above the whole editor. */}
+                  {mentionPicker.open && mentionPicker.matches.length > 0 && (
+                    <div className="mention-menu" style={{ bottom: "100%", top: "auto" }}>
+                      {mentionPicker.matches.map((m, i) => (
+                        <button
+                          key={m.memberId}
+                          onMouseDown={(e) => { e.preventDefault(); mentionPicker.pick(m.handle); }}
+                          onMouseEnter={() => mentionPicker.setIdx(i)}
+                          className={`mention-item ${i === mentionPicker.idx ? "focus" : ""}`}
+                        >
+                          <span className="mi-handle">@{m.handle}</span>
+                          <span>{m.name}</span>
+                          {m.kind === "agent" && <span className="mi-tag">agent</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 <div className="tm-composer-editor">
                   <div className="tm-composer-toolbar">
                     <button type="button" title="Bold" className="tm-tool"><Bold size={12} strokeWidth={2.2} /></button>
@@ -443,40 +464,22 @@ export default function TaskModal({
                     <span className="tm-tool-sep" />
                     <button type="button" title="Attach" className="tm-tool"><Paperclip size={12} strokeWidth={2.2} /></button>
                   </div>
-                  <div className="relative">
-                    {mentionPicker.open && mentionPicker.matches.length > 0 && (
-                      <div className="mention-menu" style={{ bottom: "100%", top: "auto" }}>
-                        {mentionPicker.matches.map((m, i) => (
-                          <button
-                            key={m.memberId}
-                            onMouseDown={(e) => { e.preventDefault(); mentionPicker.pick(m.handle); }}
-                            onMouseEnter={() => mentionPicker.setIdx(i)}
-                            className={`mention-item ${i === mentionPicker.idx ? "focus" : ""}`}
-                          >
-                            <span className="mi-handle">@{m.handle}</span>
-                            <span>{m.name}</span>
-                            {m.kind === "agent" && <span className="mi-tag">agent</span>}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <textarea
-                      ref={composerTaRef}
-                      value={commentDraft}
-                      onChange={(e) => mentionPicker.onChangeText(e.target.value, e.target.selectionStart ?? e.target.value.length)}
-                      placeholder="Write a comment. ⌘↵ to save, Esc to cancel. @ to mention."
-                      rows={4}
-                      onKeyDown={(e) => {
-                        if (mentionPicker.handleKeyDown(e)) return;
-                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                          postComment().then(() => setComposerOpen(false));
-                        } else if (e.key === "Escape") {
-                          setComposerOpen(false);
-                          setCommentDraft("");
-                        }
-                      }}
-                    />
-                  </div>
+                  <textarea
+                    ref={composerTaRef}
+                    value={commentDraft}
+                    onChange={(e) => mentionPicker.onChangeText(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+                    placeholder="Write a comment. ⌘↵ to save, Esc to cancel. @ to mention."
+                    rows={4}
+                    onKeyDown={(e) => {
+                      if (mentionPicker.handleKeyDown(e)) return;
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        postComment().then(() => setComposerOpen(false));
+                      } else if (e.key === "Escape") {
+                        setComposerOpen(false);
+                        setCommentDraft("");
+                      }
+                    }}
+                  />
                   <div className="tm-composer-actions">
                     <button
                       className="btn sm primary"
@@ -498,6 +501,7 @@ export default function TaskModal({
                       Cancel
                     </button>
                   </div>
+                </div>
                 </div>
               )}
             </div>
