@@ -13,7 +13,7 @@ import {
 } from "../db/schema.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation } from "../lib/events.js";
-import { checkReplyBody } from "./reply-guard.js";
+import { checkReplyBody, guardRejectHint } from "./reply-guard.js";
 import { checkRecentDuplicate } from "./dedupe.js";
 import {
   extractMentionHandles,
@@ -322,9 +322,7 @@ async function applyOne(
       if (!guard.ok) {
         out.trace.push(`post_message rejected (${guard.reason})`);
         out.errors.push(
-          guard.reason === "attachment_claim_no_file"
-            ? `post_message rejected: ${guard.reason}. Your prose claims a file is attached but no attachment was sent. Either include the file via share_files in this turn, or rewrite to remove the attachment claim.`
-            : `post_message rejected: ${guard.reason}`,
+          `post_message rejected: ${guard.reason}.${guardRejectHint(guard.reason)}`,
         );
         return;
       }
@@ -720,9 +718,7 @@ async function applyOne(
       const guard = checkReplyBody(a.body_md, { hasAttachments });
       if (!guard.ok) {
         out.errors.push(
-          guard.reason === "attachment_claim_no_file"
-            ? `task_comment rejected: ${guard.reason}. Your prose claims a file is attached but no attachment was sent. Use share_to_task to ship the file in the same turn, or rewrite to drop the claim.`
-            : `task_comment rejected: ${guard.reason}`,
+          `task_comment rejected: ${guard.reason}.${guardRejectHint(guard.reason)}`,
         );
         return;
       }

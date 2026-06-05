@@ -103,6 +103,25 @@ const PURE_JSON_FENCE_RE = /^\s*```(?:json)?\s*\n\s*[\[{][\s\S]*?[\]}]\s*\n\s*``
 const ATTACHMENT_CLAIM_RE =
   /\b(?:see\s+(?:the\s+)?attached|attached\s+(?:please\s+find|is\s+(?:the|a|my)|herewith|file|files|document|doc|list|report|pdf|spreadsheet|csv|json|markdown)|please\s+find\s+attached|find\s+attached|I(?:'ve|\s+have)\s+attached|attaching\s+(?:the|a|my)|file\s+attached|📎\s*attached)\b/i;
 
+// Fabricated-deployment claim: prose asserting a COMPLETED deploy/upload/
+// publish to an external hosting service with no verifiable URL anywhere in
+// the body. Observed in practice: phil claimed "I have deployed the
+// neu_ie.html file to Netlify Drop" four times across two days without ever
+// producing a URL (Netlify Drop is a browser drag-and-drop — the agent can't
+// even do it headlessly). Past/perfect tense only, so plans and questions
+// ("I can deploy to Netlify", "should we use Vercel?") don't trip it. A real
+// completed deploy always has a URL to show — require one.
+const DEPLOY_CLAIM_RE =
+  /\b(?:(?:I|we)(?:['’]ve| have| just)?\s+(?:successfully\s+|now\s+)?|has\s+(?:been\s+)?(?:successfully\s+)?|have\s+been\s+|was\s+(?:successfully\s+)?|successfully\s+)(?:re-?)?(?:deployed|uploaded|published)\b(?:[^.\n]|\.(?=\w)){0,100}\b(?:to|on|via|at|using)\s+(?:Netlify|Vercel|GitHub\s+Pages|Cloudflare\s+Pages|Render|Surge|Fly\.io|Heroku|Railway)\b|\bStatus:\s*Deployed\b|\b(?:the\s+)?deployment\s+is\s+(?:now\s+)?complete\b/i;
+const HAS_URL_RE = /https?:\/\/\S+/i;
+
+// A visible <actions> tag in a final body is always a leak: the bridge
+// strips every WELL-FORMED block before the post reaches us, so anything
+// that still carries the tag is a malformed/truncated block (e.g.
+// "<actions>\n[\n</actions>" when the model hit its token cap mid-JSON).
+// Ten of these were visible in #neu-site over one 48h window.
+const VISIBLE_ACTIONS_RE = /<\/?actions>/i;
+
 // Leaked chain-of-thought: the model narrating its plan / the prompt it was
 // given instead of replying. Observed verbatim in #neu-site: "The user wants
 // me to respond to the conversation…", "I am acting as Rachel (@rachel), the
@@ -117,8 +136,11 @@ const COT_LEAK_RE =
 // never appear in an organic chat message.
 const API_SCRIPT_RE =
   /\bos\.environ(?:\.get)?\s*[([]\s*["']CC_(?:API_BASE|BOT_TOKEN)["']|\burllib\.request\b|^\s*import\s+urllib\b/im;
-// Code/diff dump: 3+ `+`-prefixed source lines (a pasted diff of a script).
-// Only counts `+` lines that look like code (import/def/assignment/call) so
+// Code/diff dump: 3+ `+`-prefixed source OR markdown lines (a pasted diff).
+// The code patterns catch script diffs (import/def/assignment/call); the
+// markdown patterns catch the mutated form seen after the script leaks were
+// fixed — agents pasting diffs of their .md status reports ("+# Deployment
+// Status Report", "+**Issue**: …"). Both stay anchored to a leading `+` so
 // markdown bullets ("- foo") and "+1" acks don't trip it.
 function looksLikeCodeDiffDump(s: string): boolean {
   const codePlus = (
@@ -126,13 +148,30 @@ function looksLikeCodeDiffDump(s: string): boolean {
       /^\s*\+\s*(?:import |from |def |class |with |try:|except|return |print\(|req\b|resp\b|headers\b|url\b|token\b|api_base\b|[A-Za-z_][\w.]*\s*=\s*\S)/gim,
     ) || []
   ).length;
-  return codePlus >= 3;
+  const mdPlus = (s.match(/^\+\s*(?:#{1,6}\s|\*\*\S|[-*]\s+\S|>\s)/gm) || [])
+    .length;
+  return codePlus >= 3 || mdPlus >= 3;
 }
 
 function scrubSecrets(s: string): string {
   return s
     .replace(BEARER_LEAK_RE, "Authorization: Bearer ***")
     .replace(RAW_BOT_TOKEN_RE, "cc_***");
+}
+
+// Actionable guidance appended to the rejection error fed back to the agent
+// on its next turn. Only reasons where the fix isn't obvious from the name.
+export function guardRejectHint(reason: string): string {
+  switch (reason) {
+    case "attachment_claim_no_file":
+      return " Your prose claims a file is attached but no attachment was sent. Either include the file via share_files in this turn, or rewrite to remove the attachment claim.";
+    case "deploy_claim_no_url":
+      return " Your prose claims a completed deployment but includes no URL proving it. If the deploy really happened, repost with the live URL. If it didn't (e.g. you lack credentials or the service needs a browser), say you are BLOCKED and what you need — do NOT claim success.";
+    case "actions_block_visible":
+      return " Your reply still contains a literal <actions> tag — the block was malformed (likely truncated JSON) so it could not be parsed and stripped. Re-emit the complete, valid <actions>[…]</actions> block.";
+    default:
+      return "";
+  }
 }
 
 export function checkReplyBody(
@@ -152,6 +191,10 @@ export function checkReplyBody(
   if (ASSISTANT_REFUSAL_RE.test(trimmed)) return { ok: false, reason: "assistant_refusal" };
   if (HISTORY_ECHO_RE.test(trimmed)) return { ok: false, reason: "history_format_echo" };
   if (META_NARRATION_RE.test(trimmed)) return { ok: false, reason: "meta_narration" };
+  if (VISIBLE_ACTIONS_RE.test(trimmed)) return { ok: false, reason: "actions_block_visible" };
+  if (DEPLOY_CLAIM_RE.test(trimmed) && !HAS_URL_RE.test(trimmed)) {
+    return { ok: false, reason: "deploy_claim_no_url" };
+  }
   if (COT_LEAK_RE.test(trimmed)) return { ok: false, reason: "cot_leak" };
   if (API_SCRIPT_RE.test(trimmed)) return { ok: false, reason: "api_script_leak" };
   if (looksLikeCodeDiffDump(trimmed)) return { ok: false, reason: "code_diff_leak" };
