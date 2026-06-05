@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
+import { useMemo, useState } from "react";
+import { Dialog } from "@base-ui/react/dialog";
 import { useNavigate } from "react-router-dom";
 import {
   Bell,
@@ -75,25 +75,10 @@ export default function NotificationBell() {
   const markConv = useMarkConversationNotificationsRead();
   const nav = useNavigate();
 
-  // `open` is the user intent; `render` keeps the drawer in the DOM through its
-  // slide-out so we get an exit animation, then unmounts it (a closed drawer
-  // left mounted at translateX(100%) would sit off-screen and add a phantom
-  // horizontal scrollbar, since body allows document scroll). `shown` drives
-  // the .open class and is toggled one frame after mount to trigger the slide.
+  // Base UI Dialog keeps the popup mounted through its exit transition
+  // ([data-ending-style]) and unmounts after, so the old open/render/shown
+  // three-state dance is gone — one piece of state, CSS does the slide.
   const [open, setOpen] = useState(false);
-  const [render, setRender] = useState(false);
-  const [shown, setShown] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setRender(true);
-      const raf = requestAnimationFrame(() => setShown(true));
-      return () => cancelAnimationFrame(raf);
-    }
-    setShown(false);
-    const t = setTimeout(() => setRender(false), 300);
-    return () => clearTimeout(t);
-  }, [open]);
 
   const items = useMemo(
     () => list.data?.notifications ?? [],
@@ -131,15 +116,6 @@ export default function NotificationBell() {
   // from the same conversation read as one. This is the number the user sees.
   const count = bundles.reduce((acc, b) => acc + (b.unread > 0 ? 1 : 0), 0);
 
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
-
   function onClickBundle(b: Bundle) {
     // Mark the whole bundle read in one optimistic step so it clears the instant
     // it's clicked. Conversation bundles use the per-conversation endpoint (also
@@ -158,33 +134,22 @@ export default function NotificationBell() {
   }
 
   return (
-    <>
-      <button
-        type="button"
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Trigger
         className="tb-btn inline-flex items-center relative"
         title="Notifications"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
       >
         <Bell size={15} strokeWidth={2} />
         {count > 0 && (
           <span className="notif-badge">{count > 99 ? "99+" : count}</span>
         )}
-      </button>
-      {render &&
-        createPortal(
-        <>
-          <div
-            className={`cc-notif-backdrop ${shown ? "open" : ""}`}
-            onClick={() => setOpen(false)}
-            aria-hidden="true"
-          />
-          <aside
-            className={`cc-notif-drawer ${shown ? "open" : ""}`}
-            role="dialog"
-            aria-label="Notifications"
-          >
+      </Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="cc-notif-backdrop" />
+        <Dialog.Popup
+          className="cc-notif-drawer"
+          render={<aside aria-label="Notifications" />}
+        >
             <div className="cc-notif-drawer-head">
               <span className="notif-title">Notifications</span>
               <div className="cc-notif-head-actions">
@@ -240,10 +205,8 @@ export default function NotificationBell() {
                 </button>
               ))}
             </div>
-          </aside>
-        </>,
-        document.body,
-      )}
-    </>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
