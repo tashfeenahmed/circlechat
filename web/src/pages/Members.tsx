@@ -15,6 +15,7 @@ import { useMembersDirectory, useConversations, useMe } from "../lib/hooks";
 import { api } from "../api/client";
 import { humanizeError } from "../api/errors";
 import Avatar from "../components/Avatar";
+import Modal from "../components/Modal";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBus } from "../state/store";
 
@@ -269,25 +270,20 @@ function Overlay({
   width?: number;
 }) {
   return (
-    <div
-      className="fixed inset-0 bg-black/30 grid place-items-center z-50 overflow-y-auto py-6"
-      onClick={onClose}
+    <Modal
+      onClose={onClose}
+      className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg flex flex-col"
+      style={{ width, maxWidth: "92vw", maxHeight: "calc(100vh - 48px)" }}
     >
-      <div
-        className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg flex flex-col"
-        style={{ width, maxWidth: "92vw", maxHeight: "calc(100vh - 48px)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)] shrink-0">
-          <div>
-            <h2 className="text-[15px] font-semibold">{title}</h2>
-            {subtitle && <p className="text-[12.5px] text-[var(--color-muted)] mt-0.5">{subtitle}</p>}
-          </div>
-          <button onClick={onClose} className="tb-btn" title="Close"><X size={14} strokeWidth={2} /></button>
+      <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)] shrink-0">
+        <div>
+          <h2 className="text-[15px] font-semibold">{title}</h2>
+          {subtitle && <p className="text-[12.5px] text-[var(--color-muted)] mt-0.5">{subtitle}</p>}
         </div>
-        <div className="px-5 py-4 overflow-y-auto">{children}</div>
+        <button onClick={onClose} className="tb-btn" title="Close"><X size={14} strokeWidth={2} /></button>
       </div>
-    </div>
+      <div className="px-5 py-4 overflow-y-auto">{children}</div>
+    </Modal>
   );
 }
 

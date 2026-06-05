@@ -3,6 +3,7 @@ import { Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, type Me } from "../api/client";
 import { humanizeError } from "../api/errors";
+import Modal from "./Modal";
 
 interface Props {
   me: Me;
@@ -69,14 +70,10 @@ export default function WorkspaceRail({ me }: Props) {
       </div>
 
       {creating && (
-        <div
-          className="fixed inset-0 bg-black/30 grid place-items-center z-50"
-          onClick={() => !busy && setCreating(false)}
+        <Modal
+          onClose={() => !busy && setCreating(false)}
+          className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[420px] max-w-[92vw]"
         >
-          <div
-            className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[420px] max-w-[92vw]"
-            onClick={(e) => e.stopPropagation()}
-          >
             <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)]">
               <div>
                 <h2 className="text-[15px] font-semibold">New workspace</h2>
@@ -119,8 +116,7 @@ export default function WorkspaceRail({ me }: Props) {
                 {busy ? "Creating…" : "Create workspace"}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </>
   );

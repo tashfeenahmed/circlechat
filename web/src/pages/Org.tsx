@@ -4,6 +4,7 @@ import { Network, X, Search, Link as LinkIcon, Unlink, Plus, Check } from "lucid
 import { api } from "../api/client";
 import { humanizeError } from "../api/errors";
 import Avatar from "../components/Avatar";
+import Modal from "../components/Modal";
 import { useBus } from "../state/store";
 
 export interface OrgNode {
@@ -231,13 +232,12 @@ function NewReportDialog({ manager, onClose }: { manager: OrgNode; onClose: () =
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 overflow-y-auto py-6" onClick={onClose}>
-      <form
-        onSubmit={submit}
-        className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[520px] max-w-[92vw] flex flex-col"
-        style={{ maxHeight: "calc(100vh - 48px)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      onClose={onClose}
+      render={<form onSubmit={submit} />}
+      className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[520px] max-w-[92vw] flex flex-col"
+      style={{ maxHeight: "calc(100vh - 48px)" }}
+    >
         <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)] shrink-0">
           <div>
             <h2 className="text-[15px] font-semibold">Add agent reporting to {manager.name}</h2>
@@ -321,8 +321,7 @@ function NewReportDialog({ manager, onClose }: { manager: OrgNode; onClose: () =
             {busy ? "Installing…" : "Install + link"}
           </button>
         </div>
-      </form>
-    </div>
+    </Modal>
   );
 }
 
@@ -392,11 +391,10 @@ export function AssignDialog({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/30 grid place-items-center z-50" onClick={onClose}>
-      <div
-        className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[480px] max-w-[92vw]"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      onClose={onClose}
+      className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[480px] max-w-[92vw]"
+    >
         <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)]">
           <div>
             <h2 className="text-[15px] font-semibold">Manager for {target.name}</h2>
@@ -476,7 +474,6 @@ export function AssignDialog({
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

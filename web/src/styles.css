@@ -92,6 +92,12 @@ html, body, #root {
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
 input, textarea { font: inherit; color: inherit; }
 
+/* Base UI: give the app its own stacking context so portalled popups
+   (menus, dialogs, tooltips) always layer above in-app content, and let
+   backdrops cover the visual viewport on iOS 26+ Safari. */
+#root { isolation: isolate; }
+body { position: relative; }
+
 .brand {
   font-family: var(--font-mono);
   font-style: normal;
@@ -516,6 +522,15 @@ input, textarea { font: inherit; color: inherit; }
   padding: 32px;
   backdrop-filter: blur(2px);
 }
+/* Base UI variant: backdrop + panel are siblings, so the backdrop drops the
+   grid/padding and the panel lifts above it. */
+.fv-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.48);
+  z-index: 80;
+  backdrop-filter: blur(2px);
+}
+.cc-modal-pop.fv { z-index: 81; }
 .fv {
   background: var(--color-paper);
   border: 1px solid var(--color-hair-2);
@@ -732,11 +747,17 @@ input, textarea { font: inherit; color: inherit; }
   color: var(--color-ink);
   border-radius: 9px;
   text-align: left;
+  cursor: pointer;
+  user-select: none;
+  outline: 0;
 }
-.menu-item:hover:not(:disabled) { background: var(--color-hi); }
-.menu-item:disabled { color: var(--color-muted); cursor: not-allowed; }
+/* Base UI items are divs, not buttons: hover comes via :hover, keyboard
+   focus via [data-highlighted], disabled via [data-disabled]. */
+.menu-item:hover:not(:disabled):not([data-disabled]),
+.menu-item[data-highlighted] { background: var(--color-hi); }
+.menu-item:disabled, .menu-item[data-disabled] { color: var(--color-muted); cursor: not-allowed; }
 .menu-item.danger { color: var(--color-err); }
-.menu-item.danger:hover { background: rgba(220, 38, 38, 0.08); }
+.menu-item.danger:hover, .menu-item.danger[data-highlighted] { background: rgba(220, 38, 38, 0.08); }
 .menu-icon { display: inline-flex; color: var(--color-muted); }
 .menu-item.danger .menu-icon { color: var(--color-err); }
 .tb-btn {
@@ -843,18 +864,20 @@ input, textarea { font: inherit; color: inherit; }
 }
 
 /* ─── notifications drawer (slides in from the right) ─── */
+/* Slide-in drawer on Base UI Dialog: [data-starting-style] is the first
+   open frame and [data-ending-style] the exit frame — Base UI keeps the
+   popup mounted until the transition ends, so no two-stage mount dance. */
 .cc-notif-backdrop {
   position: fixed;
   inset: 0;
   z-index: 90;
   background: rgba(0, 0, 0, 0.28);
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
   transition: opacity 0.22s ease;
 }
-.cc-notif-backdrop.open {
-  opacity: 1;
-  pointer-events: auto;
+.cc-notif-backdrop[data-starting-style],
+.cc-notif-backdrop[data-ending-style] {
+  opacity: 0;
 }
 .cc-notif-drawer {
   position: fixed;
@@ -869,12 +892,14 @@ input, textarea { font: inherit; color: inherit; }
   background: var(--color-paper);
   border-left: 1px solid var(--color-hair-2);
   box-shadow: -12px 0 32px rgba(0, 0, 0, 0.16);
-  transform: translateX(100%);
+  transform: translateX(0);
   transition: transform 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
   will-change: transform;
+  outline: 0;
 }
-.cc-notif-drawer.open {
-  transform: translateX(0);
+.cc-notif-drawer[data-starting-style],
+.cc-notif-drawer[data-ending-style] {
+  transform: translateX(100%);
 }
 .cc-notif-drawer-head {
   display: flex;
@@ -1768,11 +1793,15 @@ input, textarea { font: inherit; color: inherit; }
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
 }
-.tooltip.above::after {
+/* Base UI sets data-side on the popup; legacy .above/.below kept for any
+   straggler call sites. */
+.tooltip.above::after,
+.tooltip[data-side="top"]::after {
   top: 100%;
   border-top: 5px solid rgb(28, 27, 25);
 }
-.tooltip.below::after {
+.tooltip.below::after,
+.tooltip[data-side="bottom"]::after {
   bottom: 100%;
   border-bottom: 5px solid rgb(28, 27, 25);
 }
@@ -1784,8 +1813,10 @@ input, textarea { font: inherit; color: inherit; }
   margin-bottom: 2px;
 }
 @keyframes tooltip-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(2px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  /* Base UI's Positioner owns layout transforms, so the popup itself only
+     animates opacity + a small rise. */
+  from { opacity: 0; translate: 0 2px; }
+  to   { opacity: 1; translate: 0 0; }
 }
 
 /* ───────── kanban board ───────── */
@@ -1986,6 +2017,23 @@ input, textarea { font: inherit; color: inherit; }
   z-index: 60;
   padding: 24px;
 }
+/* Base UI Dialog shell (shared <Modal> component): the backdrop and the
+   panel are sibling fixed elements, so the panel self-centers instead of
+   relying on a grid wrapper. Panels keep their own visual classes. */
+.cc-modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+  z-index: 60;
+}
+.cc-modal-pop {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 61;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 32px);
+  outline: 0;
+}
 .modal.task-modal {
   background: var(--color-paper);
   border: 1px solid var(--color-hair-2);
@@ -1997,12 +2045,13 @@ input, textarea { font: inherit; color: inherit; }
   display: flex; flex-direction: column;
   overflow: hidden;
 }
-/* Maximized: take over the viewport (minus the backdrop padding). */
+/* Maximized: take over the viewport (minus a 24px gutter). The panel is a
+   self-centered fixed element now, so size it against the viewport. */
 .modal.task-modal--max {
-  width: 100%;
-  max-width: none;
-  height: 100%;
-  max-height: none;
+  width: calc(100vw - 48px);
+  max-width: calc(100vw - 48px);
+  height: calc(100vh - 48px);
+  max-height: calc(100vh - 48px);
 }
 .task-modal-head {
   display: flex; align-items: center; gap: 8px;
@@ -2185,9 +2234,8 @@ input, textarea { font: inherit; color: inherit; }
 }
 .tm-add-chip:hover { background: var(--color-hi); color: var(--color-ink); }
 .tm-popover {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  /* Rendered inside a Base UI Popover.Positioner, which owns placement —
+     the popup itself just provides the chrome. */
   background: var(--color-paper);
   border: 1px solid var(--color-hair-2);
   border-radius: 9px;
@@ -2666,6 +2714,7 @@ input, textarea { font: inherit; color: inherit; }
 
   /* ── modals ───────────────────────────────────────────────────── */
   .modal-bg { padding: 0; }
+  .cc-modal-pop { max-width: 100vw; max-height: 100dvh; }
   .modal.task-modal {
     width: 100vw;
     max-width: 100vw;

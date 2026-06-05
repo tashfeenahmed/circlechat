@@ -6,6 +6,7 @@ import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
 import Menu from "../components/Menu";
+import Modal from "../components/Modal";
 import Avatar from "../components/Avatar";
 import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory, useMarkConversationNotificationsRead } from "../lib/hooks";
 import { api } from "../api/client";
@@ -305,11 +306,10 @@ function RenameChannelModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/30 grid place-items-center z-50" onClick={onClose}>
-      <div
-        className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[480px] max-w-[92vw]"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      onClose={onClose}
+      className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[480px] max-w-[92vw]"
+    >
         <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)]">
           <h2 className="text-[15px] font-semibold">Rename channel</h2>
           <button onClick={onClose} className="tb-btn" title="Close"><X size={14} strokeWidth={2} /></button>
@@ -344,8 +344,7 @@ function RenameChannelModal({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -421,12 +420,11 @@ function ChannelMembersModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 overflow-y-auto py-6" onClick={onClose}>
-      <div
-        className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[460px] max-w-[92vw] flex flex-col"
-        style={{ maxHeight: "calc(100vh - 48px)" }}
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      onClose={onClose}
+      className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[460px] max-w-[92vw] flex flex-col"
+      style={{ maxHeight: "calc(100vh - 48px)" }}
+    >
         <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)] shrink-0">
           <div>
             <h2 className="text-[15px] font-semibold">Channel members</h2>
@@ -491,7 +489,6 @@ function ChannelMembersModal({
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

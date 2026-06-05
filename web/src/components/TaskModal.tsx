@@ -19,6 +19,8 @@ import {
 } from "../api/client";
 import Avatar from "./Avatar";
 import Attachments from "./Attachments";
+import Modal from "./Modal";
+import { Popover } from "@base-ui/react/popover";
 import { useMentionPicker, resolveMentionIds } from "../lib/useMentionPicker";
 import { renderMarkdown } from "../lib/md";
 import { useBus } from "../state/store";
@@ -247,16 +249,14 @@ export default function TaskModal({
 
   if (!detail) {
     return (
-      <div className="modal-bg" onClick={onClose}>
-        <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
-          <div className="task-modal-head">
-            <div className="mono text-[12px] text-[var(--color-muted)]">loading…</div>
-            <button className="tb-btn" onClick={onClose}>
-              <X size={14} />
-            </button>
-          </div>
+      <Modal onClose={onClose} className="modal task-modal">
+        <div className="task-modal-head">
+          <div className="mono text-[12px] text-[var(--color-muted)]">loading…</div>
+          <button className="tb-btn" onClick={onClose}>
+            <X size={14} />
+          </button>
         </div>
-      </div>
+      </Modal>
     );
   }
 
@@ -273,11 +273,7 @@ export default function TaskModal({
   const completedSubs = detail.subtasks.filter((s) => s.status === "done").length;
 
   return (
-    <div className="modal-bg" onClick={onClose}>
-      <div
-        className={`modal task-modal${maximized ? " task-modal--max" : ""}`}
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} className={`modal task-modal${maximized ? " task-modal--max" : ""}`}>
         <div className="task-modal-head">
           <span className="mono text-[11px] text-[var(--color-muted)]">{t.id}</span>
           <span className="tm-head-spacer" />
@@ -532,34 +528,35 @@ export default function TaskModal({
             <div className="tm-rail-field">
               <div className="tm-rail-label">Status</div>
               <div className="tm-rail-status-wrap">
-                <button
-                  className={`tm-rail-status s-${t.status}`}
-                  onClick={() => setStatusMenuOpen((o) => !o)}
-                >
-                  <span className="tm-status-dot" />
-                  <span>{STATUS_LABELS[t.status]}</span>
-                  <ChevronDown size={12} strokeWidth={2.2} />
-                </button>
-                {statusMenuOpen && (
-                  <div className="tm-popover tm-status-popover">
-                    <ul className="tm-popover-list">
-                      {ALL_STATUSES.map((s) => (
-                        <li key={s}>
-                          <button
-                            className={`tm-popover-item tm-status-item s-${s} ${t.status === s ? "on" : ""}`}
-                            onClick={() => {
-                              patchTask({ status: s });
-                              setStatusMenuOpen(false);
-                            }}
-                          >
-                            <span className="tm-status-dot" />
-                            <span>{STATUS_LABELS[s]}</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                <Popover.Root open={statusMenuOpen} onOpenChange={setStatusMenuOpen}>
+                  <Popover.Trigger className={`tm-rail-status s-${t.status}`}>
+                    <span className="tm-status-dot" />
+                    <span>{STATUS_LABELS[t.status]}</span>
+                    <ChevronDown size={12} strokeWidth={2.2} />
+                  </Popover.Trigger>
+                  <Popover.Portal>
+                    <Popover.Positioner side="bottom" align="start" sideOffset={4} collisionPadding={8}>
+                      <Popover.Popup className="tm-popover tm-status-popover">
+                        <ul className="tm-popover-list">
+                          {ALL_STATUSES.map((s) => (
+                            <li key={s}>
+                              <button
+                                className={`tm-popover-item tm-status-item s-${s} ${t.status === s ? "on" : ""}`}
+                                onClick={() => {
+                                  patchTask({ status: s });
+                                  setStatusMenuOpen(false);
+                                }}
+                              >
+                                <span className="tm-status-dot" />
+                                <span>{STATUS_LABELS[s]}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </Popover.Popup>
+                    </Popover.Positioner>
+                  </Popover.Portal>
+                </Popover.Root>
               </div>
             </div>
 
@@ -587,49 +584,48 @@ export default function TaskModal({
                     </span>
                   );
                 })}
-                <div style={{ position: "relative" }}>
-                  <button
-                    className="tm-add-chip"
-                    onClick={() => setAssignPickerOpen((o) => !o)}
-                  >
+                <Popover.Root open={assignPickerOpen} onOpenChange={setAssignPickerOpen}>
+                  <Popover.Trigger className="tm-add-chip">
                     <Plus size={11} /> add
-                  </button>
-                  {assignPickerOpen && (
-                    <div className="tm-popover">
-                      <input
-                        autoFocus
-                        placeholder="Filter…"
-                        value={assignFilter}
-                        onChange={(e) => setAssignFilter(e.target.value)}
-                        className="tm-popover-input"
-                      />
-                      <ul className="tm-popover-list">
-                        {filteredMembers.slice(0, 20).map((m) => (
-                          <li key={m.memberId}>
-                            <button
-                              className="tm-popover-item"
-                              onClick={() => addAssignee(m.memberId)}
-                            >
-                              <Avatar
-                                name={m.name}
-                                color={m.color}
-                                agent={m.kind === "agent"}
-                                size="sm"
-                              />
-                              <span>{m.name}</span>
-                              <span className="mono text-[11px] text-[var(--color-muted)]">
-                                @{m.handle}
-                              </span>
-                            </button>
-                          </li>
-                        ))}
-                        {filteredMembers.length === 0 && (
-                          <li className="tm-popover-empty">no matches</li>
-                        )}
-                      </ul>
-                    </div>
-                  )}
-                </div>
+                  </Popover.Trigger>
+                  <Popover.Portal>
+                    <Popover.Positioner side="bottom" align="start" sideOffset={4} collisionPadding={8}>
+                      <Popover.Popup className="tm-popover">
+                        <input
+                          autoFocus
+                          placeholder="Filter…"
+                          value={assignFilter}
+                          onChange={(e) => setAssignFilter(e.target.value)}
+                          className="tm-popover-input"
+                        />
+                        <ul className="tm-popover-list">
+                          {filteredMembers.slice(0, 20).map((m) => (
+                            <li key={m.memberId}>
+                              <button
+                                className="tm-popover-item"
+                                onClick={() => addAssignee(m.memberId)}
+                              >
+                                <Avatar
+                                  name={m.name}
+                                  color={m.color}
+                                  agent={m.kind === "agent"}
+                                  size="sm"
+                                />
+                                <span>{m.name}</span>
+                                <span className="mono text-[11px] text-[var(--color-muted)]">
+                                  @{m.handle}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                          {filteredMembers.length === 0 && (
+                            <li className="tm-popover-empty">no matches</li>
+                          )}
+                        </ul>
+                      </Popover.Popup>
+                    </Popover.Positioner>
+                  </Popover.Portal>
+                </Popover.Root>
               </div>
             </div>
 
@@ -736,8 +732,7 @@ export default function TaskModal({
             </div>
           </aside>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

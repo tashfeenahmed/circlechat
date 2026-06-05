@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import { useBus, type ViewerFile } from "../state/store";
 import { renderMarkdown } from "../lib/md";
 import { fileUrl } from "../lib/fileUrl";
+import Modal from "./Modal";
 
 type Kind =
   | "image"
@@ -101,8 +102,7 @@ export default function FileViewer() {
   const hasNext = siblings && idx >= 0 && idx < siblings.length - 1;
 
   return (
-    <div className="fv-bg" onClick={close}>
-      <div className="fv" onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={close} backdropClassName="fv-backdrop" className="fv">
         <header className="fv-head">
           <div className="fv-title">
             <span className="fv-name" title={file.name}>{file.name}</span>
@@ -158,8 +158,7 @@ export default function FileViewer() {
             </button>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
