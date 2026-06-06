@@ -298,6 +298,7 @@ export interface ApprovalRow {
   status: string;
   decidedBy: string | null;
   decidedAt: string | null;
+  decisionNote: string | null;
   createdAt: string;
 }
 

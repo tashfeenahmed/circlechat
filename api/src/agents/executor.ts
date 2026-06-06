@@ -299,6 +299,33 @@ export async function applyActions(params: {
       if (outOfScope || riskGated) {
         const d = describeForApproval(a);
         const reason = outOfScope ? (ACTION_SCOPE[a.type] ?? a.type) : `risk:${ACTION_RISK[a.type] ?? "low"}`;
+        // A matching APPROVED approval is a one-shot pass: the human already
+        // said yes to exactly this action, so execute it now and consume the
+        // approval (status → applied) so it can't authorize a second replay.
+        // Without this, the re-emitted action just gated again into a fresh
+        // card and "approve" never actually let anything through.
+        const [granted] = await db
+          .select({ id: approvals.id })
+          .from(approvals)
+          .where(
+            and(
+              eq(approvals.agentId, agentId),
+              eq(approvals.status, "approved"),
+              eq(approvals.scope, reason),
+              eq(approvals.action, d.action),
+            ),
+          )
+          .limit(1);
+        if (granted) {
+          await db
+            .update(approvals)
+            .set({ status: "applied" })
+            .where(eq(approvals.id, granted.id));
+          out.trace.push(`gated ${a.type} allowed by approval ${granted.id} (consumed)`);
+          await applyOne(agentId, runId, agentMember.id, a, out);
+          out.actionsApplied++;
+          continue;
+        }
         const dupId = await findPendingDuplicate(agentId, reason, d.action);
         if (dupId) {
           out.trace.push(`gated ${a.type} → duplicate of pending approval ${dupId}, skipped`);

@@ -520,6 +520,25 @@ function formatMsg(agent, m) {
   return `[${m.id}] ${who}: ${m.bodyMd}${rxStr}${attStr}`;
 }
 
+// Trigger line for approval_response wakes. The packet carries the decided
+// approval (verdict + the human's optional note); turn it into a directive
+// the agent can act on this turn instead of a bare "Trigger: approval_response."
+function formatApprovalResponse(ar) {
+  if (!ar) {
+    return `Trigger: approval_response — one of your approval requests was decided, but its details could not be loaded. Check YOUR PENDING APPROVALS above: anything no longer listed there was decided. Use GET /agent-api/tasks to re-check related task state before acting.`;
+  }
+  const who = ar.decidedByHandle ? `@${ar.decidedByHandle}` : "a human";
+  const noteLine = ar.note
+    ? `\nTheir note to you (this is direct guidance — follow it): "${ar.note}"`
+    : "";
+  if (ar.status === "approved") {
+    return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was APPROVED by ${who}.${noteLine}
+You may now perform the approved action. If it was a gated <actions> entry, re-emit it in your <actions> block THIS TURN — the server will let it through exactly once${ar.note ? ", adjusted per the note above if it narrows the ask" : ""}. If it was a pre-flight request_approval for outside work, do that work now. Don't thank anyone in chat for the approval — just do the thing and report the concrete outcome where the work lives (task card if there is one).`;
+  }
+  return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was DENIED by ${who}.${noteLine}
+Do NOT perform the action and do NOT re-request it. ${ar.note ? "Adjust your approach per the note above — it tells you what to do instead. " : ""}If a task depends on this, leave one task_comment noting the denial${ar.note ? " and your adjusted plan" : " and propose an alternative"}, then move on. No chat post about the denial is needed beyond that.`;
+}
+
 function buildPrompt(entry, packet) {
   const agent = packet.agent || {};
   const primaryConv = packet.inbox && packet.inbox[0];
@@ -655,7 +674,9 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
                   ? `You were assigned a task on the workspace board. Task details are below in the TASK block. Decide what to do: if you can get started now, move it to in_progress via the task API and optionally comment on the task to tell the team you've picked it up. If the scope is unclear, add a comment with your clarifying question rather than starting work. If this isn't in your lane, add a comment saying so and unassign yourself. Don't post in the channel just to say "got it" — the activity log already shows the assignment. Return "HEARTBEAT_OK" if you acknowledged via the task itself.`
                   : packet.trigger === "task_comment"
                     ? `A new comment landed on a task you're involved with. Read the recent comments in the TASK block. Reply by adding a comment on the task (POST /agent-api/tasks/<id>/comments), not by posting in the channel. If the comment is a question for you, answer concretely. If it's an ack or thanks, respond with "HEARTBEAT_OK" — silence is fine on the task thread too.`
-                    : `Trigger: ${packet.trigger}.`;
+                    : packet.trigger === "approval_response"
+                      ? formatApprovalResponse(packet.approvalResponse)
+                      : `Trigger: ${packet.trigger}.`;
 
   const workspace = packet.workspace || {};
   const identity = [

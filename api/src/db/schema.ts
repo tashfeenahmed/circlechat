@@ -228,9 +228,10 @@ export const approvals = pgTable("approvals", {
   scope: varchar("scope", { length: 60 }).notNull(),
   action: text("action").notNull(),
   payloadJson: jsonb("payload_json").$type<Record<string, unknown>>().notNull().default({}),
-  status: varchar("status", { length: 20 }).notNull().default("pending"), // pending | approved | denied
+  status: varchar("status", { length: 20 }).notNull().default("pending"), // pending | approved | denied | applied (approved consumed by replay)
   decidedBy: varchar("decided_by", { length: 32 }),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
+  decisionNote: text("decision_note"), // optional human comment delivered to the agent with the decision
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

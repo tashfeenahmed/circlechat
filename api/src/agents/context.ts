@@ -99,6 +99,18 @@ export interface ContextPacket {
     status: string;
     createdAt: string;
   }>;
+  // Present only on approval_response wakes: the approval that was just
+  // decided, including the human's optional note, so the agent knows exactly
+  // what was approved/denied and any guidance attached to the decision.
+  approvalResponse?: {
+    id: string;
+    scope: string;
+    action: string;
+    status: string; // approved | denied
+    note: string | null;
+    decidedByHandle: string | null;
+    payload: Record<string, unknown>;
+  };
   // Scoped agent memory. `global` is workspace-wide and always present.
   // `byConversation` is keyed by conversationId — only includes scopes for
   // conversations that appear in this packet's inbox or trigger conversation.
@@ -174,6 +186,7 @@ export async function buildContext(opts: {
   conversationId?: string | null;
   messageId?: string;
   taskId?: string;
+  approvalId?: string;
 }): Promise<ContextPacket> {
   const [a] = await db.select().from(agents).where(eq(agents.id, opts.agentId)).limit(1);
   if (!a) throw new Error("agent_not_found");
@@ -354,6 +367,42 @@ export async function buildContext(opts: {
     .where(and(eq(approvals.agentId, opts.agentId), eq(approvals.status, "pending")))
     .orderBy(desc(approvals.createdAt))
     .limit(50);
+
+  // On approval_response wakes, load the approval that was just decided so
+  // the agent sees the verdict + the human's optional note, not just a bare
+  // trigger name.
+  let approvalResponse: ContextPacket["approvalResponse"];
+  if (opts.approvalId) {
+    const [ap] = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, opts.approvalId))
+      .limit(1);
+    if (ap) {
+      let decidedByHandle: string | null = null;
+      if (ap.decidedBy) {
+        const [dm] = await db.select().from(members).where(eq(members.id, ap.decidedBy)).limit(1);
+        if (dm) {
+          if (dm.kind === "user") {
+            const [du] = await db.select().from(users).where(eq(users.id, dm.refId)).limit(1);
+            decidedByHandle = du?.handle ?? null;
+          } else {
+            const [da] = await db.select().from(agents).where(eq(agents.id, dm.refId)).limit(1);
+            decidedByHandle = da?.handle ?? null;
+          }
+        }
+      }
+      approvalResponse = {
+        id: ap.id,
+        scope: ap.scope,
+        action: ap.action,
+        status: ap.status,
+        note: ap.decisionNote ?? null,
+        decidedByHandle,
+        payload: ap.payloadJson ?? {},
+      };
+    }
+  }
 
   // Bucket memory by scope. We load everything in one query and filter in
   // memory — the volume is per-agent and small. byConversation/byTask are
@@ -736,6 +785,7 @@ export async function buildContext(opts: {
       status: o.status,
       createdAt: o.createdAt.toISOString(),
     })),
+    approvalResponse,
     memory: {
       global: memGlobal,
       byConversation: pickKeys(memByConv, [

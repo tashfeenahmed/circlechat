@@ -124,6 +124,7 @@ const worker = new Worker<AgentJobPayload>(
       conversationId: payload.conversationId,
       messageId: payload.messageId,
       taskId: payload.taskId,
+      approvalId: payload.approvalId,
     });
     await db.update(agentRuns).set({ contextJson: packet as never }).where(eq(agentRuns.id, runId));
 

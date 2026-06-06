@@ -12,6 +12,8 @@ export default function ApprovalsPage() {
   const qc = useQueryClient();
   const [working, setWorking] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Optional per-approval comment delivered to the agent with the decision.
+  const [notes, setNotes] = useState<Record<string, string>>({});
 
   const agentById = useMemo(() => {
     const m = new Map<string, { name: string; handle: string; avatarColor: string; id: string }>();
@@ -25,7 +27,12 @@ export default function ApprovalsPage() {
     setErr(null);
     setWorking(id);
     try {
-      await api.post(`/approvals/${id}`, { decision });
+      const note = (notes[id] ?? "").trim();
+      await api.post(`/approvals/${id}`, { decision, ...(note ? { note } : {}) });
+      setNotes((n) => {
+        const { [id]: _gone, ...rest } = n;
+        return rest;
+      });
       await qc.invalidateQueries({ queryKey: ["approvals"] });
     } catch (e) {
       setErr((e as Error).message);
@@ -85,6 +92,15 @@ export default function ApprovalsPage() {
                   <div className="text-[11.5px] text-[var(--color-muted-2)] mt-2 font-mono">
                     requested {new Date(ap.createdAt).toLocaleString()}
                   </div>
+                  <input
+                    type="text"
+                    value={notes[ap.id] ?? ""}
+                    onChange={(e) => setNotes((n) => ({ ...n, [ap.id]: e.target.value }))}
+                    placeholder="Optional note to the agent — sent with your decision…"
+                    maxLength={2000}
+                    disabled={busy}
+                    className="mt-2 w-full max-w-xl text-[12.5px] bg-[var(--color-bg-2)] border border-[var(--color-hair)] rounded px-2 py-1.5 outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-muted-2)]"
+                  />
                 </div>
                 <div className="flex flex-col gap-2 shrink-0">
                   <button

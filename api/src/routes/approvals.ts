@@ -7,7 +7,12 @@ import { requireWorkspace } from "../auth/session.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { publishToConversation } from "../lib/events.js";
 
-const DecideBody = z.object({ decision: z.enum(["approve", "deny"]) });
+const DecideBody = z.object({
+  decision: z.enum(["approve", "deny"]),
+  // Optional human comment delivered to the agent with the decision —
+  // "approved, but only the staging list" / "denied, use the shared drive".
+  note: z.string().trim().max(2000).optional(),
+});
 
 export default async function approvalRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireWorkspace);
@@ -33,9 +38,10 @@ export default async function approvalRoutes(app: FastifyInstance): Promise<void
     if (a.status !== "pending") return reply.code(409).send({ error: "already_decided" });
 
     const status = body.decision === "approve" ? "approved" : "denied";
+    const note = body.note || null;
     await db
       .update(approvals)
-      .set({ status, decidedAt: new Date(), decidedBy: memberId })
+      .set({ status, decidedAt: new Date(), decidedBy: memberId, decisionNote: note })
       .where(eq(approvals.id, apId));
 
     if (a.conversationId) {
@@ -43,6 +49,7 @@ export default async function approvalRoutes(app: FastifyInstance): Promise<void
         type: "approval.decided",
         approvalId: apId,
         status,
+        ...(note ? { note } : {}),
       });
     }
 
