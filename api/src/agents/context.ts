@@ -352,6 +352,7 @@ export async function buildContext(opts: {
     .select()
     .from(approvals)
     .where(and(eq(approvals.agentId, opts.agentId), eq(approvals.status, "pending")))
+    .orderBy(desc(approvals.createdAt))
     .limit(50);
 
   // Bucket memory by scope. We load everything in one query and filter in

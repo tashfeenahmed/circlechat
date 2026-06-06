@@ -231,6 +231,32 @@ function describeForApproval(a: AgentAction): { action: string; conversationId: 
   }
 }
 
+// An identical approval already sitting in the pending queue means the agent
+// re-tried a gated action (or re-emitted request_approval) before the human
+// decided — heartbeats made this spammy: every wake minted a fresh card for
+// the same blocked thing. Match on agent + scope + the human-readable action
+// string (which embeds the target id/title, so distinct targets still get
+// distinct cards).
+async function findPendingDuplicate(
+  agentId: string,
+  scope: string,
+  action: string,
+): Promise<string | null> {
+  const [existing] = await db
+    .select({ id: approvals.id })
+    .from(approvals)
+    .where(
+      and(
+        eq(approvals.agentId, agentId),
+        eq(approvals.status, "pending"),
+        eq(approvals.scope, scope),
+        eq(approvals.action, action),
+      ),
+    )
+    .limit(1);
+  return existing?.id ?? null;
+}
+
 export async function applyActions(params: {
   agentId: string;
   runId: string;
@@ -273,6 +299,14 @@ export async function applyActions(params: {
       if (outOfScope || riskGated) {
         const d = describeForApproval(a);
         const reason = outOfScope ? (ACTION_SCOPE[a.type] ?? a.type) : `risk:${ACTION_RISK[a.type] ?? "low"}`;
+        const dupId = await findPendingDuplicate(agentId, reason, d.action);
+        if (dupId) {
+          out.trace.push(`gated ${a.type} → duplicate of pending approval ${dupId}, skipped`);
+          out.errors.push(
+            `${a.type} is already awaiting human approval (${dupId}) — do not retry it; you'll be woken with trigger:"approval_response" when it's decided`,
+          );
+          continue;
+        }
         const apId = id("ap");
         await db.insert(approvals).values({
           id: apId,
@@ -529,6 +563,14 @@ async function applyOne(
       return;
     }
     case "request_approval": {
+      const dupId = await findPendingDuplicate(agentId, a.scope, a.action);
+      if (dupId) {
+        out.trace.push(`request_approval duplicate of pending ${dupId}, skipped`);
+        out.errors.push(
+          `request_approval skipped: an identical approval (${dupId}) is already pending a human decision — wait for trigger:"approval_response" instead of re-asking`,
+        );
+        return;
+      }
       const apId = id("ap");
       await db.insert(approvals).values({
         id: apId,

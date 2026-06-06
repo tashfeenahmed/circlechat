@@ -706,7 +706,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  {"type":"open_thread","message_id":"<id>","body_md":"…"}      — start a thread reply on a specific message`,
     `  {"type":"set_memory","key":"<snake_case>","value":<any JSON>,"scope":"global|conversation|task","scope_id":"<c_… or task_… (omit for global)>"}  — persist a note across runs. Pick the narrowest scope that applies; existing values are in YOUR MEMORY above.`,
     `  {"type":"delete_memory","key":"<key>","scope":"…","scope_id":"…"}  — remove a memory entry that's no longer true.`,
-    `  {"type":"request_approval","scope":"<tag>","action":"<human sentence>","conversation_id":"<optional>","payload":{…}}  — pre-flight gate. Use BEFORE actions that leave the workspace (email, paid APIs, external tickets, public posts) or are one-way (delete, cancel). Emit, stop, wait for trigger:"approval_response". In-workspace chat/task/file actions DO NOT need approval.`,
+    `  {"type":"request_approval","scope":"<tag>","action":"<human sentence>","conversation_id":"<optional>","payload":{…}}  — pre-flight gate. Use BEFORE actions that leave the workspace (email, paid APIs, external tickets, public posts) or are one-way (delete, cancel). Emit, stop, wait for trigger:"approval_response". In-workspace chat/task/file actions DO NOT need approval. CHECK "YOUR PENDING APPROVALS" above first — if the same request is already listed there, it's awaiting a human and re-requesting is a no-op (the server drops duplicates).`,
     ``,
     `Use the Member IDs block above to fill assignees / mentions / member_id fields — those fields take memberIds (m_…), NOT handles.`,
     `Emit as many actions as needed in one block. If a user asks for 5 tasks, create 5 create_task entries.`,
@@ -842,6 +842,25 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ].join("\n");
   }
 
+  // Pending approvals — actions of this agent parked awaiting a human
+  // decision. Surfaced so the agent doesn't re-emit the gated action or
+  // re-request approval every wake (the server also dedupes, but the agent
+  // should KNOW it's waiting, not discover it via a rejection).
+  let approvalsBlock = "";
+  const aps = Array.isArray(packet.openApprovals) ? packet.openApprovals : [];
+  if (aps.length) {
+    const lines = aps.slice(0, 10).map((ap) => {
+      const when = ap.createdAt ? ` · requested ${String(ap.createdAt).slice(0, 10)}` : "";
+      return `  ⏳ ${ap.id} [${ap.scope}${when}] ${ap.action}`;
+    });
+    approvalsBlock = [
+      ``,
+      `YOUR PENDING APPROVALS (${aps.length} awaiting a human decision):`,
+      ...lines,
+      `These actions are PARKED until a human approves or denies them. Do NOT emit the same action again, do NOT open a new request_approval for the same thing, and do NOT ask about them in chat every wake — you'll be woken with trigger:"approval_response" when a decision lands. Treat work that depends on one of these as blocked: pick a different task or step that isn't waiting on approval.`,
+    ].join("\n");
+  }
+
   // Memory block: render scoped memory the agent has previously written.
   // Global is always shown. Per-conversation memory appears only for
   // conversations in this packet's inbox; per-task memory only for tasks
@@ -907,6 +926,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         `You are currently in ${convLabel}.${colleaguesLine}${reportingLine}${memberIdBlock}`,
         myTasksBlock,
         goalsBlock,
+        approvalsBlock,
         memoryBlock,
         ``,
         triggerLine,
@@ -922,6 +942,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         taskBlock,
         myTasksBlock,
         goalsBlock,
+        approvalsBlock,
         memoryBlock,
         ``,
         `Recent messages in this conversation (most recent last):`,
