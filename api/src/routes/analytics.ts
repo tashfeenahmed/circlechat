@@ -141,6 +141,9 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
             n: sql<number>`count(*)::int`,
             applied: sql<number>`coalesce(sum((${agentRuns.resultJson}->>'applied')::int), 0)::int`,
             withErrors: sql<number>`count(*) filter (where jsonb_array_length(coalesce(${agentRuns.resultJson}->'errors', '[]'::jsonb)) > 0)::int`,
+            skipped: sql<number>`count(*) filter (where ${agentRuns.resultJson}->>'skipped' is not null)::int`,
+            durSec: sql<number>`coalesce(sum(extract(epoch from (${agentRuns.finishedAt} - ${agentRuns.startedAt}))) filter (where ${agentRuns.finishedAt} is not null), 0)::float`,
+            nFinished: sql<number>`count(*) filter (where ${agentRuns.finishedAt} is not null)::int`,
             lastFinished: sql<string | null>`max(${agentRuns.finishedAt})`,
           })
           .from(agentRuns)
@@ -154,24 +157,62 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
       byTrigger: Record<string, number>;
       actionsApplied: number;
       runsWithErrors: number;
+      skippedRuns: number;
+      durSec: number;
+      nFinished: number;
       lastActiveAt: string | null;
     };
     const runsByAgent = new Map<string, RunAgg>();
     for (const r of runRows) {
       const agg =
         runsByAgent.get(r.agentId) ??
-        { total: 0, ok: 0, failed: 0, byTrigger: {}, actionsApplied: 0, runsWithErrors: 0, lastActiveAt: null };
+        { total: 0, ok: 0, failed: 0, byTrigger: {}, actionsApplied: 0, runsWithErrors: 0, skippedRuns: 0, durSec: 0, nFinished: 0, lastActiveAt: null };
       agg.total += r.n;
       if (r.status === "ok") agg.ok += r.n;
       if (r.status === "failed") agg.failed += r.n;
       agg.byTrigger[r.trigger] = (agg.byTrigger[r.trigger] ?? 0) + r.n;
       agg.actionsApplied += r.applied;
       agg.runsWithErrors += r.withErrors;
+      agg.skippedRuns += r.skipped;
+      agg.durSec += r.durSec;
+      agg.nFinished += r.nFinished;
       if (r.lastFinished && (!agg.lastActiveAt || r.lastFinished > agg.lastActiveAt)) {
         agg.lastActiveAt = r.lastFinished;
       }
       runsByAgent.set(r.agentId, agg);
     }
+
+    // ── error taxonomy: every run-error string in range, normalized so the
+    // same failure with different ids buckets together ("post_message
+    // rejected: tool_call_syntax", "share_to_task task_<id>: not_found", …).
+    // Errors are sparse relative to runs, so unnesting is cheap.
+    const errRows = agentIds.length
+      ? ((await db.execute(sql`
+          select r.agent_id as agent_id, e.value as err
+          from agent_runs r
+          cross join lateral jsonb_array_elements_text(coalesce(r.result_json->'errors', '[]'::jsonb)) e
+          where r.agent_id in (${sql.join(agentIds.map((x) => sql`${x}`), sql`, `)})
+            and r.started_at >= ${since}
+        `)) as unknown as Array<{ agent_id: string; err: string }>)
+      : [];
+    const handleByAgentId = new Map(roster.map((a) => [a.id, a.handle]));
+    const errBuckets = new Map<string, { count: number; agents: Set<string> }>();
+    for (const r of errRows) {
+      const reason = r.err
+        .replace(/\b(task|goal|ap|run|act|c|m|w|u|msg|cm)_[a-z0-9]+\b/g, "<id>")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120);
+      const b = errBuckets.get(reason) ?? { count: 0, agents: new Set<string>() };
+      b.count++;
+      const h = handleByAgentId.get(r.agent_id);
+      if (h) b.agents.add(h);
+      errBuckets.set(reason, b);
+    }
+    const topErrors = Array.from(errBuckets.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 10)
+      .map(([reason, b]) => ({ reason, count: b.count, agents: Array.from(b.agents) }));
 
     // ── chat + comment volume in range ──
     const msgRows = agentMemberIds.length
@@ -276,6 +317,8 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
           },
           actionsApplied: runs?.actionsApplied ?? 0,
           runsWithErrors: runs?.runsWithErrors ?? 0,
+          skippedRuns: runs?.skippedRuns ?? 0,
+          avgRunSec: runs && runs.nFinished > 0 ? Math.round(runs.durSec / runs.nFinished) : 0,
           messages: msgsByAgent.get(a.id) ?? 0,
           taskComments: commentsByAgent.get(a.id) ?? 0,
           approvalsPending: approvalsByAgent.get(a.id) ?? 0,
@@ -303,6 +346,7 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
         failedRuns: agentsOut.reduce((s, a) => s + a.runs.failed, 0),
         openTasks: openTotal?.n ?? 0,
       },
+      topErrors,
       recentCompletions: recent.map((r) => {
         const who = handleByMember.get(r.actorMemberId);
         return {

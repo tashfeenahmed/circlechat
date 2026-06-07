@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target, BarChart3 } from "lucide-react";
+import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target, BarChart3, ChevronRight } from "lucide-react";
 import { useConversations, useMe, useMembersDirectory, useApprovals, useTasks } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
@@ -16,6 +16,21 @@ export default function Sidebar() {
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  // "More" disclosure for secondary nav (Analytics / Skills / Org chart).
+  // Sticky across reloads; force-open when the current route lives inside it.
+  const moreRoute =
+    location.pathname === "/analytics" ||
+    location.pathname.startsWith("/skills") ||
+    location.pathname === "/org";
+  const [moreOpen, setMoreOpen] = useState<boolean>(
+    () => localStorage.getItem("cc:sb-more") === "1",
+  );
+  const showMore = moreOpen || moreRoute;
+  function toggleMore() {
+    const next = !showMore;
+    setMoreOpen(next);
+    localStorage.setItem("cc:sb-more", next ? "1" : "0");
+  }
   const presence = useBus((s) => s.presence);
   const pendingApprovals = approvalsQ.data?.approvals.length ?? 0;
 
@@ -134,7 +149,7 @@ export default function Sidebar() {
           <span className="sb-glyph">
             <Target size={14} strokeWidth={2} />
           </span>
-          <span className="sb-name">Goals</span>
+          <span className="sb-name">Projects &amp; Goals</span>
         </Link>
         <Link
           to="/files"
@@ -157,33 +172,47 @@ export default function Sidebar() {
             <span className="sb-badge mention">{pendingApprovals}</span>
           )}
         </Link>
-        <Link
-          to="/analytics"
-          className={`sb-item ${location.pathname === "/analytics" ? "active" : ""}`}
-        >
+        <button type="button" onClick={toggleMore} className="sb-item sb-more" aria-expanded={showMore}>
           <span className="sb-glyph">
-            <BarChart3 size={14} strokeWidth={2} />
+            <ChevronRight
+              size={14}
+              strokeWidth={2}
+              style={{ transform: showMore ? "rotate(90deg)" : undefined, transition: "transform .15s" }}
+            />
           </span>
-          <span className="sb-name">Analytics</span>
-        </Link>
-        <Link
-          to="/skills"
-          className={`sb-item ${location.pathname.startsWith("/skills") ? "active" : ""}`}
-        >
-          <span className="sb-glyph">
-            <BookOpen size={14} strokeWidth={2} />
-          </span>
-          <span className="sb-name">Skills</span>
-        </Link>
-        <Link
-          to="/org"
-          className={`sb-item ${location.pathname === "/org" ? "active" : ""}`}
-        >
-          <span className="sb-glyph">
-            <Network size={14} strokeWidth={2} />
-          </span>
-          <span className="sb-name">Org chart</span>
-        </Link>
+          <span className="sb-name">More</span>
+        </button>
+        {showMore && (
+          <>
+            <Link
+              to="/analytics"
+              className={`sb-item sb-sub ${location.pathname === "/analytics" ? "active" : ""}`}
+            >
+              <span className="sb-glyph">
+                <BarChart3 size={14} strokeWidth={2} />
+              </span>
+              <span className="sb-name">Analytics</span>
+            </Link>
+            <Link
+              to="/skills"
+              className={`sb-item sb-sub ${location.pathname.startsWith("/skills") ? "active" : ""}`}
+            >
+              <span className="sb-glyph">
+                <BookOpen size={14} strokeWidth={2} />
+              </span>
+              <span className="sb-name">Skills</span>
+            </Link>
+            <Link
+              to="/org"
+              className={`sb-item sb-sub ${location.pathname === "/org" ? "active" : ""}`}
+            >
+              <span className="sb-glyph">
+                <Network size={14} strokeWidth={2} />
+              </span>
+              <span className="sb-name">Org chart</span>
+            </Link>
+          </>
+        )}
       </div>
 
       <div className="sb-group">

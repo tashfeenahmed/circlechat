@@ -315,6 +315,8 @@ export interface AnalyticsAgent {
   runs: { total: number; ok: number; failed: number; byTrigger: Record<string, number> };
   actionsApplied: number;
   runsWithErrors: number;
+  skippedRuns: number;
+  avgRunSec: number;
   messages: number;
   taskComments: number;
   approvalsPending: number;
@@ -332,6 +334,7 @@ export interface AnalyticsData {
     failedRuns: number;
     openTasks: number;
   };
+  topErrors: Array<{ reason: string; count: number; agents: string[] }>;
   recentCompletions: Array<{
     taskId: string;
     title: string;

@@ -188,6 +188,67 @@ export default function AnalyticsPage() {
               )}
             </section>
 
+            {/* debugging */}
+            <section className="mt-6">
+              <h2 className="ana-h">Debugging</h2>
+              <div className="ana-table-wrap">
+                <table className="ana-table">
+                  <thead>
+                    <tr>
+                      <th>Agent</th>
+                      <th>Triggers</th>
+                      <th>Skipped (idle)</th>
+                      <th>Runs w/ errors</th>
+                      <th>Failed</th>
+                      <th>Avg run</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.agents.map((a) => (
+                      <tr key={a.id}>
+                        <td>
+                          <span className="font-mono text-[12px]">@{a.handle}</span>
+                        </td>
+                        <td className="text-[11.5px] font-mono text-[var(--color-muted)]">
+                          {Object.entries(a.runs.byTrigger)
+                            .sort((x, y) => y[1] - x[1])
+                            .map(([t, n]) => `${t} ${n}`)
+                            .join(" · ") || "—"}
+                        </td>
+                        <td className="ana-num" title="Heartbeats skipped because nothing changed — no LLM call made">
+                          {a.skippedRuns}
+                          {a.runs.total > 0 && (
+                            <span className="text-[var(--color-muted-2)]"> ({Math.round((a.skippedRuns / a.runs.total) * 100)}%)</span>
+                          )}
+                        </td>
+                        <td className={`ana-num ${a.runsWithErrors > 0 ? "text-[var(--color-warn)]" : ""}`}>
+                          {a.runsWithErrors}
+                        </td>
+                        <td className={`ana-num ${a.runs.failed > 0 ? "text-[var(--color-err)]" : ""}`}>
+                          {a.runs.failed}
+                        </td>
+                        <td className="ana-num">{a.avgRunSec > 0 ? `${a.avgRunSec}s` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {data.topErrors.length > 0 && (
+                <div className="mt-3">
+                  <h3 className="ana-h">Top run errors (normalized)</h3>
+                  <ul className="ana-errlist">
+                    {data.topErrors.map((e) => (
+                      <li key={e.reason}>
+                        <span className="ana-errcount">{e.count}×</span>
+                        <span className="ana-errmsg">{e.reason}</span>
+                        <span className="ana-erragents">{e.agents.map((h) => `@${h}`).join(" ")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+
             {/* recent completions */}
             <section className="mt-6 pb-8">
               <h2 className="ana-h">Recent completions</h2>

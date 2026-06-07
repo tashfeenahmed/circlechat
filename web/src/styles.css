@@ -2888,7 +2888,7 @@ body { position: relative; }
 .ana-card {
   border: 1px solid var(--color-hair-2);
   border-radius: var(--radius-lg);
-  background: var(--color-bg-2);
+  background: var(--color-paper);
   padding: 12px 14px;
 }
 .ana-card-top {
@@ -2918,7 +2918,7 @@ body { position: relative; }
   padding: 8px 4px 0;
   border: 1px solid var(--color-hair-2);
   border-radius: var(--radius-lg);
-  background: var(--color-bg-2);
+  background: var(--color-paper);
 }
 .ana-col {
   flex: 1 1 0;
@@ -2975,6 +2975,7 @@ body { position: relative; }
   border: 1px solid var(--color-hair-2);
   border-radius: var(--radius-lg);
   overflow-x: auto;
+  background: var(--color-paper);
 }
 .ana-table {
   width: 100%;
@@ -3016,4 +3017,52 @@ body { position: relative; }
   color: var(--color-muted);
   border: 1px dashed var(--color-hair-2);
   border-radius: var(--radius-lg);
+}
+.sb-more {
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-muted);
+  text-align: left;
+}
+.sb-item.sb-sub {
+  padding-left: 26px;
+}
+.ana-errlist {
+  border: 1px solid var(--color-hair-2);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper);
+  padding: 4px 0;
+}
+.ana-errlist li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--color-hair);
+}
+.ana-errlist li:last-child { border-bottom: none; }
+.ana-errcount {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  color: var(--color-warn);
+  flex-shrink: 0;
+  min-width: 30px;
+}
+.ana-errmsg {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ana-erragents {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--color-muted-2);
 }
