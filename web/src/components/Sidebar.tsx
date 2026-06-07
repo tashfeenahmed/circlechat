@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target, BarChart3, ChevronRight } from "lucide-react";
+import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target, BarChart3, MoreHorizontal } from "lucide-react";
 import { useConversations, useMe, useMembersDirectory, useApprovals, useTasks } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
@@ -174,13 +174,9 @@ export default function Sidebar() {
         </Link>
         <button type="button" onClick={toggleMore} className="sb-item sb-more" aria-expanded={showMore}>
           <span className="sb-glyph">
-            <ChevronRight
-              size={14}
-              strokeWidth={2}
-              style={{ transform: showMore ? "rotate(90deg)" : undefined, transition: "transform .15s" }}
-            />
+            <MoreHorizontal size={14} strokeWidth={2} />
           </span>
-          <span className="sb-name">More</span>
+          <span className="sb-name">{showMore ? "Show less" : "Show more"}</span>
         </button>
         {showMore && (
           <>

@@ -3019,12 +3019,12 @@ body { position: relative; }
   border-radius: var(--radius-lg);
 }
 .sb-more {
-  width: 100%;
+  width: calc(100% - 12px);
   background: none;
   border: none;
   cursor: pointer;
   font: inherit;
-  color: var(--color-muted);
+  color: inherit;
   text-align: left;
 }
 .sb-item.sb-sub {
