@@ -306,10 +306,22 @@ export async function planGoal(params: {
 
   const raw = await chatJson<unknown>(
     buildMessages(goal.title, goal.bodyMd, ws?.mission ?? "", roster),
-    { temperature: 0.2, maxTokens: 2000 },
+    { temperature: 0.2, maxTokens: 4000, timeoutMs: 150_000 },
   );
   const parsed = PlanSchema.safeParse(raw);
   if (!parsed.success) {
+    // Observability: this used to fail silently, leaving only the bare
+    // "plan_generation_failed" code on the goal row — undiagnosable. Log
+    // whether the LLM returned nothing vs returned JSON the schema rejected.
+    console.error(
+      `[planner] plan_generation_failed for ${goalId}: ` +
+        (raw === null
+          ? "chatJson returned null (LLM unreachable/timeout or no JSON in reply)"
+          : `schema rejected: ${parsed.error.issues
+              .slice(0, 3)
+              .map((i) => `${i.path.join(".")}: ${i.message}`)
+              .join("; ")} — raw: ${JSON.stringify(raw).slice(0, 300)}`),
+    );
     await db.update(goals).set({ status: "open", updatedAt: new Date() }).where(eq(goals.id, goalId));
     return { error: "plan_generation_failed" };
   }
