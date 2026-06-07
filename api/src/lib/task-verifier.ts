@@ -12,7 +12,7 @@
 // judge returns "allow" and the heuristic gate stands on its own.
 import { z } from "zod";
 import { chatJson, plannerEnabled } from "./completion.js";
-import { liveArtifactRows, isSubstantiveArtifact } from "./task-artifacts.js";
+import { liveArtifactRows, isSubstantiveArtifact, isTextualContentType } from "./task-artifacts.js";
 import { readObject } from "./storage.js";
 import { db } from "../db/index.js";
 import { taskVerifications, type TaskArtifact } from "../db/schema.js";
@@ -28,8 +28,13 @@ const VerdictSchema = z.object({
 });
 type Verdict = z.infer<typeof VerdictSchema>;
 
+// OPT-IN by default. This gate makes an extra LLM call and can block a
+// done-flip, so it must never surprise a user who has a weak/idiosyncratic
+// model wired or didn't ask for it — they enable it explicitly with
+// VERIFY_GATE=on. Still requires a planner/embeddings backend to be configured
+// (it reuses that client), and fails OPEN on any judge outage.
 export function verifierEnabled(): boolean {
-  return process.env.VERIFY_GATE !== "off" && plannerEnabled();
+  return process.env.VERIFY_GATE === "on" && plannerEnabled();
 }
 function passThreshold(): number {
   const n = Number(process.env.VERIFIER_PASS_THRESHOLD);
@@ -67,6 +72,10 @@ export async function verifyTaskForDone(opts: {
   let chosen: TaskArtifact | null = null;
   let chosenText = "";
   for (const r of rows) {
+    // Only judge TEXTUAL deliverables — utf8-decoding a PDF/image/zip yields
+    // garbage the judge would wrongly fail. Binary deliverables that clear the
+    // substance heuristic are allowed through (the heuristic stands alone).
+    if (!isTextualContentType(r.contentType)) continue;
     if (!(await isSubstantiveArtifact(r, opts.title))) continue;
     const buf = await readObject(r.storageKey);
     if (!buf) continue;
@@ -74,7 +83,7 @@ export async function verifyTaskForDone(opts: {
     chosenText = buf.toString("utf8").slice(0, MAX_DELIVERABLE_CHARS);
     break;
   }
-  if (!chosen) return null; // nothing readable to judge → defer to heuristic outcome
+  if (!chosen) return null; // no readable TEXT deliverable to judge → defer to heuristic outcome
 
   const taskType = inferType(chosen.name, chosen.contentType);
   const raw = await chatJson<unknown>(

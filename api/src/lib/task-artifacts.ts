@@ -1,11 +1,12 @@
 import { and, eq, desc, isNull, sql as dsql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db } from "../db/index.js";
-import { taskArtifacts, members, users, agents, type TaskArtifact } from "../db/schema.js";
+import { taskArtifacts, tasks, members, users, agents, type TaskArtifact } from "../db/schema.js";
 import { putObject, publicUrl, readObject, removeStoragePrefix } from "./storage.js";
 import { id as makeId } from "./ids.js";
 import type { Attachment } from "../db/schema.js";
 import { ingestKnowledge } from "./knowledge.js";
+import { recordProgress } from "./ledger-core.js";
 
 // Hard limits — mirror the agent attachment ingest (executor.ts) so artifacts
 // can't be used to smuggle in larger payloads than the share path allows.
@@ -14,7 +15,7 @@ export const MAX_ARTIFACTS_PER_TASK = 500;
 
 // Is this content type plain text we can usefully embed for RAG? (markdown,
 // text, json, csv, code, etc.) Binary deliverables are skipped.
-function isTextualContentType(ct: string): boolean {
+export function isTextualContentType(ct: string): boolean {
   const t = (ct || "").toLowerCase();
   return (
     t.startsWith("text/") ||
@@ -112,6 +113,17 @@ export async function createArtifact(opts: {
     createdBy: opts.createdBy,
   };
   await db.insert(taskArtifacts).values(row);
+
+  // Shipping a deliverable is the strongest forward-motion signal — reset the
+  // goal's stall counter so the detector never misreads an actively-delivering
+  // goal as stalled. Best-effort, fire-and-forget.
+  void db
+    .select({ goalId: tasks.goalId })
+    .from(tasks)
+    .where(eq(tasks.id, opts.taskId))
+    .limit(1)
+    .then(([t]) => (t?.goalId ? recordProgress(t.goalId) : undefined))
+    .catch(() => {});
 
   // RAG: ingest textual deliverables into the per-workspace knowledge store so
   // agents can recall them across runs. Best-effort, fire-and-forget, no-op

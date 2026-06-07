@@ -853,6 +853,9 @@ export async function addComment(
     attachmentsJson: safeAttachments,
   });
   await logActivity(taskId, actorMemberId, "comment", { commentId });
+  // A comment on a goal task is real activity — count it as forward motion so
+  // the stall detector doesn't misread a slow-but-working goal as stalled.
+  if (t!.goalId) await recordProgress(t!.goalId).catch(() => {});
   const [row] = await db.select().from(taskComments).where(eq(taskComments.id, commentId));
   await publishToWorkspace(workspaceId, {
     type: "task.comment.new",

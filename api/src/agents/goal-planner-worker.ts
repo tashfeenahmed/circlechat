@@ -132,19 +132,26 @@ async function handleStalls(): Promise<void> {
     const [goal] = await db.select().from(goals).where(eq(goals.id, l.goalId)).limit(1);
     if (!goal) continue;
 
-    if (l.replanCount >= MAX_REPLANS) {
-      // Out of automatic options — escalate to the human owner once.
+    // Automatic re-plan ARCHIVES the goal's open tasks and regenerates them —
+    // destructive, and a slow-but-working setup (a weak model taking a long
+    // time on one task without bumping status) could be misread as stalled. So
+    // it is OPT-IN (GOAL_STALL_REPLAN=on). The SAFE DEFAULT is to detect the
+    // stall and notify the human owner once, never touching their tasks.
+    const autoReplan = process.env.GOAL_STALL_REPLAN === "on";
+    if (!autoReplan || l.replanCount >= MAX_REPLANS) {
       if (goal.ownerMemberId) {
         await notify({
           workspaceId: l.workspaceId,
           memberId: goal.ownerMemberId,
           kind: "system",
-          title: "A goal is stuck — needs your input",
-          body: `${goal.title} stalled after ${MAX_REPLANS} re-plans. Re-scope it or unblock the team.`,
+          title: "A goal looks stalled — needs your input",
+          body: `${goal.title} has shown no task progress for a while${
+            l.replanCount >= MAX_REPLANS ? ` (and ${MAX_REPLANS} auto re-plans didn't help)` : ""
+          }. Re-scope it or unblock the team.`,
           link: `/goals`,
         }).catch(() => {});
       }
-      // Reset lastProgressAt so we don't re-notify every sweep.
+      // Reset so we don't re-notify every sweep.
       await db
         .update(goalLedgers)
         .set({ stallCount: 0, lastProgressAt: new Date(), updatedAt: new Date() })
