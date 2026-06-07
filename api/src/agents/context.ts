@@ -18,6 +18,7 @@ import {
 } from "../db/schema.js";
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
 import { listGoals, getGoalAncestry } from "../lib/goals-core.js";
+import { loadLedgers } from "../lib/ledger-core.js";
 
 export interface MemberInfo {
   memberId: string;
@@ -141,6 +142,16 @@ export interface ContextPacket {
     parentGoalId: string | null;
     ownerMemberId: string | null;
     taskCounts: { total: number; done: number; inProgress: number };
+    // Magentic-One-style externalized ledger: the plan, established facts,
+    // dead-ends not to repeat, and recent progress. Null until the goal is
+    // planned. Agents read this instead of reconstructing intent from chat.
+    ledger: {
+      plan: string;
+      facts: string[];
+      triedDeadEnds: string[];
+      recentProgress: string[];
+      stallCount: number;
+    } | null;
   }>;
   // Open tasks assigned to this agent, freshest first. Present on every
   // trigger so heartbeats have a "what am I working on?" list — the agent
@@ -531,10 +542,15 @@ export async function buildContext(opts: {
 
   // Active goals (not done/archived), most recent first, bounded for prompt size.
   const allGoals = (await listGoals(a.workspaceId)).goals;
-  const activeGoals = allGoals
+  const activeGoalsRaw = allGoals
     .filter((g) => g.status !== "done" && g.status !== "archived")
-    .slice(0, 10)
-    .map((g) => ({
+    .slice(0, 10);
+  // Attach each goal's ledger (plan + facts + dead-ends + recent progress) so an
+  // agent reads the externalized state instead of re-deriving intent from chat.
+  const ledgerMap = await loadLedgers(activeGoalsRaw.map((g) => g.id));
+  const activeGoals = activeGoalsRaw.map((g) => {
+    const led = ledgerMap.get(g.id);
+    return {
       id: g.id,
       title: g.title,
       status: g.status,
@@ -542,7 +558,17 @@ export async function buildContext(opts: {
       parentGoalId: g.parentGoalId ?? null,
       ownerMemberId: g.ownerMemberId ?? null,
       taskCounts: g.taskCounts,
-    }));
+      ledger: led
+        ? {
+            plan: led.plan,
+            facts: led.facts,
+            triedDeadEnds: led.triedDeadEnds,
+            recentProgress: led.progressNotes.slice(-5).map((p) => p.note),
+            stallCount: led.stallCount,
+          }
+        : null,
+    };
+  });
 
   let taskCtx: ContextPacket["task"];
   if (opts.taskId) {

@@ -29,6 +29,8 @@ import {
 } from "../lib/tasks-core.js";
 import { createGoal } from "../lib/goals-core.js";
 import { planGoal } from "../lib/planner.js";
+import { latestVerificationRationale } from "../lib/task-verifier.js";
+import { loadLedger, appendFact, appendProgressNote, appendDeadEnd } from "../lib/ledger-core.js";
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
 import { notifyForMessage } from "../lib/notifications.js";
@@ -89,6 +91,10 @@ export type AgentAction =
   // delegation tree of tasks routed across the team (the manager move).
   | { type: "create_goal"; title: string; body_md?: string; parent_goal_id?: string; kind?: "goal" | "project" }
   | { type: "decompose_goal"; goal_id: string }
+  // Goal ledger — append durable facts/progress/dead-ends to a goal's shared
+  // ledger so teammates (and your future self) read them instead of digging
+  // through chat. The Magentic-One "task + progress ledger" the team works off.
+  | { type: "ledger_update"; goal_id: string; facts?: string[]; progress_note?: string; dead_end?: string }
   | {
       type: "task_comment";
       task_id: string;
@@ -147,6 +153,7 @@ const ACTION_SCOPE: Partial<Record<AgentAction["type"], string>> = {
   share_to_task: "tasks.write",
   create_goal: "tasks.write",
   decompose_goal: "tasks.write",
+  ledger_update: "tasks.write",
 };
 
 // Risk level per action, used by the opt-in risk gate (APPROVE_RISK_AT). The
@@ -326,6 +333,60 @@ const ACTION_ALIASES: Record<string, string> = {
   plan_goal: "decompose_goal",
 };
 
+// Required-field shape check per action type. Deliberately PRESENCE-only (it
+// doesn't reject unknown extra fields) so a valid action with stray keys still
+// runs — the goal is to catch the malformed/empty actions that silently no-op,
+// not to be a strict schema. Each rule names the missing field and the fix, and
+// that string is fed straight back to the agent on its next turn.
+const REQUIRED_STRING_FIELDS: Record<string, string[]> = {
+  post_message: ["conversation_id", "body_md"],
+  react: ["message_id", "emoji"],
+  open_thread: ["message_id", "body_md"],
+  request_approval: ["scope", "action"],
+  set_memory: ["key"],
+  delete_memory: ["key"],
+  call_tool: ["name"],
+  create_task: ["title"],
+  update_task: ["task_id"],
+  assign_task: ["task_id", "member_id"],
+  create_goal: ["title"],
+  decompose_goal: ["goal_id"],
+  ledger_update: ["goal_id"],
+  task_comment: ["task_id", "body_md"],
+  share_files: ["conversation_id"],
+  share_to_task: ["task_id"],
+};
+
+function validateActionShape(a: AgentAction): string | null {
+  const type = (a as { type?: unknown }).type;
+  if (typeof type !== "string" || !type) return "action skipped: missing \"type\".";
+  const rec = a as unknown as Record<string, unknown>;
+  for (const field of REQUIRED_STRING_FIELDS[type] ?? []) {
+    const v = rec[field];
+    if (typeof v !== "string" || !v.trim()) {
+      return (
+        `${type} skipped: missing required field "${field}". ` +
+        `Emit it as a complete action, e.g. include a valid "${field}" (use an exact id from the context above, not a guess).`
+      );
+    }
+  }
+  // Actions that carry files need a non-empty files array, or they no-op.
+  if (type === "share_files" || type === "share_to_task") {
+    const files = rec["files"];
+    if (!Array.isArray(files) || files.length === 0) {
+      return `${type} skipped: "files" must be a non-empty array of {path|url}. Attach the /workspace file you actually wrote (run \`ls -R /workspace\` to get the exact path).`;
+    }
+  }
+  // ledger_update needs at least one payload field or it does nothing.
+  if (type === "ledger_update") {
+    const hasFacts = Array.isArray(rec["facts"]) && (rec["facts"] as unknown[]).length > 0;
+    if (!hasFacts && !rec["progress_note"] && !rec["dead_end"]) {
+      return `ledger_update skipped: provide at least one of "facts", "progress_note", or "dead_end".`;
+    }
+  }
+  return null;
+}
+
 export async function applyActions(params: {
   agentId: string;
   runId: string;
@@ -366,6 +427,18 @@ export async function applyActions(params: {
     if (a && typeof (a as { type?: unknown }).type === "string") {
       (a as { type: string }).type =
         ACTION_ALIASES[(a as { type: string }).type] ?? (a as { type: string }).type;
+    }
+    // Structured validation: the action path is text-scraped, so a malformed
+    // action (missing task_id, empty body, no files) used to silently no-op or
+    // throw a generic error — a big source of "applied:0" runs. Validate the
+    // required shape up front and feed a SPECIFIC, actionable error back to the
+    // agent instead. This is the schema-validation half of native tool-calling,
+    // applied to the path that's actually wired. Keeps the executor's scope /
+    // risk / approval gating intact (which a raw MCP→REST path would bypass).
+    const shapeError = validateActionShape(a);
+    if (shapeError) {
+      out.errors.push(shapeError);
+      continue;
     }
     try {
       // Gate an action when it's out of scope (enforcement on) OR at/above the
@@ -817,6 +890,12 @@ async function applyOne(
           out.errors.push(
             `update_task: done_requires_evidence — ${a.task_id} has no substantive deliverable attached. share_to_task the actual artifact first, or leave it in "review" for a human.`,
           );
+        } else if (r.error === "verification_failed") {
+          const why = await latestVerificationRationale(a.task_id).catch(() => null);
+          out.errors.push(
+            `update_task: verification_failed — the deliverable on ${a.task_id} did NOT pass the quality check${why ? `: ${why}` : "."} ` +
+              `Don't flip it to done. Comment what's missing and send it back so the maker fixes the actual artifact, then re-review.`,
+          );
         } else {
           out.errors.push(`update_task: ${r.error}`);
         }
@@ -862,6 +941,32 @@ async function applyOne(
       out.trace.push(
         `decompose_goal ${a.goal_id} → ${r.plan.taskCount} task(s), ${r.plan.rootCount} started`,
       );
+      return;
+    }
+    case "ledger_update": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const led = await loadLedger(a.goal_id);
+      if (!led || led.workspaceId !== ws) {
+        out.errors.push(`ledger_update: goal ${a.goal_id} has no ledger in this workspace.`);
+        return;
+      }
+      let n = 0;
+      for (const f of a.facts ?? []) {
+        if (typeof f === "string" && f.trim()) {
+          await appendFact(a.goal_id, f);
+          n++;
+        }
+      }
+      if (a.progress_note && a.progress_note.trim()) {
+        await appendProgressNote(a.goal_id, agentMemberId, a.progress_note);
+        n++;
+      }
+      if (a.dead_end && a.dead_end.trim()) {
+        await appendDeadEnd(a.goal_id, a.dead_end);
+        n++;
+      }
+      out.trace.push(`ledger_update ${a.goal_id} (+${n})`);
       return;
     }
     case "task_comment": {

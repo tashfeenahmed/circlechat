@@ -531,3 +531,66 @@ export const taskActivity = pgTable(
     taskTsIdx: index("task_activity_task_ts_idx").on(t.taskId, t.ts),
   }),
 );
+
+// ───────────────── verification gate (LLM-as-judge before "done") ─────────
+// One row per judge run on a task. The done-gate's byte-heuristic only proves a
+// deliverable EXISTS; this proves it's RELEVANT and not fabricated — gating the
+// review→done flip on an externally-checkable verdict instead of a reviewer's
+// rubber-stamp. Auditable: every verdict + rationale is kept.
+export const taskVerifications = pgTable(
+  "task_verifications",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    taskId: varchar("task_id", { length: 32 }).notNull(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    taskType: varchar("task_type", { length: 16 }).notNull().default("general"), // code | research | design | general
+    method: varchar("method", { length: 16 }).notNull(), // rubric | test | heuristic
+    verdict: varchar("verdict", { length: 12 }).notNull(), // pass | fail | error
+    score: real("score"), // 0..1 (rubric path); null when method != rubric
+    rubricJson: jsonb("rubric_json").$type<Record<string, unknown>>().notNull().default({}),
+    rationale: text("rationale").notNull().default(""),
+    artifactId: varchar("artifact_id", { length: 32 }), // the deliverable judged
+    decidedBy: varchar("decided_by", { length: 32 }), // reviewer member who triggered the flip
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    taskIdx: index("task_verifications_task_idx").on(t.taskId, t.createdAt),
+  }),
+);
+
+export type TaskVerification = typeof taskVerifications.$inferSelect;
+
+// ───────────────── goal ledger (Magentic-One task + progress ledger) ──────
+// One row per goal (1:1). Externalizes the plan, established facts, dead-ends,
+// and progress into structured state the context packet injects every wake —
+// so agents read the ledger instead of re-deriving intent from noisy chat
+// history (the driver of echo loops, no-op runs, and credential dead-ends). The
+// stall machinery drives automatic re-planning when forward motion stops.
+export const goalLedgers = pgTable(
+  "goal_ledgers",
+  {
+    goalId: varchar("goal_id", { length: 32 }).primaryKey(), // 1:1 with goals
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    // TASK LEDGER: the plan + what's known.
+    facts: jsonb("facts").$type<string[]>().notNull().default([]), // verified facts learned
+    guesses: jsonb("guesses").$type<string[]>().notNull().default([]), // unverified assumptions
+    plan: text("plan").notNull().default(""), // current human-readable plan (planner-written, re-plannable)
+    // PROGRESS LEDGER: progress notes + dead-ends not to repeat.
+    progressNotes: jsonb("progress_notes")
+      .$type<Array<{ by: string; note: string; ts: string }>>()
+      .notNull()
+      .default([]),
+    triedDeadEnds: jsonb("tried_dead_ends").$type<string[]>().notNull().default([]),
+    // Stall machinery.
+    stallCount: integer("stall_count").notNull().default(0),
+    lastProgressAt: timestamp("last_progress_at", { withTimezone: true }).defaultNow().notNull(),
+    replanCount: integer("replan_count").notNull().default(0),
+    version: integer("version").notNull().default(1),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    wsIdx: index("goal_ledgers_ws_idx").on(t.workspaceId),
+  }),
+);
+
+export type GoalLedger = typeof goalLedgers.$inferSelect;

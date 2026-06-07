@@ -16,6 +16,8 @@ import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { notify } from "./notifications.js";
 import { liveArtifactRows, isSubstantiveArtifact, purgeArtifactsForTasks } from "./task-artifacts.js";
 import { forgetTaskKnowledge } from "./knowledge.js";
+import { verifyTaskForDone } from "./task-verifier.js";
+import { recordProgress } from "./ledger-core.js";
 
 export const STATUSES = ["backlog", "in_progress", "blocked", "review", "done"] as const;
 export type Status = (typeof STATUSES)[number];
@@ -336,7 +338,7 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
     t!.status !== "done" &&
     !input.archived
   ) {
-    const denial = await assertDoneEvidence(taskId, actorMemberId, t!.title);
+    const denial = await assertDoneEvidence(taskId, actorMemberId, t!.title, t!.bodyMd, workspaceId);
     if (denial) return { error: denial };
   }
   const patch: Partial<typeof tasks.$inferInsert> = { updatedAt: new Date() };
@@ -356,6 +358,15 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
   }
   if (input.progress !== undefined && input.progress !== t!.progress) {
     await logActivity(taskId, actorMemberId, "progress_changed", { to: input.progress });
+  }
+  // Goal ledger: a status change or progress increase on a goal task is real
+  // forward motion — reset that goal's stall counter so the sweeper doesn't
+  // re-plan a goal that's actually moving.
+  const advanced =
+    (input.status !== undefined && input.status !== t!.status) ||
+    (input.progress !== undefined && input.progress > t!.progress);
+  if (advanced && t!.goalId) {
+    await recordProgress(t!.goalId).catch(() => {});
   }
   const [row] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   const [hydrated] = await hydrateTasks([row]);
@@ -922,7 +933,9 @@ async function assertDoneEvidence(
   taskId: string,
   actorMemberId: string,
   taskTitle: string,
-): Promise<"done_requires_evidence" | "done_requires_review" | null> {
+  taskBodyMd: string,
+  workspaceId: string,
+): Promise<"done_requires_evidence" | "done_requires_review" | "verification_failed" | null> {
   const [actor] = await db
     .select({ kind: members.kind })
     .from(members)
@@ -943,12 +956,26 @@ async function assertDoneEvidence(
     return "done_requires_review";
   }
 
-  // Rule 1: a substantive artifact authored by a current assignee or the actor.
+  // Rule 1: a substantive artifact authored by a current assignee or the actor,
+  // that ALSO passes the LLM-judge verification gate. The byte-heuristic proves
+  // a deliverable exists; the judge proves it actually satisfies the task and
+  // isn't fabricated. Judge is dormant unless configured and fails OPEN (a
+  // gateway outage never freezes the board — the heuristic stands alone).
   const eligible = new Set<string>([...assigneeRows.map((r) => r.memberId), actorMemberId]);
   const artifacts = await liveArtifactRows(taskId);
   for (const a of artifacts) {
     if (!eligible.has(a.createdBy)) continue;
-    if (await isSubstantiveArtifact(a, taskTitle)) return null;
+    if (await isSubstantiveArtifact(a, taskTitle)) {
+      const verdict = await verifyTaskForDone({
+        taskId,
+        workspaceId,
+        title: taskTitle,
+        bodyMd: taskBodyMd,
+        decidedBy: actorMemberId,
+      }).catch(() => null);
+      if (verdict) return verdict; // judge said fail → block (reviewer gets the rationale)
+      return null; // judge passed (or dormant/failed-open) → allow
+    }
   }
 
   // Human-in-the-loop override (the verifier of last resort).

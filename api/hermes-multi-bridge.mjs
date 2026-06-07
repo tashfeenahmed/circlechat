@@ -449,6 +449,7 @@ const ALLOWED_ACTION_TYPES = new Set([
   "assign_task",
   "create_goal",
   "decompose_goal",
+  "ledger_update",
   "task_comment",
   "share_files",
   "share_to_task",
@@ -907,17 +908,30 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
   const gs = Array.isArray(packet.goals) ? packet.goals : [];
   if (gs.length) {
     const byId = new Map(gs.map((g) => [g.id, g]));
-    const lines = gs.slice(0, 10).map((g) => {
+    const lines = gs.slice(0, 10).flatMap((g) => {
       const c = g.taskCounts || { total: 0, done: 0, inProgress: 0 };
       const tally = c.total ? ` · ${c.done}/${c.total} done` : ` · UNPLANNED — decompose_goal to fan it out`;
       const kindTag = g.kind === "project" ? "PROJECT " : "";
       const parent = g.parentGoalId ? byId.get(g.parentGoalId) : null;
       const underLine = parent ? ` · under “${parent.title}”` : "";
-      return `  ◆ ${g.id} [${kindTag}${g.status}${tally}] ${g.title}${underLine}`;
+      const head = `  ◆ ${g.id} [${kindTag}${g.status}${tally}] ${g.title}${underLine}`;
+      // GOAL LEDGER — the externalized plan/facts/dead-ends/progress. Read it
+      // before acting; don't re-derive the goal from chat history.
+      const led = g.ledger;
+      if (!led) return [head];
+      const sub = [];
+      if (led.plan) sub.push(`      Plan:\n${led.plan.split("\n").map((l) => `        ${l}`).join("\n")}`);
+      if (led.facts && led.facts.length)
+        sub.push(`      Facts: ${led.facts.slice(-8).map((f) => `• ${f}`).join("  ")}`);
+      if (led.triedDeadEnds && led.triedDeadEnds.length)
+        sub.push(`      Dead-ends (do NOT repeat): ${led.triedDeadEnds.slice(-6).map((d) => `• ${d}`).join("  ")}`);
+      if (led.recentProgress && led.recentProgress.length)
+        sub.push(`      Recent progress: ${led.recentProgress.map((p) => `• ${p}`).join("  ")}`);
+      return [head, ...sub];
     });
     goalsBlock = [
       ``,
-      `YOUR ACTIVE GOALS (what the team is driving toward):`,
+      `YOUR ACTIVE GOALS (what the team is driving toward) — each goal carries a LEDGER (plan, facts, dead-ends, progress). Read the ledger before acting. When you learn a durable fact, finish a step, or hit a dead-end, record it with a ledger_update action ({"type":"ledger_update","goal_id":"goal_…","facts":["…"],"progress_note":"…","dead_end":"…"}) instead of only saying it in chat — the ledger is what your teammates and your next wake actually read.`,
       ...lines,
     ].join("\n");
   }

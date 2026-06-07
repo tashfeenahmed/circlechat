@@ -1,10 +1,11 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { goals, tasks, agents, workspaces } from "../db/schema.js";
 import { loadOrgNodes } from "../routes/org.js";
 import { chatJson, plannerEnabled } from "./completion.js";
 import { createTask, addLink, startBacklogTask, logActivity } from "./tasks-core.js";
+import { writePlan, loadLedger } from "./ledger-core.js";
 import { listAgentSkills, type AgentSkill } from "./agent-skills-fs.js";
 import { embed, cosine, embeddingsEnabled } from "./embeddings.js";
 
@@ -213,6 +214,7 @@ function buildMessages(
   goalBody: string,
   mission: string,
   roster: RosterEntry[],
+  replanNote?: string,
 ) {
   const rosterLines = roster
     .map((r) => {
@@ -239,6 +241,7 @@ function buildMessages(
     mission ? `WORKSPACE MISSION: ${mission}` : "",
     `GOAL: ${goalTitle}`,
     goalBody ? `GOAL DETAIL: ${goalBody}` : "",
+    replanNote || "",
     "",
     "ROSTER (assign each task to one @handle):",
     rosterLines || "(no teammates available — leave assignee empty)",
@@ -281,31 +284,52 @@ export async function planGoal(params: {
   goalId: string;
   workspaceId: string;
   actorMemberId: string;
+  // Re-plan: the goal already has tasks but stalled. Bypass the idempotency
+  // guard and feed the ledger's known dead-ends/facts into the prompt so the
+  // planner produces a DIFFERENT plan instead of re-proposing what failed.
+  isReplan?: boolean;
 }): Promise<{ plan: PlanResult } | { error: PlanError }> {
-  const { goalId, workspaceId, actorMemberId } = params;
+  const { goalId, workspaceId, actorMemberId, isReplan = false } = params;
 
   const [goal] = await db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
   if (!goal) return { error: "goal_not_found" };
   if (goal.workspaceId !== workspaceId) return { error: "wrong_workspace" };
   if (!plannerEnabled()) return { error: "planner_unconfigured" };
 
-  // Idempotency: don't re-plan a goal that already has live tasks.
-  const existing = await db
-    .select({ id: tasks.id })
-    .from(tasks)
-    .where(and(eq(tasks.goalId, goalId), eq(tasks.archived, false)))
-    .limit(1);
-  if (existing.length) return { error: "already_planned" };
+  // Idempotency: don't re-plan a goal that already has live tasks — UNLESS this
+  // is an explicit re-plan triggered by the stall detector.
+  if (!isReplan) {
+    const existing = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(eq(tasks.goalId, goalId), eq(tasks.archived, false)))
+      .limit(1);
+    if (existing.length) return { error: "already_planned" };
+  }
 
   const roster = await loadRoster(workspaceId);
   if (!roster.length) return { error: "no_roster" };
 
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
 
+  // On re-plan, build a corrective note from the ledger so the planner avoids
+  // known dead-ends and builds on established facts.
+  let replanNote = "";
+  if (isReplan) {
+    const led = await loadLedger(goalId).catch(() => null);
+    const parts: string[] = [
+      "NOTE: this goal STALLED under the previous plan — produce a DIFFERENT decomposition that gets it moving.",
+    ];
+    if (led?.facts.length) parts.push(`ESTABLISHED FACTS (build on these): ${led.facts.join("; ")}`);
+    if (led?.triedDeadEnds.length)
+      parts.push(`DEAD-ENDS (do NOT propose these again): ${led.triedDeadEnds.join("; ")}`);
+    replanNote = parts.join("\n");
+  }
+
   await db.update(goals).set({ status: "planning", updatedAt: new Date() }).where(eq(goals.id, goalId));
 
   const raw = await chatJson<unknown>(
-    buildMessages(goal.title, goal.bodyMd, ws?.mission ?? "", roster),
+    buildMessages(goal.title, goal.bodyMd, ws?.mission ?? "", roster, replanNote),
     { temperature: 0.2, maxTokens: 4000, timeoutMs: 150_000 },
   );
   const parsed = PlanSchema.safeParse(raw);
@@ -333,6 +357,17 @@ export async function planGoal(params: {
   if (hasCycle(planned)) {
     await db.update(goals).set({ status: "open", updatedAt: new Date() }).where(eq(goals.id, goalId));
     return { error: "cyclic_plan" };
+  }
+
+  // Re-plan only: retire the stalled OPEN tasks (keep done ones — that work is
+  // real) so the new decomposition replaces them instead of duplicating. Done
+  // here, only once we have a valid new plan in hand, so a failed re-plan
+  // doesn't wipe the board.
+  if (isReplan) {
+    await db
+      .update(tasks)
+      .set({ archived: true, updatedAt: new Date() })
+      .where(and(eq(tasks.goalId, goalId), eq(tasks.archived, false), ne(tasks.status, "done")));
   }
 
   // Precompute embedding vectors for semantic routing: each teammate's
@@ -424,6 +459,19 @@ export async function planGoal(params: {
   }
 
   await db.update(goals).set({ status: "in_progress", updatedAt: new Date() }).where(eq(goals.id, goalId));
+
+  // Externalize the plan into the goal ledger so every agent wake reads it
+  // (via the context packet) instead of reconstructing intent from chat. On a
+  // re-plan this preserves accumulated facts/dead-ends and bumps the version.
+  const planText = created
+    .map(
+      (c) =>
+        `- ${c.title}${c.assigneeHandle ? ` → @${c.assigneeHandle}` : " (unassigned)"}` +
+        `${c.dependsOn.length ? ` [after: ${c.dependsOn.join(", ")}]` : ""}` +
+        `${c.reason ? ` — ${c.reason}` : ""}`,
+    )
+    .join("\n");
+  await writePlan({ goalId, workspaceId, plan: planText, isReplan }).catch(() => {});
 
   return {
     plan: { goalId, taskCount: created.length, rootCount, tasks: created },
