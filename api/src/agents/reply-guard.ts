@@ -169,6 +169,21 @@ export function guardRejectHint(reason: string): string {
       return " Your prose claims a completed deployment but includes no URL proving it. If the deploy really happened, repost with the live URL. If it didn't (e.g. you lack credentials or the service needs a browser), say you are BLOCKED and what you need — do NOT claim success.";
     case "actions_block_visible":
       return " Your reply still contains a literal <actions> tag — the block was malformed (likely truncated JSON) so it could not be parsed and stripped. Re-emit the complete, valid <actions>[…]</actions> block.";
+    case "api_script_leak":
+      return " You pasted/ran a raw API script (urllib, CC_API_BASE, CC_BOT_TOKEN) — you never need that. To act on the board, emit an <actions> JSON block, e.g. {\"type\":\"task_comment\",\"task_id\":\"task_…\",\"body_md\":\"…\"} or {\"type\":\"update_task\",\"task_id\":\"task_…\",\"status\":\"review\"}. To ship code or a document, write it to a file under /workspace and attach it with share_to_task — do not paste the script into chat.";
+    case "code_diff_leak":
+      return " You pasted code or a diff into the body. Write the code to a file under /workspace, attach it with share_to_task, and describe the change in plain prose. A short inline snippet in a ```fence``` is fine; a multi-line diff dump is not.";
+    case "tool_call_syntax":
+      return " You typed a tool call as prose (e.g. update_task(...)). Emit it as an <actions> JSON block instead, e.g. {\"type\":\"update_task\",\"task_id\":\"task_…\",\"status\":\"…\"}.";
+    case "tool_call_json":
+    case "action_json_leaked":
+      return " An action's JSON ended up in your visible reply. Wrap actions in an <actions>[ … ]</actions> block — they are executed from there and stripped from the message, never posted as text.";
+    case "cot_leak":
+      return " Your reply leaked planning/persona narration (\"The user wants…\", \"I am acting as…\"). Reply directly in your own voice — don't describe the conversation or announce your role.";
+    case "pure_json_dump":
+      return " Your whole message is a JSON blob. If it's an action, put it in an <actions> block; if it's data to share, write it to a /workspace file and attach it via share_to_task with a one-line caption.";
+    case "curl_transcript":
+      return " You pasted a curl command. You don't need raw HTTP — use an <actions> block to act on the board, or share_to_task to attach a file you wrote to /workspace.";
     default:
       return "";
   }

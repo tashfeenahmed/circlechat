@@ -30,7 +30,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
 import { notifyForMessage } from "../lib/notifications.js";
-import { checkReplyBody } from "../agents/reply-guard.js";
+import { checkReplyBody, guardRejectHint } from "../agents/reply-guard.js";
 import { checkRecentDuplicate } from "../agents/dedupe.js";
 import { sanitizeAttachments } from "../agents/executor.js";
 import {
@@ -257,7 +257,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
         { agentId: req.agentCtx!.agentId, reason: guard.reason },
         "reply_guard_rejected",
       );
-      return reply.code(422).send({ error: "reply_rejected", reason: guard.reason });
+      return reply.code(422).send({ error: "reply_rejected", reason: guard.reason, hint: guardRejectHint(guard.reason).trim() });
     }
     const dup = await checkRecentDuplicate(body.conversationId, guard.bodyMd);
     if (!dup.ok) {
@@ -802,7 +802,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
         { agentId: req.agentCtx!.agentId, taskId, reason: guard.reason },
         "task_comment_guard_rejected",
       );
-      return reply.code(422).send({ error: "comment_rejected", reason: guard.reason });
+      return reply.code(422).send({ error: "comment_rejected", reason: guard.reason, hint: guardRejectHint(guard.reason).trim() });
     }
     return taskSend(
       reply,
