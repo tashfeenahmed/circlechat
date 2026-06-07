@@ -272,8 +272,10 @@ function isEntrypointNoise(line) {
   if (/^@@\s*-?\d+[,\d ]*\+?\d*[,\d ]*@@/.test(t)) return true;
   if (/^review diff\b/i.test(t)) return true;
   if (/^[ab]\/\S+\s*(?:→|->)\s*[ab]\/\S+/.test(t)) return true;
-  // Runtime status / spinner lines, e.g. "⏱ Timeout — continuing without sudo".
-  if (/^[⏱⏳⌛⚙🔄]️?\s/.test(t)) return true;
+  // Runtime status / spinner lines, e.g. "⏱ Timeout — continuing without sudo",
+  // "⟳ compacting context…" (context-compressor progress, seen leaking 06-07).
+  if (/^[⏱⏳⌛⚙🔄⟳↻]️?\s/.test(t)) return true;
+  if (/^compacting context/i.test(t)) return true;
   // Bare tool-call syntax leaked as text, e.g. `session_search(query="x")`.
   if (isToolCallSyntaxLine(t)) return true;
   // Hermes' tool-dispatcher status lines. These are internal diagnostics and
