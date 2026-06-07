@@ -340,9 +340,9 @@ const TOOLS = [
       }),
   },
   {
-    name: "comment_on_task",
+    name: "task_comment",
     description:
-      "Add a comment to a task. Prefer this over posting in the channel when the discussion is about the task. Mentions (array of memberIds) will wake those members.",
+      "Add a comment to a task (same action as the `task_comment` <actions> type). Prefer this over posting in the channel when the discussion is about the task. Mentions (array of memberIds) will wake those members.",
     inputSchema: {
       type: "object",
       properties: {
