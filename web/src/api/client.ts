@@ -302,6 +302,45 @@ export interface ApprovalRow {
   createdAt: string;
 }
 
+export interface AnalyticsAgent {
+  id: string;
+  name: string;
+  handle: string;
+  avatarColor: string;
+  status: string;
+  title: string;
+  lastActiveAt: string | null;
+  tasksCompleted: number;
+  tasksOpen: { backlog: number; in_progress: number; review: number };
+  runs: { total: number; ok: number; failed: number; byTrigger: Record<string, number> };
+  actionsApplied: number;
+  runsWithErrors: number;
+  messages: number;
+  taskComments: number;
+  approvalsPending: number;
+}
+
+export interface AnalyticsData {
+  days: number;
+  agents: AnalyticsAgent[];
+  series: Array<{ date: string; byAgent: Record<string, number> }>;
+  totals: {
+    tasksCompleted: number;
+    tasksCompletedByHumans: number;
+    actionsApplied: number;
+    runs: number;
+    failedRuns: number;
+    openTasks: number;
+  };
+  recentCompletions: Array<{
+    taskId: string;
+    title: string;
+    byHandle: string;
+    byKind: string;
+    ts: string;
+  }>;
+}
+
 export type NotificationKind =
   | "mention"
   | "dm"

@@ -15,6 +15,7 @@ import OrgPage from "./pages/Org";
 import SkillsPage from "./pages/Skills";
 import AgentPage from "./pages/AgentDetail";
 import ApprovalsPage from "./pages/Approvals";
+import AnalyticsPage from "./pages/Analytics";
 import BoardPage from "./pages/Board";
 import GoalsPage from "./pages/Goals";
 import SettingsPage from "./pages/Settings";
@@ -99,6 +100,7 @@ function Shell() {
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/agents/:id" element={<AgentPage />} />
         <Route path="/approvals" element={<ApprovalsPage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
     </Routes>

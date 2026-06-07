@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target } from "lucide-react";
+import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target, BarChart3 } from "lucide-react";
 import { useConversations, useMe, useMembersDirectory, useApprovals, useTasks } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
@@ -156,6 +156,15 @@ export default function Sidebar() {
           {pendingApprovals > 0 && (
             <span className="sb-badge mention">{pendingApprovals}</span>
           )}
+        </Link>
+        <Link
+          to="/analytics"
+          className={`sb-item ${location.pathname === "/analytics" ? "active" : ""}`}
+        >
+          <span className="sb-glyph">
+            <BarChart3 size={14} strokeWidth={2} />
+          </span>
+          <span className="sb-name">Analytics</span>
         </Link>
         <Link
           to="/skills"

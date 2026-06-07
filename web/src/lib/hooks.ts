@@ -15,6 +15,7 @@ import {
   type TaskArtifact,
   type Notification,
   type Goal,
+  type AnalyticsData,
 } from "../api/client";
 import { bus } from "../ws/client";
 import { useBus } from "../state/store";
@@ -339,6 +340,24 @@ export function useApprovals() {
     return bus.on((ev) => {
       if (ev.type === "approval.new" || ev.type === "approval.decided") {
         qc.invalidateQueries({ queryKey: ["approvals"] });
+      }
+    });
+  }, [qc]);
+  return q;
+}
+
+export function useAnalytics(days: number) {
+  const qc = useQueryClient();
+  const q = useQuery<AnalyticsData>({
+    queryKey: ["analytics", days],
+    queryFn: () => api.get(`/analytics?days=${days}`),
+    staleTime: 15_000,
+  });
+  useEffect(() => {
+    return bus.on((ev) => {
+      // Run completions and task mutations both move the numbers.
+      if (ev.type === "agent.run.finished" || String(ev.type).startsWith("task.")) {
+        qc.invalidateQueries({ queryKey: ["analytics"] });
       }
     });
   }, [qc]);
