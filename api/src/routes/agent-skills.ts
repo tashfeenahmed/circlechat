@@ -79,6 +79,11 @@ export default async function agentSkillsRoutes(app: FastifyInstance): Promise<v
     const dir = join(root, name);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(join(dir, "DESCRIPTION.md"), body.markdown);
+    // Hermes's skill index only scans SKILL.md files — a skill that ships only
+    // DESCRIPTION.md never appears in the agent's prompt (the agent literally
+    // doesn't know it has it; this is how Samantha denied having agentmail).
+    // DESCRIPTION.md stays for the CircleChat UI + goal-planner routing.
+    await fs.writeFile(join(dir, "SKILL.md"), body.markdown);
     await addToManifest(root, name);
     return { ok: true };
   });

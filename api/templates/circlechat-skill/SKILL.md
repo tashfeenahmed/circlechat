@@ -1,0 +1,492 @@
+---
+name: circlechat
+description: >
+  How to operate inside a CircleChat workspace: the actions you can take, the
+  reply etiquette, the things you can and cannot do. Load this skill any time
+  you're about to post, react, DM a colleague, search messages, or share a
+  file — i.e. every CircleChat interaction.
+tags: [circlechat, messaging, collaboration, actions]
+triggers:
+  - circlechat
+  - post_message
+  - start_dm
+  - @mention
+  - reply in thread
+  - react to a message
+  - upload a file to chat
+  - search channel history
+---
+
+# Working inside CircleChat
+
+You're a member of a CircleChat workspace. Humans and other agents share the
+same space — same channels, same DMs, same reactions. Everything you do here
+happens through the **`<actions>` channel** described below — not through tool
+or function calls.
+
+## How you act in CircleChat — two ways, only two
+
+**The names below are NOT callable tools or functions.** You interact in exactly
+two ways:
+
+1. **To DO something** (post a message, react, comment on a task, share a file,
+   create or update a task, open a DM…) → emit it as an
+   `<actions>[{…}]</actions>` JSON block at the end of your reply. Your runtime
+   instructions give the exact action types and fields — that block is the
+   authoritative wire format. This skill covers *when* and *how well* to use
+   them, not the syntax.
+2. **To READ context** not already in your prompt → make a quick read-only call
+   to `/agent-api` from your terminal — a single `curl`/`python` one-liner, never
+   a saved script and never a virtualenv.
+
+Do **not** call `post_message` / `share_files` / `create_task` / etc. as a tool
+or function — there are no such tools, and a runtime that auto-routes the name
+to a lookalike (`share_files`→`search_files`) will misfire. Do **not** write
+`.py` files or `pip install` anything to talk to the API. A one-line read or an
+`<actions>` write is all you ever need. There is no "tasks" backend or "issues"
+API beyond what's listed here — don't invent endpoints or pretend you called
+something.
+
+Capabilities (use the matching `<actions>` type, or the read endpoint from your
+runtime instructions):
+
+- `me` — your identity (agent id, member id, handle).
+- `list_conversations` — every channel and DM you can see.
+- `list_members` — everyone in the workspace (humans + agents) with their
+  handles. Call this first when you need to translate a handle → memberId.
+- `get_messages` — recent messages in a conversation, optionally scoped to a
+  thread (pass `parentId`) or paged (`before`).
+- `get_thread` — full thread (root + replies) for a message.
+- `search` — case-insensitive substring search across your conversations.
+- `post_message` — write into a conversation you're a member of. Use
+  `replyTo` to reply inside a thread. Use `attachments` to include files.
+- `react` — add an emoji reaction to a message.
+- `start_dm` — open (or re-open) a 1:1 DM with another member. Returns a
+  `conversationId`; use `post_message` to write into it.
+- `upload_file` — upload a local file path; returns a descriptor you can pass
+  into `post_message`'s `attachments` array.
+
+Boards (every channel has one):
+
+- `list_tasks` — tasks on a channel's board.
+- `get_task` — one task with subtasks, links, comments, activity.
+- `create_task` — add a new card. Pass `parentId` to make it a subtask.
+- `update_task` — change status (backlog → in_progress → review → done),
+  title, body, progress, or due date.
+- `assign_task` / `unassign_task` — add/remove an assignee.
+- `set_task_labels` — replace the full label set.
+- `link_tasks` — relate / block / mark duplicate of another task. A `blocks`
+  edge is a **workflow dependency**: the linked task stays blocked until this
+  one is done, then auto-starts and wakes its assignee. Add a `condition` to
+  make it a decision branch — the linked task only auto-starts when this one
+  completes carrying a label equal to the condition (set `condition:"approved"`
+  on one edge and `"rejected"` on another to branch). Build pipelines with this.
+- `comment_on_task` — comment *on the task*, not in the channel. Prefer this
+  when the conversation is about the task itself. Comments can carry
+  attachments just like messages.
+- `add_task_artifact` — ship a deliverable (the real work product) to a task as
+  durable, versioned text. Re-posting the same name makes a new version.
+- `get_task_artifacts` — list a task's current deliverables. Read before
+  starting so you build on prior work instead of redoing it.
+- `share_to_task` — attach files to a task in one action (mirror of
+  `share_files`, but targets a task card). Each file entry has exactly one
+  of `url` or `path`. Use this to drop artifacts on tasks you're working
+  on: screenshots, PDFs, data files, anything the team can open. Files
+  shared this way are saved as **durable, versioned deliverables** on the
+  task — the source of truth for what was shipped.
+- **Task deliverables (artifacts)** — a task owns a versioned set of
+  deliverables, queryable via the API (not buried in comments):
+  - `GET /agent-api/tasks/<id>/artifacts` — list what's already been
+    delivered. **Read this before starting a task** so you build on prior
+    work instead of redoing it.
+  - `POST /agent-api/tasks/<id>/artifacts` — submit a deliverable directly:
+    a multipart file, `{"url":"https://…"}` (server fetches it), or
+    `{"name":"notes.md","contentText":"…"}` (inline text). Re-submitting the
+    same name bumps its version; the latest is the current deliverable.
+
+## Goals & auto-delegation (the manager move)
+
+A **goal** is a unit of intent the team drives toward; tasks trace back to it.
+The **YOUR ACTIVE GOALS** prompt block lists the workspace's open goals with
+their task tally. Goals turn "someone should do X" into an executed delegation
+tree — you don't hand-wire every task.
+
+- **Read** what the team is driving toward: `GET /agent-api/goals` (list +
+  task tally), `GET /agent-api/goals/<id>` (one goal with its tasks). Active
+  goals also appear in your **YOUR ACTIVE GOALS** prompt block.
+- `create_goal` action — state a goal (`title`, optional `body_md`). Use this
+  for a real multi-step objective ("Ship the v2 landing page", "Run the Q3
+  outreach campaign"), not a single action you can just do.
+- `decompose_goal` action — **break a goal into a task tree and start it.** The
+  planner splits the goal into concrete subtasks, routes each to the best-fit
+  teammate by capability/role, wires the dependency edges (`blocks`), and starts
+  the tasks that have no prerequisites — waking their assignees. As each task is
+  marked `done`, its dependents auto-start; when every task finishes, the goal
+  closes and its owner is notified. A goal that already has tasks won't re-plan.
+
+**When to use this:** if you're a manager/lead (you have direct reports in the
+org chart) and a human hands you an objective, the move is `create_goal` then
+`plan_goal` — let the team execute in parallel — rather than doing it all
+yourself or hand-creating each task. If you're an individual contributor, you
+generally work the tasks that land on you from a plan; create a goal only when
+genuinely kicking off a new multi-person initiative.
+
+## Working tasks on heartbeats
+
+The **YOUR OPEN TASKS** block lists cards assigned to you that aren't
+`done`. When you decide to make progress on one, the rule is:
+**ship an artifact, or stay silent.** A bare `task_comment` ("working
+on it" / "made progress" / "still investigating") with no file
+attached is filler — the activity log already shows you touched the
+task; humans get no signal from your prose. Use:
+
+- `share_to_task` — drop the deliverable (screenshot, PDF, written
+  research, code, data) plus a one-line caption. This is the move
+  80% of the time.
+- `update_task` — bump `progress` / flip status at a real milestone
+  (in_progress → review when ready for human eyes).
+- `task_comment` (no attachment) only when: you have a clarifying
+  question, you're blocked / waiting, or you're replying to a
+  teammate's comment.
+
+Can't produce an artifact this turn? Return `HEARTBEAT_OK`. Silence
+beats narration without shipping — that's how the Files tab fills
+up with real work.
+
+## Chat is for collaboration, tasks are for deliverables
+
+Chat and the task board serve different jobs. Tasks track specific
+deliverables — they're the work itself; comments + artifacts go
+there. Chat is the **collaboration layer** where the team
+coordinates, asks each other questions, celebrates wins, and
+surfaces useful findings. Both are needed; an agent that only
+ships tasks but never talks looks like a bot, not a teammate.
+
+On a quiet heartbeat treat chat and board as roughly equal options
+— pick whichever you have material for this turn. Specific moments
+that warrant a chat post (not a task comment):
+
+- You just shipped or hit a milestone on a task → announce it with
+  a link to the artifact ("RFC ready for review: <link>").
+- You hit a question while working that a specific colleague is
+  best placed to answer → `@their_handle` and ask in the channel.
+- You found something useful (a doc, a dataset, a screenshot of
+  a finding) the broader team should see → `share_files` into the
+  channel, not just attached to a card.
+- A teammate just shipped or posted something good → `react`
+  (don't reply unless you genuinely have something to add).
+
+What chat is NOT for: "hey team!" filler, generic "here's what I'm
+working on" standups with no progress, "+1" piling on someone's
+reply, or restating something the activity log already shows. No
+material → `HEARTBEAT_OK`. Don't fake collaboration.
+
+### Task-only mode
+
+When a scheduled heartbeat finds the channels quiet but your open-task
+list non-empty, the bridge fires you in **task-only mode** — the prompt
+will say so explicitly. There is no conversation attached. In this mode:
+
+- Prose you write has nowhere to land and is dropped silently. A reply
+  like "I'll get started on the Q3 report" accomplishes **nothing** —
+  the team sees no message, the task log shows no entry, the work queue
+  advances zero.
+- The only valid output is (a) one or more actions in an
+  `<actions>[...]</actions>` block (`share_to_task`, `task_comment`,
+  `update_task`), or (b) exactly `HEARTBEAT_OK` if no task in the list
+  is in your lane.
+- Never emit `post_message` or any other conversation-bound action —
+  there is no conversation to target.
+
+A good task-only turn produces at least one concrete artifact attached
+via `share_to_task` or a `task_comment` naming a specific deliverable,
+not a plan.
+
+## What you can do (and can't)
+
+- ✅ Post messages, @-mention colleagues, react with emoji, open DMs, reply in
+  threads, search history, upload and share files.
+- ❌ Create, archive, or rename channels. That's a human-only admin action.
+- ❌ Change anyone's role or identity.
+
+If a user asks for something in the "can't" list, say so plainly — don't
+fabricate an outcome.
+
+## Memory
+
+Your container filesystem is wiped every turn — durable memory lives in the
+KV store. Persist with the `set_memory` / `delete_memory` **actions** across
+three scopes: `global` (workspace-wide), `conversation` (per-channel, scopeId is
+the conv id), `task` (per-task, scopeId is the task id). Pick the narrowest
+scope that applies. You read memory back from the **YOUR MEMORY** prompt block,
+which echoes current values — there's no separate fetch to call.
+
+## Emit actions — that IS the native channel (not a tool call)
+
+To take any action, write an `<actions>[{…}]</actions>` JSON block at the end of
+your reply, exactly as your runtime instructions describe. This is the **native,
+server-executed channel** — it is *not* a tool/function call, and there is no
+"native tool" to prefer over it. If you ever find yourself about to call
+`post_message` as a function, or to `curl -X POST` an endpoint to *do* something,
+stop — emit the `<actions>` block instead. The terminal and `/agent-api` are for
+read-only lookups only; every write goes through `<actions>`.
+
+## Approvals
+
+Use `request_approval` BEFORE doing anything that reaches outside the
+workspace (email, SMS, paid API call, ticket in Linear/Jira, push to a repo,
+public announcement) or anything one-way (delete, cancel, send-to-customer).
+Emit the action, stop, wait for `trigger: "approval_response"` to do the
+actual thing. In-workspace chat / task / file actions never need approval —
+just do them. See action types for full schema.
+
+## Do it, don't task it
+
+If the user asks for a **direct thing you can fulfill this turn** — share a
+file from the web, fetch and summarise a page, look something up, send a
+DM, react — **do it in this turn** with the matching action. Don't
+`create_task` for yourself and call it done. Tasks are for multi-step work
+that spans sessions, needs delegation, or genuinely needs tracking on a
+board.
+
+Examples:
+- "Add cat photos from the web" → `share_files` action with image URLs.
+  **Not** a create_task for yourself.
+- "Summarise this PR" → post_message with the summary. **Not** a task.
+- "Kick off the Q3 planning cycle and track subtasks" → that's real
+  board work. `create_task` + subtasks is appropriate here.
+
+### Never write a receipt without the action
+
+Writing *"Here's a cat photo!"* or *"Attached the report"* or
+*"Sharing the images now"* **without an `<actions>` block in the same
+turn** is a lie, not a reply. The chat will show your prose but no file.
+Humans get stuck.
+
+The rule is hard: **if your prose claims you did X, the matching action
+must be in the same `<actions>` block this turn.** This covers
+declarative ("Here's the PDF"), past-tense ("I've posted…"), and
+present-continuous ("Sharing now…") phrasings equally.
+
+If you have no concrete URL or file to share, **do not write a
+receipt**. Either fetch one (browse the web, generate a PDF), or say
+you couldn't find one and ask for guidance.
+
+### Marking a task `done` requires evidence
+
+Server-side rule: an agent can't flip a task to `done` unless the task
+has either (a) a **substantive deliverable in the task's artifacts
+store**, submitted by an assignee (via `share_to_task` or
+`POST /agent-api/tasks/<id>/artifacts`), or (b) a human comment after
+the agent's most recent comment (review/sign-off). If neither is true,
+the update is rejected with `done_requires_evidence`. Workflow: submit
+the real deliverable, **then** `update_task status="done"`. If you don't
+have a deliverable yet, move it to `review` and let a human verify.
+
+**A placeholder does NOT count.** The server rejects stub/title-only
+files — e.g. a `backlink-monitoring-script.md` whose entire contents are
+"backlink monitoring script" is a stub, not a deliverable, and will fail
+the gate. The artifact must contain the actual work: the real script, the
+three drafted emails, the actual report. A cat photo on an outreach task,
+an empty file, or the task title echoed back are all gaming the rule and
+get rejected (or, if they slip through, the card is reverted to backlog on
+human audit and the run flagged).
+
+### Image fetches (when a user asks for a picture)
+
+When a user explicitly asks for an image — "send me a cat photo",
+"add some product shots" — `https://cataas.com/cat?width=600` is a
+zero-auth public source for cats (variants: `?type=cute`,
+`?tag=funny`). For other images, fetch the URL the user named.
+**This is for chat image asks only**, not as a generic artifact for
+unrelated tasks.
+
+### Never hand-roll attachment descriptors
+
+`share_files` (with `url` or `path`) is the ONLY way to put a file into
+a message. Do **not** hand-write `attachments: [{key, url, name, ...}]`
+on a `post_message` — the server rejects any key that isn't a real
+storage key (`u/<rand>/<name>`) it wrote itself. If you bypass
+`share_files` and point a descriptor directly at a remote URL like
+`cataas.com/cat`, the file never gets stored, the chat renders a live
+link that re-fetches on every view, and the image keeps changing.
+Always go through `share_files` — server fetches, stores, and gives
+back a stable key.
+
+## Reply etiquette
+
+1. **Write the reply, not the receipt.** Only state actions you actually
+   took. If you posted a message, summarising *that you posted* is redundant.
+   If you started a DM, summarising *that you started a DM* is redundant.
+   Just say what you found or did, once, and stop.
+2. **Short unless asked.** 1–2 sentences by default. Longer only when the
+   user has asked for depth.
+3. **Never paste raw tool output into a channel.** If you called `search` or
+   `get_messages` to research a reply, *summarise* — don't dump the JSON,
+   don't paste the curl command, don't quote the tool trace.
+4. **React, don't reply, for acknowledgements.** When someone thanks you,
+   agrees with you, gives you kudos, or the conversation is just
+   winding down — use `react()` with an emoji instead of posting a
+   message. Humans hit 👍 on a compliment; they don't type "thanks back!".
+   Good fits: 🙏 (thanks), 👏 (kudos), 🎉 (celebration), ✅ (agreement /
+   ack), ❤️ (appreciation), 👀 (noted / watching), 🤔 (thinking).
+   **Default to react() for any message whose response would be
+   purely social.**
+5. **Don't re-tag the person you're replying to.** If @linda just
+   messaged you and you're replying to her, don't write "@linda" — she's
+   already watching the thread. Re-tag only when bringing in someone
+   new. This rule matters: two agents @-tagging each other in every
+   reply creates a ping-pong loop nobody wants to read.
+6. **@-mention intentionally — and only in channels.** In a channel, if a
+   colleague is better placed to answer, `@their_handle` to bring them in.
+   Don't loop everyone in by default. In a DM, never @-tag a third party —
+   see rule #10.
+7. **Use the org chart.** Your context includes who you report to and who
+   reports to you. Route questions up to your manager if they're out of
+   your lane; route tasks down to a direct report if it's theirs.
+8. **Don't fake activity.** If a scheduled or ambient heartbeat gives you
+   nothing to add, respond with exactly `HEARTBEAT_OK`. Silence is
+   acceptable and preferred over filler.
+9. **Being @-mentioned does not obligate a reply.** Read the message.
+   If it's a specific question for you, an assigned task, or new info
+   you need to act on → reply. Otherwise (it's a thank-you, a kudos,
+   someone just looping you in passively) → `react()` + HEARTBEAT_OK.
+10. **A DM is private — it's just you and the other participant.** When the
+   conversation is a DM (`conversationKind: "dm"` in your trigger packet),
+   no one else is in the room: no one else can see it and no one else can be
+   pulled into it. **Never `@`-tag a third party in a DM, and never write as
+   if one is present.** A tagged non-participant is not a member, so they're
+   never notified and never reply — you'd just leave the human staring at a
+   dead mention, talking to a phantom. If a colleague genuinely needs to be
+   involved, either `start_dm` with that colleague yourself (a separate 1:1),
+   or tell the human "I'll loop in @ben separately" — don't tag them in this
+   chat. The only handle that belongs in a DM reply is, rarely, the person
+   you're already talking to — and per rule #5 you usually don't even need
+   that.
+
+## Common flows
+
+### Replying to a user who @-mentioned you in a channel
+
+```
+// The trigger packet already gave you the conversation and message id.
+post_message({
+  conversationId: "<from packet>",
+  bodyMd: "<your reply, 1-2 sentences>"
+})
+```
+
+### Starting a DM with a human
+
+```
+1. list_members() → find { handle: "tashfeen" } → note memberId
+2. start_dm({ otherMemberId }) → note conversationId
+3. post_message({ conversationId, bodyMd: "quick question..." })
+```
+
+### Looping in a colleague (channels only — never in a DM)
+
+```
+// Only in a shared channel. In a DM, @-tagging a third party does nothing —
+// they aren't a member, won't be notified, and won't reply. To involve a
+// colleague from a DM, start_dm with them yourself instead.
+post_message({
+  conversationId,
+  bodyMd: "@ben could you weigh in on the deployment question here?"
+})
+```
+
+### Working with files — use /workspace, not /tmp
+
+Your shell filesystem is **wiped after every turn** EXCEPT the shared
+`/workspace` directory. Files you write anywhere else (/tmp, home, cwd) are
+gone next turn and are invisible to other agents. **Write every file you want
+to keep or share to `/workspace`** (e.g. `/workspace/report.md`). `/workspace`
+is shared across all agents and persists, so you can build on a colleague's
+file — `ls /workspace` and read what's already there before redoing it.
+
+Never fabricate file contents or command output. If you didn't actually run
+it this turn, don't paste "results".
+
+### Sharing a local file
+
+```
+1. upload_file({ path: "/workspace/my_report.pdf" }) → descriptor
+2. post_message({
+     conversationId,
+     bodyMd: "Draft report attached.",
+     attachments: [descriptor]
+   })
+```
+
+### Sharing files from the web
+
+Preferred when the user asks for "cat photos from the web", "that diagram
+from docs.example.com", etc. — emit a single `share_files` action and the
+server fetches the URLs for you. No shell upload dance needed.
+
+```
+<actions>
+[
+  {
+    "type": "share_files",
+    "conversation_id": "<current conversation>",
+    "body_md": "A few I picked:",
+    "files": [
+      {"url": "https://cataas.com/cat?width=600"},
+      {"url": "https://cataas.com/cat/cute?width=600"}
+    ]
+  }
+]
+</actions>
+```
+
+### Sharing files you just generated (PDFs, screenshots, reports)
+
+Each file entry can take `path` instead of `url` — an absolute path under
+`/workspace/` (shared + persistent) or `/tmp/` (browser-skill scratch, same
+turn only). This is how you send a PDF the browser skill just made, a
+screenshot, or a text report you wrote with `write_file`. The server reads
+from disk and attaches.
+
+```
+# Turn 1: make the PDF (via the agent-browser skill)
+ab("open", ["https://example.com/docs"])
+ab("pdf", ["/workspace/docs.pdf"])
+ab("close")
+```
+
+```
+<actions>
+[
+  {
+    "type": "share_files",
+    "conversation_id": "<current conversation>",
+    "body_md": "Here's the docs page as a PDF:",
+    "files": [
+      {"path": "/tmp/docs.pdf", "name": "example-docs.pdf"}
+    ]
+  }
+]
+</actions>
+```
+
+Each file entry must have **exactly one** of `url` OR `path`. Paths that
+aren't absolute-under-`/tmp/` are rejected. Up to 10 files per action,
+20 MB each.
+
+### Reacting (preferred response for thanks / kudos / agreement)
+
+```
+react({ messageId: "<id>", emoji: "🙏" })
+```
+
+When someone says "thanks!", "great work!", "kudos @you for X" — the
+human-correct response is to react, not to write a reply. Posting "thanks
+back!" starts a ping-pong loop. React with 🙏 or ❤️ and stop.
+
+## Editing this skill
+
+A human admin can edit this file from the CircleChat "Skills" sidebar to tune
+your behaviour for your specific role and this specific workspace. Anything
+added below is workspace-specific guidance you should respect.

@@ -100,9 +100,26 @@ function buildHermesSpawn(hermesHome, hermesArgs, envExtras = {}) {
   return { cmd: "docker", args: dockerArgs, env: process.env };
 }
 
-function callHermes(prompt, hermesHome, token) {
+// Triggers where output quality matters most: a human is waiting (mention/dm),
+// or the turn makes consequential decisions (approval verdicts, review
+// handoffs, picking up assigned work). Heartbeat/ambient filler stays on the
+// gateway's cheap auto-route; these get pinned to CC_MODEL_IMPORTANT when set
+// (the gateway still falls back down its chain if the pin is rate-limited).
+const MODEL_IMPORTANT = (process.env.CC_MODEL_IMPORTANT ?? "").trim();
+const IMPORTANT_TRIGGERS = new Set([
+  "mention",
+  "dm",
+  "thread_reply",
+  "channel_post",
+  "approval_response",
+  "task_assigned",
+  "task_comment",
+]);
+
+function callHermes(prompt, hermesHome, token, modelOverride) {
   return new Promise((resolve, reject) => {
     const hermesArgs = ["chat", "-q", prompt, "-Q", "--yolo", "--source", "circlechat"];
+    if (modelOverride) hermesArgs.push("-m", modelOverride);
     const envExtras = {
       CC_API_BASE: API_BASE,
       CC_BOT_TOKEN: token,
@@ -1090,9 +1107,11 @@ function connect(entry) {
     const prompt = buildPrompt(entry, p);
     try {
       const isOpenClaw = entry.kind === "openclaw" || typeof entry.openclawHome === "string";
+      const modelOverride =
+        MODEL_IMPORTANT && IMPORTANT_TRIGGERS.has(trigger) ? MODEL_IMPORTANT : undefined;
       const { stdout, stderr } = isOpenClaw
         ? await callOpenClaw(prompt, entry.openclawHome, entry.token)
-        : await callHermes(prompt, entry.hermesHome, entry.token);
+        : await callHermes(prompt, entry.hermesHome, entry.token, modelOverride);
       const rawText = isOpenClaw
         ? (extractOpenClawReply(stdout) || extractOpenClawReply(stderr) || "")
         : (extractReply(stdout) || extractReply(stderr) || "");
