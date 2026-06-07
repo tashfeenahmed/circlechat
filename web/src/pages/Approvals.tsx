@@ -1,10 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, X, ShieldAlert } from "lucide-react";
+import { Check, X, ShieldAlert, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useApprovals, useAgents } from "../lib/hooks";
 import { api } from "../api/client";
 import Avatar from "../components/Avatar";
 import { useQueryClient } from "@tanstack/react-query";
+
+const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+type SecretRow = { name: string; value: string };
 
 export default function ApprovalsPage() {
   const approvalsQ = useApprovals();
@@ -14,6 +18,9 @@ export default function ApprovalsPage() {
   const [err, setErr] = useState<string | null>(null);
   // Optional per-approval comment delivered to the agent with the decision.
   const [notes, setNotes] = useState<Record<string, string>>({});
+  // Optional per-approval secrets (env-var name + value) installed into the
+  // agent's environment on approve. Values never appear in the DB or chat.
+  const [secrets, setSecrets] = useState<Record<string, SecretRow[]>>({});
 
   const agentById = useMemo(() => {
     const m = new Map<string, { name: string; handle: string; avatarColor: string; id: string }>();
@@ -23,14 +30,38 @@ export default function ApprovalsPage() {
 
   const rows = approvalsQ.data?.approvals ?? [];
 
+  function setSecretRow(apId: string, i: number, patch: Partial<SecretRow>) {
+    setSecrets((s) => {
+      const list = [...(s[apId] ?? [])];
+      list[i] = { ...list[i], ...patch };
+      return { ...s, [apId]: list };
+    });
+  }
+
+  function secretsValid(apId: string): boolean {
+    const list = (secrets[apId] ?? []).filter((r) => r.name || r.value);
+    return list.every((r) => SECRET_NAME_RE.test(r.name) && r.value.length > 0);
+  }
+
   async function decide(id: string, decision: "approve" | "deny") {
     setErr(null);
     setWorking(id);
     try {
       const note = (notes[id] ?? "").trim();
-      await api.post(`/approvals/${id}`, { decision, ...(note ? { note } : {}) });
+      const secretRows = (secrets[id] ?? []).filter((r) => r.name && r.value);
+      const secretMap: Record<string, string> = {};
+      for (const r of secretRows) secretMap[r.name] = r.value;
+      await api.post(`/approvals/${id}`, {
+        decision,
+        ...(note ? { note } : {}),
+        ...(decision === "approve" && secretRows.length ? { secrets: secretMap } : {}),
+      });
       setNotes((n) => {
         const { [id]: _gone, ...rest } = n;
+        return rest;
+      });
+      setSecrets((s) => {
+        const { [id]: _gone, ...rest } = s;
         return rest;
       });
       await qc.invalidateQueries({ queryKey: ["approvals"] });
@@ -64,6 +95,8 @@ export default function ApprovalsPage() {
           {rows.map((ap) => {
             const ag = agentById.get(ap.agentId);
             const busy = working === ap.id;
+            const secretRows = secrets[ap.id] ?? [];
+            const valid = secretsValid(ap.id);
             return (
               <li key={ap.id} className="px-6 py-4 flex gap-4">
                 {ag ? (
@@ -101,11 +134,66 @@ export default function ApprovalsPage() {
                     disabled={busy}
                     className="mt-2 w-full max-w-xl text-[12.5px] bg-[var(--color-bg-2)] border border-[var(--color-hair)] rounded px-2 py-1.5 outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-muted-2)]"
                   />
+
+                  {/* Secrets: install credentials in the agent's env on approve.
+                      The value goes straight to the agent home's .env — it is
+                      never stored in the DB, shown in chat, or echoed back. */}
+                  <div className="mt-2 max-w-xl">
+                    {secretRows.map((r, i) => (
+                      <div key={i} className="flex gap-2 mt-1.5 items-center">
+                        <input
+                          type="text"
+                          value={r.name}
+                          onChange={(e) =>
+                            setSecretRow(ap.id, i, { name: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_") })
+                          }
+                          placeholder="ENV_VAR_NAME"
+                          maxLength={64}
+                          disabled={busy}
+                          className={`w-48 text-[12px] font-mono bg-[var(--color-bg-2)] border rounded px-2 py-1.5 outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-muted-2)] ${r.name && !SECRET_NAME_RE.test(r.name) ? "border-[var(--color-err)]" : "border-[var(--color-hair)]"}`}
+                        />
+                        <input
+                          type="password"
+                          value={r.value}
+                          onChange={(e) => setSecretRow(ap.id, i, { value: e.target.value })}
+                          placeholder="secret value"
+                          maxLength={4096}
+                          disabled={busy}
+                          autoComplete="off"
+                          className="flex-1 text-[12px] font-mono bg-[var(--color-bg-2)] border border-[var(--color-hair)] rounded px-2 py-1.5 outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-muted-2)]"
+                        />
+                        <button
+                          onClick={() =>
+                            setSecrets((s) => ({ ...s, [ap.id]: (s[ap.id] ?? []).filter((_, j) => j !== i) }))
+                          }
+                          disabled={busy}
+                          className="btn sm ghost"
+                          title="Remove secret"
+                        >
+                          <Trash2 size={13} strokeWidth={2} />
+                        </button>
+                      </div>
+                    ))}
+                    {secretRows.length < 10 && (
+                      <button
+                        onClick={() =>
+                          setSecrets((s) => ({ ...s, [ap.id]: [...(s[ap.id] ?? []), { name: "", value: "" }] }))
+                        }
+                        disabled={busy}
+                        className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                        title="Attach a credential — installed into the agent's environment on approve, never shown in chat"
+                      >
+                        {secretRows.length ? <Plus size={12} strokeWidth={2} /> : <KeyRound size={12} strokeWidth={2} />}
+                        {secretRows.length ? "Add another secret" : "Attach secret (env var) on approve…"}
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-col gap-2 shrink-0">
                   <button
                     onClick={() => decide(ap.id, "approve")}
-                    disabled={busy}
+                    disabled={busy || !valid}
+                    title={valid ? undefined : "Fix the secret rows: name must be ENV_VAR shaped and value non-empty"}
                     className="btn sm primary inline-flex items-center gap-1"
                   >
                     <Check size={13} strokeWidth={2} /> Approve

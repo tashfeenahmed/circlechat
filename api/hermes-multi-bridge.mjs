@@ -531,12 +531,19 @@ function formatApprovalResponse(ar) {
   const noteLine = ar.note
     ? `\nTheir note to you (this is direct guidance — follow it): "${ar.note}"`
     : "";
+  const secretNames = Array.isArray(ar.deliveredSecrets) ? ar.deliveredSecrets : [];
+  const secretsLine = secretNames.length
+    ? `\nCREDENTIALS DELIVERED: the human attached ${secretNames.length === 1 ? "a secret" : "secrets"} to this approval, already installed in your environment as env var${secretNames.length === 1 ? "" : "s"}: ${secretNames.join(", ")}. Read ${secretNames.length === 1 ? "it" : "them"} from your shell (e.g. $${secretNames[0]}) and use ${secretNames.length === 1 ? "it" : "them"} for the approved work NOW. NEVER print, echo, or paste the value anywhere — not in chat, not on task cards, not in files under /workspace.`
+    : "";
   if (ar.status === "approved") {
-    return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was APPROVED by ${who}.${noteLine}
+    return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was APPROVED by ${who}.${noteLine}${secretsLine}
 You may now perform the approved action. If it was a gated <actions> entry, re-emit it in your <actions> block THIS TURN — the server will let it through exactly once${ar.note ? ", adjusted per the note above if it narrows the ask" : ""}. If it was a pre-flight request_approval for outside work, do that work now. Don't thank anyone in chat for the approval — just do the thing and report the concrete outcome where the work lives (task card if there is one).`;
   }
-  return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was DENIED by ${who}.${noteLine}
-Do NOT perform the action and do NOT re-request it. ${ar.note ? "Adjust your approach per the note above — it tells you what to do instead. " : ""}If a task depends on this, leave one task_comment noting the denial${ar.note ? " and your adjusted plan" : " and propose an alternative"}, then move on. No chat post about the denial is needed beyond that.`;
+  return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was DENIED by ${who}. DENIED MEANS NO — it is a FINAL human answer, not a delay, not "pending", not "resolved".${noteLine}
+Hard rules now in force:
+  • Do NOT perform the action, do NOT re-request it, do NOT rephrase the same ask into a new approval (the server matches by similarity and refuses it).
+  • Do NOT reinterpret this as the thing being granted — no credential was provided, nothing became "available".
+  • ${ar.note ? "Adjust your approach per the note above — it tells you what to do instead." : "If a task depends on this, set that task's status to \"blocked\" with ONE task_comment naming the denial, or pursue an approach that doesn't need this approval."} Then pick up different work. No chat post about the denial is needed.`;
 }
 
 function buildPrompt(entry, packet) {
@@ -655,11 +662,12 @@ If you have a real artifact (text, code, list, screenshot) to ship, use share_to
 
 Priority order:
 
-(1) **OPEN ASSIGNED TASKS COME FIRST.** Look at the MY TASKS block below. For every task assigned to you that isn't done/cancelled, you owe the team forward motion every wake — pick the freshest or most-overdue one and ship the next concrete step:
+(1) **OPEN ASSIGNED TASKS COME FIRST.** Look at the MY TASKS block below. For every task assigned to you that isn't done/blocked, you owe the team forward motion every wake — pick the freshest or most-overdue one and ship the next concrete step:
   - If you can do another step now → do it (research, draft, code, decision) and post the artifact via share_to_task with a 1-line caption summarizing what changed.
-  - If you finished it → share_to_task with the deliverable, then update_task status="review" (or "done" only if the evidence rule is satisfied).
-  - If you're blocked → task_comment explaining the specific blocker and @-mention the person who can unblock you. "Blocked" must be a real blocker, not "I haven't started."
-  - Never let a task you own go a full heartbeat without a comment from you or a status change.
+  - If you finished it → share_to_task with the deliverable, then update_task status="review" — that's YOUR finish line; your manager or a human verifies and flips it to done. Never try to done your own task.
+  - If you're blocked → ONE task_comment naming the specific blocker (@-mention who can unblock), update_task status="blocked", and move to other work. "Blocked" must be a real blocker, not "I haven't started."
+  - Tasks already in status "blocked" or "review" are EXEMPT from the every-wake rule: do NOT comment on them again unless something actually changed. "Still blocked" / "still awaiting review" posts are noise, not progress.
+  - Never let an in_progress task you own go a full heartbeat without a comment from you or a status change.
 
 (2) **THEN consider chat moves** if you have remaining capacity this turn (only when you ARE in a conversation — task-only heartbeats have no channel):
   (A) Reply to a recent question only if ALL hold — direct question, asker did NOT @-mention a colleague who already answered, AND it's in YOUR lane.
@@ -673,7 +681,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
                 : packet.trigger === "task_assigned"
                   ? `You were assigned a task on the workspace board. Task details are below in the TASK block. Decide what to do: if you can get started now, move it to in_progress via the task API and optionally comment on the task to tell the team you've picked it up. If the scope is unclear, add a comment with your clarifying question rather than starting work. If this isn't in your lane, add a comment saying so and unassign yourself. Don't post in the channel just to say "got it" — the activity log already shows the assignment. Return "HEARTBEAT_OK" if you acknowledged via the task itself.`
                   : packet.trigger === "task_comment"
-                    ? `A new comment landed on a task you're involved with. Read the recent comments in the TASK block. Reply by adding a comment on the task (POST /agent-api/tasks/<id>/comments), not by posting in the channel. If the comment is a question for you, answer concretely. If it's an ack or thanks, respond with "HEARTBEAT_OK" — silence is fine on the task thread too.`
+                    ? `A new comment landed on a task you're involved with. Read the recent comments in the TASK block. Reply by adding a comment on the task (POST /agent-api/tasks/<id>/comments), not by posting in the channel. If the comment is a question for you, answer concretely. If it's an ack, a thanks, or a status note that asks nothing of you and changes nothing about your work, respond with "HEARTBEAT_OK" — do NOT echo it back, restate the situation, or add a "noted" comment. Silence is the correct move on the task thread more often than not.`
                     : packet.trigger === "approval_response"
                       ? formatApprovalResponse(packet.approvalResponse)
                       : `Trigger: ${packet.trigger}.`;
@@ -705,19 +713,29 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  • To attach a file you wrote, use share_files / share_to_task with {"path":"/workspace/<file>"}. A bare filesystem path mentioned in prose does NOT share anything and the file won't survive — only an explicit share action with a /workspace path actually ships it.`,
     `  • NEVER fabricate. Do not paste command output, logs, test results, or "Here's the output: …" blocks unless you actually ran the command THIS turn and are quoting its real output. Inventing results, or claiming a script "ran successfully" when you didn't run it, is a lie — worse than saying "not done yet". If you can't verify something, say so and do the next real step.`,
     `  • EXTERNAL-CLAIM RULE (server-enforced): never claim you deployed, uploaded, or published something to an external service (Netlify, Vercel, GitHub Pages, …) unless it ACTUALLY completed this turn and you paste the live URL in the same message. The server rejects deploy claims with no URL (reason=deploy_claim_no_url). Some services physically can't be driven from your shell — Netlify Drop is a browser drag-and-drop; if you can't complete a deploy, you are BLOCKED, not done. The same honesty bar applies to completions: never announce a task or goal "complete" without checking its real status via GET /agent-api/tasks first, and never take credit for outcomes you didn't produce (a site being live does not mean YOUR deploy worked).`,
-    `  • BLOCKED PROTOCOL: when work needs something only a human can provide (credentials, account access, a manual step), say so ONCE — post a single clear blocker on the task card (task_comment) naming exactly what's needed, set the task status to "review", and STOP. Do not re-ask every heartbeat, do not re-litigate the blocker in ambient chatter, and do not write status-report files about being blocked. Resume only when the blocker is actually resolved.`,
-    `  • CREDENTIALS: NEVER ask a human to paste passwords, API tokens, or any secret into chat or a DM — chat is logged and visible to the whole conversation. If work needs a credential, use request_approval describing what's needed and let the human wire it up out-of-band (env var, secret store). Asking for a GitHub personal access token in a message is a security violation, not diligence.`,
+    `  • BLOCKED PROTOCOL: when work needs something only a human can provide (credentials, account access, a manual step), say so ONCE — post a single clear blocker on the task card (task_comment) naming exactly what's needed, set the task status to "blocked", and STOP. A blocked task is OFF your heartbeat rotation: the platform stops nudging you about it and you must not comment on it again unless something actually changed (a human replied, an approval was decided, the blocker cleared). When it clears, set status back to "in_progress" and resume. Never re-ask in chat, never re-litigate the blocker in ambient chatter, never write status-report files about being blocked.`,
+    `  • CREDENTIALS: NEVER ask a human to paste passwords, API tokens, or any secret into chat or a DM — chat is logged and visible to the whole conversation. The ONLY way to receive a credential is request_approval: describe what's needed and why; when the human approves they can ATTACH the secret to the approval and it lands directly in your environment as env vars (the approval_response will name them, e.g. NETLIFY_TOKEN — read with $NETLIFY_TOKEN in your shell). If the request is DENIED, that is a final answer: mark the dependent task "blocked" or find an approach that needs no credential. Never print, echo, or paste a secret's value anywhere.`,
     `  • Don't re-run the same search every wake. If you searched something last turn, the result is in your memory or on the task card — act on it or escalate; searching the same query again with no new action is spinning, not progress.`,
     ``,
     `DON'T REPEAT YOURSELF. Before composing a reply, check the recent-messages block: if your planned reply is substantially the same as something YOU already posted in this conversation, emit exactly "HEARTBEAT_OK" instead. Never re-post a canned acknowledgment ("I'll finalize it and share it with the team", "Here's X for you!") when you already said it. If the human followed up and you genuinely have a new concrete answer (a different file, a finished deliverable, a specific update), post that — but paraphrase and reference what you already said rather than repeating it verbatim.`,
+    ...(Array.isArray(packet.reporting?.directReports) && packet.reporting.directReports.length
+      ? [
+          ``,
+          `MANAGER DUTIES (you have direct reports — these outrank everything below):`,
+          `  • BOARD ⇄ INTENT RECONCILIATION: a human directive in chat (especially from your boss) is the source of truth, and YOUR first job on hearing one is to make the board match it. Diff what they asked for against the open goals/tasks: create what's missing (create_goal + decompose_goal for initiatives, create_task for single work items), update_task what changed, archive (update_task archived:true) what no longer serves their intent. A correction like "the goal is X, not Y" OVERRIDES every open task derived from Y — kill or re-scope them THAT TURN, don't let the team keep optimizing the dead objective.`,
+          `  • Reply to the human with ONE short message naming the concrete board changes you made ("Archived task_a (obsolete — goal changed), created goal_b + 4 tasks routed to @x/@y"), not a promise to do it later.`,
+          `  • REVIEW QUEUE: tasks your reports move to "review" are YOURS to verify. Open the card, check the attached artifacts actually satisfy the task (read them — don't rubber-stamp), then either flip status:"done" or comment precisely what's missing and set status:"in_progress". Never let review-state tasks sit.`,
+          `  • Quality bar: you are accountable for what your team ships. If a deliverable is generic, off-brief, or wrong-brand, say so concretely on the task card and send it back — "looks good" on bad work is a failure of YOUR job.`,
+        ]
+      : []),
     ``,
     `Action types:`,
     `  {"type":"react","message_id":"<id>","emoji":"🙏"}            — react instead of writing an ack/thanks/agreement`,
     `  {"type":"share_files","conversation_id":"<id>","body_md":"<optional, can be empty>","reply_to":"<optional>","files":[{"url":"https://…","name":"cat.jpg"},{"path":"/workspace/report.pdf","name":"Q3-report.pdf"}]}`,
     `                                                                — each file entry has EXACTLY ONE of "url" (http/https, server fetches it) or "path" (absolute under /workspace/ or /tmp/, server reads from disk). Use this to share web assets OR files you wrote to /workspace this turn. Up to 10 files, 20MB each. This replaces the old urllib/curl + /agent-api/uploads + <attachments> dance — always prefer share_files.`,
-    `  {"type":"create_task","title":"…","body_md":"…","status":"backlog|in_progress|review|done","conversation_id":"<optional channel>","parent_id":"<optional parent task_…>","assignees":["<memberId>","<memberId>"],"labels":["eng"],"due_at":"2026-05-01"}`,
-    `  {"type":"update_task","task_id":"task_…","status":"in_progress|review|done","progress":50,"title":"…","body_md":"…","due_at":"2026-05-01","archived":true}`,
-    `                                                                — moving to "done" REQUIRES EVIDENCE: the task must already have either (a) a SUBSTANTIVE deliverable in its artifacts store (use share_to_task to drop the real file — a stub/title-only placeholder is REJECTED), or (b) a human-authored comment after your most recent comment (review/sign-off). If neither is true, the server rejects the update with done_requires_evidence — first share the actual work product (the real script/report/draft, not its title), THEN flip status. To request human review without a finished deliverable, set status="review" instead.`,
+    `  {"type":"create_task","title":"…","body_md":"…","status":"backlog|in_progress|blocked|review|done","conversation_id":"<optional channel>","parent_id":"<optional parent task_…>","assignees":["<memberId>","<memberId>"],"labels":["eng"],"due_at":"2026-05-01"}`,
+    `  {"type":"update_task","task_id":"task_…","status":"in_progress|blocked|review|done","progress":50,"title":"…","body_md":"…","due_at":"2026-05-01","archived":true}`,
+    `                                                                — STATUS RULES (server-enforced): "blocked" = waiting on something outside your control (see BLOCKED PROTOCOL). "review" = your work is finished and a deliverable is attached — this is YOUR terminal state on tasks you're assigned to: the MAKER CANNOT MARK THEIR OWN WORK DONE (done_requires_review). Your manager or a human verifies the evidence and flips review → done. Flipping someone ELSE'S task to done (e.g. you're the reviewing manager) requires EVIDENCE on the card: a substantive deliverable in its artifacts store, or human sign-off after the maker's last comment (done_requires_evidence otherwise). So the flow is: do the work → share_to_task the real artifact → status:"review" → reviewer flips done.`,
     `  {"type":"assign_task","task_id":"task_…","member_id":"m_…"}`,
     `  {"type":"create_goal","title":"…","body_md":"<optional detail>","parent_goal_id":"<optional goal_…>","kind":"goal|project"}  — state a multi-step objective for the team. Use for real initiatives, not a single action you can just do. Set kind:"project" for a big top-level initiative that holds several goals; nest goals under it via parent_goal_id so tasks trace mission ▸ project ▸ goal.`,
     `  {"type":"decompose_goal","goal_id":"goal_…"}              — THE MANAGER MOVE: auto-decompose a goal into a task tree, route each subtask to the best-fit teammate by capability, wire the dependency edges, and start the unblocked tasks (waking their assignees). As tasks complete, dependents auto-start; when all finish, the goal closes. Use create_goal then decompose_goal when a human hands YOU (a lead with direct reports) an objective — don't hand-create every task or do it all yourself.`,
@@ -823,7 +841,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
           `The ONLY way to make progress this turn is to emit one or more of these actions in an <actions>[...]</actions> block:`,
           `  • {"type":"share_to_task","task_id":"task_…","body_md":"what I just did","files":[{"url":"…"}|{"path":"/workspace/…"}]}  — attach an artifact (screenshot, PDF, data, written-out answer)`,
           `  • {"type":"task_comment","task_id":"task_…","body_md":"specific, concrete update"}  — narrate progress concretely (NOT "still working on it")`,
-          `  • {"type":"update_task","task_id":"task_…","progress":<0-100>,"status":"in_progress|review|done"}  — bump progress or flip status when you hit a milestone`,
+          `  • {"type":"update_task","task_id":"task_…","progress":<0-100>,"status":"in_progress|blocked|review|done"}  — bump progress or flip status when you hit a milestone (on your own tasks, "review" is your finish line — a reviewer flips done)`,
           ``,
           `Pick the most-stale task above that's ACTUALLY IN YOUR LANE and do one concrete thing on it right now. A good turn produces at least one share_to_task OR task_comment with a specific deliverable attached or named. "I will look into X" is not a turn — "attached Q3 competitor table (pdf) pulled from tracker" is.`,
           ``,
@@ -872,13 +890,14 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
   if (aps.length) {
     const lines = aps.slice(0, 10).map((ap) => {
       const when = ap.createdAt ? ` · requested ${String(ap.createdAt).slice(0, 10)}` : "";
-      return `  ⏳ ${ap.id} [${ap.scope}${when}] ${ap.action}`;
+      const whose = ap.mine === false && ap.agentHandle ? ` · filed by @${ap.agentHandle}` : "";
+      return `  ⏳ ${ap.id} [${ap.scope}${when}${whose}] ${ap.action}`;
     });
     approvalsBlock = [
       ``,
-      `YOUR PENDING APPROVALS (${aps.length} awaiting a human decision):`,
+      `TEAM PENDING APPROVALS (${aps.length} awaiting a human decision — yours AND your teammates'):`,
       ...lines,
-      `These actions are PARKED until a human approves or denies them. Do NOT emit the same action again, do NOT open a new request_approval for the same thing, and do NOT ask about them in chat every wake — you'll be woken with trigger:"approval_response" when a decision lands. Treat work that depends on one of these as blocked: pick a different task or step that isn't waiting on approval.`,
+      `These actions are PARKED until a human approves or denies them. Do NOT emit the same action again, do NOT open a new request_approval for the same OR an equivalent thing (rephrasing it counts — the server matches by similarity and will drop it), and do NOT ask about them in chat every wake. If a teammate already filed it, it covers the whole team — one human decision, one card. You'll be woken with trigger:"approval_response" when a decision on YOUR card lands. Treat work that depends on any of these as blocked: set that task's status to "blocked" and pick different work.`,
     ].join("\n");
   }
 

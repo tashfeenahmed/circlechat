@@ -28,10 +28,11 @@ import { useBus } from "../state/store";
 const STATUS_LABELS: Record<TaskStatus, string> = {
   backlog: "Backlog",
   in_progress: "In progress",
+  blocked: "Blocked",
   review: "Review",
   done: "Done",
 };
-const ALL_STATUSES: TaskStatus[] = ["backlog", "in_progress", "review", "done"];
+const ALL_STATUSES: TaskStatus[] = ["backlog", "in_progress", "blocked", "review", "done"];
 
 export default function TaskModal({
   taskId,

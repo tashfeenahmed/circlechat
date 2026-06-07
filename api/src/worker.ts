@@ -254,17 +254,31 @@ async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<
   if (myOpenTasks.length > 0) {
     const myTaskIds = myOpenTasks.map((t) => t.taskId);
 
-    // Any new external comment on these tasks since last run? Wake.
+    // Any new HUMAN comment on these tasks since last run? Wake. Agent
+    // comments don't count — counting teammate-agent chatter as "activity"
+    // re-created the comment→wake→comment echo loop that wake-damped
+    // task_comment triggers were supposed to kill (agents that want a
+    // teammate's attention @-mention them, which fires a direct trigger).
     const [{ n }] = await db
       .select({ n: sql<number>`count(*)::int` })
       .from(taskComments)
-      .where(and(inArray(taskComments.taskId, myTaskIds), gt(taskComments.ts, sinceTs)));
+      .innerJoin(members, eq(members.id, taskComments.memberId))
+      .where(
+        and(
+          inArray(taskComments.taskId, myTaskIds),
+          gt(taskComments.ts, sinceTs),
+          eq(members.kind, "user"),
+        ),
+      );
     if (n > 0) return false;
 
     // Any task I own where MY OWN last comment is older than STALE_TASK_MS
-    // (or I've never commented)? Wake — time to ship progress.
+    // (or I've never commented)? Wake — time to ship progress. Blocked tasks
+    // are exempt: a blocked card needs a human, not an hourly "still blocked"
+    // beat (the deploy-credential spiral was exactly this loop).
     const cutoff = new Date(Date.now() - STALE_TASK_MS);
     for (const t of myOpenTasks) {
+      if (t.status === "blocked") continue;
       const [latestMine] = await db
         .select({ ts: taskComments.ts })
         .from(taskComments)

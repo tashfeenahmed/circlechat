@@ -17,7 +17,7 @@ import { notify } from "./notifications.js";
 import { liveArtifactRows, isSubstantiveArtifact, purgeArtifactsForTasks } from "./task-artifacts.js";
 import { forgetTaskKnowledge } from "./knowledge.js";
 
-export const STATUSES = ["backlog", "in_progress", "review", "done"] as const;
+export const STATUSES = ["backlog", "in_progress", "blocked", "review", "done"] as const;
 export type Status = (typeof STATUSES)[number];
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -372,7 +372,45 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
     await advanceWorkflow(taskId, actorMemberId, workspaceId).catch(() => {});
     await rollUpCompletion(t!, actorMemberId, workspaceId).catch(() => {});
   }
+  // Review handoff: when an AGENT moves a task to review (the only way an
+  // assignee can finish work post-Rule-0), wake its manager so the review
+  // actually happens instead of the card rotting in the review column.
+  if (input.status === "review" && t!.status !== "review" && !input.archived) {
+    await wakeReviewer(taskId, actorMemberId, workspaceId, t!).catch(() => {});
+  }
   return { task: hydrated };
+}
+
+// When an agent assignee finishes work it lands in "review" — route the
+// verification to the agent's manager (reports_to). An agent manager gets a
+// task_comment wake (it can inspect artifacts and flip done as a
+// non-assignee); a human manager gets an inbox notification. Falls back to
+// the task creator when the actor has no manager. Best-effort.
+async function wakeReviewer(
+  taskId: string,
+  actorMemberId: string,
+  workspaceId: string,
+  task: TaskRow,
+): Promise<void> {
+  const [actor] = await db
+    .select({ kind: members.kind, reportsTo: members.reportsTo })
+    .from(members)
+    .where(eq(members.id, actorMemberId))
+    .limit(1);
+  if (!actor || actor.kind !== "agent") return; // humans manage their own review flow
+  const reviewerId = actor.reportsTo ?? task.createdBy;
+  if (!reviewerId || reviewerId === actorMemberId) return;
+  await maybeFireAgentTrigger(reviewerId, taskId, task.conversationId, "task_comment");
+  notify({
+    workspaceId,
+    memberId: reviewerId,
+    kind: "task_comment",
+    actorMemberId,
+    title: "Ready for review — verify the evidence, then mark done",
+    body: task.title,
+    link: `/board?task=${taskId}`,
+    taskId,
+  }).catch(() => {});
 }
 
 // ───── roll-up (Layer 4: delegated work reassembles upward) ─────
@@ -811,11 +849,25 @@ export async function addComment(
     taskId,
     comment: row,
   });
-  const assignees = await db
-    .select({ memberId: taskAssignees.memberId })
-    .from(taskAssignees)
-    .where(eq(taskAssignees.taskId, taskId));
-  const wake = new Set<string>([...cleanMentions, ...assignees.map((a) => a.memberId)]);
+  // Wake damping: a HUMAN comment wakes every assignee (plus mentions) — the
+  // human is steering. An AGENT comment only wakes members it explicitly
+  // @-mentions. Fanning agent comments out to all assignees created
+  // comment→wake→comment echo loops between co-assigned agents (the
+  // credential-begging spiral: 119 task_comment runs/48h on one card).
+  const [actorRow] = await db
+    .select({ kind: members.kind })
+    .from(members)
+    .where(eq(members.id, actorMemberId))
+    .limit(1);
+  const actorIsAgent = actorRow?.kind === "agent";
+  const wake = new Set<string>(cleanMentions);
+  if (!actorIsAgent) {
+    const assignees = await db
+      .select({ memberId: taskAssignees.memberId })
+      .from(taskAssignees)
+      .where(eq(taskAssignees.taskId, taskId));
+    for (const a of assignees) wake.add(a.memberId);
+  }
   wake.delete(actorMemberId);
   for (const mid of wake) {
     await maybeFireAgentTrigger(mid, taskId, t!.conversationId, "task_comment");
@@ -870,7 +922,7 @@ async function assertDoneEvidence(
   taskId: string,
   actorMemberId: string,
   taskTitle: string,
-): Promise<"done_requires_evidence" | null> {
+): Promise<"done_requires_evidence" | "done_requires_review" | null> {
   const [actor] = await db
     .select({ kind: members.kind })
     .from(members)
@@ -882,6 +934,14 @@ async function assertDoneEvidence(
     .select({ memberId: taskAssignees.memberId })
     .from(taskAssignees)
     .where(eq(taskAssignees.taskId, taskId));
+
+  // Rule 0: the maker can't sign off their own work. An agent that is an
+  // assignee on the task moves it to "review"; a NON-assignee (their manager,
+  // or any human) flips review → done after checking the evidence. This is
+  // what stops "I'll flip it to done" self-certification of unverified work.
+  if (assigneeRows.some((r) => r.memberId === actorMemberId)) {
+    return "done_requires_review";
+  }
 
   // Rule 1: a substantive artifact authored by a current assignee or the actor.
   const eligible = new Set<string>([...assigneeRows.map((r) => r.memberId), actorMemberId]);

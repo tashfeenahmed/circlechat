@@ -174,7 +174,7 @@ export interface AgentRun {
   errorText: string | null;
 }
 
-export type TaskStatus = "backlog" | "in_progress" | "review" | "done";
+export type TaskStatus = "backlog" | "in_progress" | "blocked" | "review" | "done";
 
 export interface GoalTaskCounts {
   total: number;

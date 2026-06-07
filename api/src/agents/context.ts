@@ -98,6 +98,10 @@ export interface ContextPacket {
     action: string;
     status: string;
     createdAt: string;
+    // Workspace-wide visibility: whose request this is, and whether it's the
+    // packet-owner's own (mine=false ⇒ a teammate already asked — don't dupe).
+    agentHandle: string;
+    mine: boolean;
   }>;
   // Present only on approval_response wakes: the approval that was just
   // decided, including the human's optional note, so the agent knows exactly
@@ -110,6 +114,9 @@ export interface ContextPacket {
     note: string | null;
     decidedByHandle: string | null;
     payload: Record<string, unknown>;
+    // Env-var names the human attached to an approve — the values are already
+    // installed in the agent's runtime environment (never shown in chat/DB).
+    deliveredSecrets: string[] | null;
   };
   // Scoped agent memory. `global` is workspace-wide and always present.
   // `byConversation` is keyed by conversationId — only includes scopes for
@@ -361,12 +368,22 @@ export async function buildContext(opts: {
     // Sort so the triggering conversation is first.
     .sort((a, b) => (a.conversationId === opts.conversationId ? -1 : b.conversationId === opts.conversationId ? 1 : 0));
 
-  const open = await db
-    .select()
+  // Workspace-wide, not per-agent: teammates' pending approvals are visible so
+  // an agent doesn't file its own copy of a request a colleague already has
+  // sitting in the human's queue (three agents each begged for the same deploy
+  // credential because none could see the others' cards).
+  const openRows = await db
+    .select({ approval: approvals, agentHandle: agents.handle })
     .from(approvals)
-    .where(and(eq(approvals.agentId, opts.agentId), eq(approvals.status, "pending")))
+    .innerJoin(agents, eq(agents.id, approvals.agentId))
+    .where(and(eq(agents.workspaceId, a.workspaceId), eq(approvals.status, "pending")))
     .orderBy(desc(approvals.createdAt))
     .limit(50);
+  const open = openRows.map((r) => ({
+    ...r.approval,
+    agentHandle: r.agentHandle,
+    mine: r.approval.agentId === opts.agentId,
+  }));
 
   // On approval_response wakes, load the approval that was just decided so
   // the agent sees the verdict + the human's optional note, not just a bare
@@ -400,6 +417,7 @@ export async function buildContext(opts: {
         note: ap.decisionNote ?? null,
         decidedByHandle,
         payload: ap.payloadJson ?? {},
+        deliveredSecrets: ap.deliveredSecrets ?? null,
       };
     }
   }
@@ -784,6 +802,8 @@ export async function buildContext(opts: {
       action: o.action,
       status: o.status,
       createdAt: o.createdAt.toISOString(),
+      agentHandle: o.agentHandle,
+      mine: o.mine,
     })),
     approvalResponse,
     memory: {

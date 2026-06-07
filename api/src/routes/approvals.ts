@@ -6,13 +6,30 @@ import { approvals, agents } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { publishToConversation } from "../lib/events.js";
+import {
+  deliverAgentSecrets,
+  SECRET_NAME_RE,
+  MAX_SECRETS_PER_DECISION,
+} from "../lib/agent-secrets.js";
 
-const DecideBody = z.object({
-  decision: z.enum(["approve", "deny"]),
-  // Optional human comment delivered to the agent with the decision —
-  // "approved, but only the staging list" / "denied, use the shared drive".
-  note: z.string().trim().max(2000).optional(),
-});
+const DecideBody = z
+  .object({
+    decision: z.enum(["approve", "deny"]),
+    // Optional human comment delivered to the agent with the decision —
+    // "approved, but only the staging list" / "denied, use the shared drive".
+    note: z.string().trim().max(2000).optional(),
+    // Optional credentials to install into the agent's environment alongside
+    // an approve ({"NETLIFY_TOKEN": "…"}). Values are written to the agent
+    // home's .env — never persisted in the DB, events, or chat; only the
+    // names ride along so the agent knows what it received.
+    secrets: z.record(z.string().regex(SECRET_NAME_RE), z.string().min(1).max(4096)).optional(),
+  })
+  .refine((b) => !b.secrets || Object.keys(b.secrets).length <= MAX_SECRETS_PER_DECISION, {
+    message: "too_many_secrets",
+  })
+  .refine((b) => !(b.decision === "deny" && b.secrets && Object.keys(b.secrets).length), {
+    message: "secrets_on_deny",
+  });
 
 export default async function approvalRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireWorkspace);
@@ -39,9 +56,32 @@ export default async function approvalRoutes(app: FastifyInstance): Promise<void
 
     const status = body.decision === "approve" ? "approved" : "denied";
     const note = body.note || null;
+
+    const [ag] = await db.select().from(agents).where(eq(agents.id, a.agentId)).limit(1);
+
+    // Install attached credentials into the agent's env BEFORE marking the
+    // approval decided — if delivery fails the decision doesn't land, so the
+    // agent is never told "approved" about credentials it can't see.
+    let deliveredSecrets: string[] | null = null;
+    if (status === "approved" && body.secrets && Object.keys(body.secrets).length) {
+      if (!ag) return reply.code(404).send({ error: "agent_not_found" });
+      try {
+        deliveredSecrets = await deliverAgentSecrets(ag, body.secrets);
+      } catch (e) {
+        req.log.error({ err: e, approvalId: apId }, "secret delivery failed");
+        return reply.code(500).send({ error: "secret_delivery_failed" });
+      }
+    }
+
     await db
       .update(approvals)
-      .set({ status, decidedAt: new Date(), decidedBy: memberId, decisionNote: note })
+      .set({
+        status,
+        decidedAt: new Date(),
+        decidedBy: memberId,
+        decisionNote: note,
+        ...(deliveredSecrets?.length ? { deliveredSecrets } : {}),
+      })
       .where(eq(approvals.id, apId));
 
     if (a.conversationId) {
@@ -50,11 +90,11 @@ export default async function approvalRoutes(app: FastifyInstance): Promise<void
         approvalId: apId,
         status,
         ...(note ? { note } : {}),
+        ...(deliveredSecrets?.length ? { deliveredSecrets } : {}),
       });
     }
 
     // Wake the agent with an approval_response trigger so it can act on it.
-    const [ag] = await db.select().from(agents).where(eq(agents.id, a.agentId)).limit(1);
     if (ag) {
       await enqueueAgentEvent(a.agentId, {
         trigger: "approval_response",
@@ -64,6 +104,6 @@ export default async function approvalRoutes(app: FastifyInstance): Promise<void
       });
     }
 
-    return { ok: true, status };
+    return { ok: true, status, ...(deliveredSecrets?.length ? { deliveredSecrets } : {}) };
   });
 }

@@ -1,4 +1,4 @@
-import { and, eq, gt, sql } from "drizzle-orm";
+import { and, eq, gt, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   messages,
@@ -67,7 +67,7 @@ export type AgentAction =
       type: "create_task";
       title: string;
       body_md?: string;
-      status?: "backlog" | "in_progress" | "review" | "done";
+      status?: "backlog" | "in_progress" | "blocked" | "review" | "done";
       parent_id?: string;
       conversation_id?: string;
       assignees?: string[];
@@ -79,7 +79,7 @@ export type AgentAction =
       task_id: string;
       title?: string;
       body_md?: string;
-      status?: "backlog" | "in_progress" | "review" | "done";
+      status?: "backlog" | "in_progress" | "blocked" | "review" | "done";
       progress?: number;
       due_at?: string | null;
       archived?: boolean;
@@ -231,30 +231,88 @@ function describeForApproval(a: AgentAction): { action: string; conversationId: 
   }
 }
 
-// An identical approval already sitting in the pending queue means the agent
-// re-tried a gated action (or re-emitted request_approval) before the human
-// decided — heartbeats made this spammy: every wake minted a fresh card for
-// the same blocked thing. Match on agent + scope + the human-readable action
-// string (which embeds the target id/title, so distinct targets still get
-// distinct cards).
-async function findPendingDuplicate(
+// Approval dedupe. Exact agent+scope+action matching got beaten in the wild:
+// agents minted a fresh free-form scope string every wake (github_auth,
+// hosting, hosting_credentials, deploy, deploy_creds, github_token, …) for
+// the SAME credential ask, so 11 cards piled up for one human decision. Match
+// on trigram similarity of the action text instead — workspace-wide, so three
+// agents asking for the same thing share one card — and remember DENIALS: a
+// similar request a human denied in the last 7 days is refused outright (a
+// denial is an answer, not a retry timer).
+const DENIAL_MEMORY_MS = 7 * 24 * 60 * 60 * 1000;
+// An agent's own re-ask matches looser than a teammate's distinct request.
+const DUP_SIM_SELF = 0.45;
+const DUP_SIM_TEAMMATE = 0.62;
+
+type DuplicateApproval = {
+  id: string;
+  status: string;
+  agentId: string;
+  decidedAt: Date | null;
+  action: string;
+};
+
+async function findDuplicateApproval(
   agentId: string,
-  scope: string,
   action: string,
-): Promise<string | null> {
-  const [existing] = await db
-    .select({ id: approvals.id })
+): Promise<DuplicateApproval | null> {
+  const [me] = await db
+    .select({ workspaceId: agents.workspaceId })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+  if (!me) return null;
+  const deniedCutoff = new Date(Date.now() - DENIAL_MEMORY_MS);
+  const rows = await db
+    .select({
+      id: approvals.id,
+      status: approvals.status,
+      agentId: approvals.agentId,
+      decidedAt: approvals.decidedAt,
+      action: approvals.action,
+      sim: sql<number>`similarity(${approvals.action}, ${action})`.as("sim"),
+    })
     .from(approvals)
+    .innerJoin(agents, eq(agents.id, approvals.agentId))
     .where(
       and(
-        eq(approvals.agentId, agentId),
-        eq(approvals.status, "pending"),
-        eq(approvals.scope, scope),
-        eq(approvals.action, action),
+        eq(agents.workspaceId, me.workspaceId),
+        or(
+          eq(approvals.status, "pending"),
+          and(eq(approvals.status, "denied"), gt(approvals.decidedAt, deniedCutoff)),
+        ),
+        sql`similarity(${approvals.action}, ${action}) > ${DUP_SIM_SELF}`,
       ),
     )
-    .limit(1);
-  return existing?.id ?? null;
+    .orderBy(sql`similarity(${approvals.action}, ${action}) desc`)
+    .limit(5);
+  for (const r of rows) {
+    const threshold = r.agentId === agentId ? DUP_SIM_SELF : DUP_SIM_TEAMMATE;
+    if (Number(r.sim) >= threshold) return r;
+  }
+  return null;
+}
+
+// Actionable rejection copy for a duplicate/denied approval match. Returned as
+// an executor error so the agent reads WHY it was dropped and what to do.
+function duplicateApprovalError(actionType: string, dup: DuplicateApproval, agentId: string): string {
+  if (dup.status === "denied") {
+    const when = dup.decidedAt ? dup.decidedAt.toISOString().slice(0, 10) : "recently";
+    return (
+      `${actionType} refused: a human DENIED an equivalent request (${dup.id}, "${dup.action}") on ${when}. ` +
+      `A denial is final — do NOT re-request or rephrase it. Set the dependent task status:"blocked" with one comment, or pursue an approach that doesn't need this approval.`
+    );
+  }
+  if (dup.agentId !== agentId) {
+    return (
+      `${actionType} skipped: a teammate already has an equivalent approval pending (${dup.id}, "${dup.action}"). ` +
+      `Don't file duplicates — the human decides once for the team. Coordinate on the task card if needed.`
+    );
+  }
+  return (
+    `${actionType} skipped: your equivalent approval (${dup.id}) is already pending a human decision — ` +
+    `do not retry or rephrase it; you'll be woken with trigger:"approval_response" when it's decided.`
+  );
 }
 
 export async function applyActions(params: {
@@ -326,12 +384,10 @@ export async function applyActions(params: {
           out.actionsApplied++;
           continue;
         }
-        const dupId = await findPendingDuplicate(agentId, reason, d.action);
-        if (dupId) {
-          out.trace.push(`gated ${a.type} → duplicate of pending approval ${dupId}, skipped`);
-          out.errors.push(
-            `${a.type} is already awaiting human approval (${dupId}) — do not retry it; you'll be woken with trigger:"approval_response" when it's decided`,
-          );
+        const dup = await findDuplicateApproval(agentId, d.action);
+        if (dup) {
+          out.trace.push(`gated ${a.type} → ${dup.status} duplicate approval ${dup.id}, skipped`);
+          out.errors.push(duplicateApprovalError(a.type, dup, agentId));
           continue;
         }
         const apId = id("ap");
@@ -590,12 +646,10 @@ async function applyOne(
       return;
     }
     case "request_approval": {
-      const dupId = await findPendingDuplicate(agentId, a.scope, a.action);
-      if (dupId) {
-        out.trace.push(`request_approval duplicate of pending ${dupId}, skipped`);
-        out.errors.push(
-          `request_approval skipped: an identical approval (${dupId}) is already pending a human decision — wait for trigger:"approval_response" instead of re-asking`,
-        );
+      const dup = await findDuplicateApproval(agentId, a.action);
+      if (dup) {
+        out.trace.push(`request_approval → ${dup.status} duplicate ${dup.id}, skipped`);
+        out.errors.push(duplicateApprovalError("request_approval", dup, agentId));
         return;
       }
       const apId = id("ap");
@@ -735,7 +789,17 @@ async function applyOne(
         ws,
       );
       if ("error" in r) {
-        out.errors.push(`update_task: ${r.error}`);
+        if (r.error === "done_requires_review") {
+          out.errors.push(
+            `update_task: done_requires_review — you're an assignee on ${a.task_id}, and the maker can't mark their own work done. Attach your deliverable (share_to_task) and set status:"review" instead; your manager or a human verifies and flips it to done.`,
+          );
+        } else if (r.error === "done_requires_evidence") {
+          out.errors.push(
+            `update_task: done_requires_evidence — ${a.task_id} has no substantive deliverable attached. share_to_task the actual artifact first, or leave it in "review" for a human.`,
+          );
+        } else {
+          out.errors.push(`update_task: ${r.error}`);
+        }
         return;
       }
       out.trace.push(`update_task ${a.task_id}`);

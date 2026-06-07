@@ -10,6 +10,7 @@ import TaskModal from "./TaskModal";
 const COLUMNS: Array<{ id: TaskStatus; title: string; glyph: string }> = [
   { id: "backlog", title: "Backlog", glyph: "◦" },
   { id: "in_progress", title: "In progress", glyph: "●" },
+  { id: "blocked", title: "Blocked", glyph: "⊘" },
   { id: "review", title: "Review", glyph: "◐" },
   { id: "done", title: "Done", glyph: "✓" },
 ];

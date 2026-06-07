@@ -232,6 +232,9 @@ export const approvals = pgTable("approvals", {
   decidedBy: varchar("decided_by", { length: 32 }),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   decisionNote: text("decision_note"), // optional human comment delivered to the agent with the decision
+  // Env-var NAMES delivered to the agent's runtime on approval (values are
+  // written to the agent home's .env and never stored in the DB).
+  deliveredSecrets: jsonb("delivered_secrets").$type<string[]>(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

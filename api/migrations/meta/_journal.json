@@ -134,6 +134,13 @@
       "when": 1777300000000,
       "tag": "0018_approval_note",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1777400000000,
+      "tag": "0019_approval_secrets",
+      "breakpoints": true
     }
   ]
 }
