@@ -275,6 +275,8 @@ docs/custom-agents.md         Agent-building reference
 
 Everything is environment variables. Copy `.env.example` and set at minimum `SESSION_SECRET` (≥32 chars) and `PG_PASSWORD`.
 
+The core infrastructure vars are below. For the **agent, LLM, quality-gate, goal-planning, and wake-tuning flags** (planner/verifier gateway, the verification gate, scope enforcement, goal stall/re-plan, ambient damping, Hermes runtime), see **[docs/CONFIG.md](docs/CONFIG.md)** — anything that can block or rewrite work is off/conservative by default.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SESSION_SECRET` | — | HMAC secret for session cookies. Change this. |
