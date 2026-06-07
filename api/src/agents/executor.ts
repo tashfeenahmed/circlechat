@@ -916,9 +916,13 @@ async function applyOne(
       const guard = checkReplyBody(rawBody || "(attachments)");
       const bodyMd = guard.ok ? guard.bodyMd : rawBody;
       const files = Array.isArray(a.files) ? a.files : [];
-      const fetched = await fetchAgentAttachments(files, out.trace, "share_to_task");
+      const { attachments: fetched, skips } = await fetchAgentAttachments(files, out.trace, "share_to_task");
       if (fetched.length === 0) {
-        out.errors.push(`share_to_task: no files fetched from ${files.length} source(s)`);
+        const why = skips.length ? ` (${skips.join("; ")})` : "";
+        out.errors.push(
+          `share_to_task: no files fetched from ${files.length} source(s)${why}. ` +
+            `Run \`ls -R /workspace\` to find the exact path you actually wrote, then share that — a path that doesn't exist won't attach.`,
+        );
         return;
       }
       const r = await addComment(
@@ -989,10 +993,14 @@ async function applyOne(
       if (!mm) throw new Error("agent_not_in_conversation");
 
       const files = Array.isArray(a.files) ? a.files : [];
-      const fetched = await fetchAgentAttachments(files, out.trace, "share_files");
+      const { attachments: fetched, skips } = await fetchAgentAttachments(files, out.trace, "share_files");
 
       if (fetched.length === 0) {
-        out.errors.push(`share_files: no files fetched from ${files.length} url(s)`);
+        const why = skips.length ? ` (${skips.join("; ")})` : "";
+        out.errors.push(
+          `share_files: no files fetched from ${files.length} source(s)${why}. ` +
+            `Check the path/url actually exists — a /workspace path you didn't write won't attach.`,
+        );
         return;
       }
 
@@ -1106,12 +1114,17 @@ async function fetchAgentAttachments(
   files: Array<{ url?: string; path?: string; name?: string }>,
   trace: string[],
   actionLabel: "share_files" | "share_to_task",
-): Promise<AgentAttachment[]> {
+): Promise<{ attachments: AgentAttachment[]; skips: string[] }> {
   const MAX_FILES = 10;
   const MAX_BYTES = 20 * 1024 * 1024;
   const FETCH_TIMEOUT_MS = 15_000;
   const slice = files.slice(0, MAX_FILES);
 
+  // Snapshot the trace so we can hand the per-file skip reasons back to the
+  // agent in the error too — not just bury them in the trace it never reads.
+  // The #1 silent failure is an agent sharing a path it never wrote (wrong
+  // name or subdir); without the reason it just retries the same bad path.
+  const traceStart = trace.length;
   const fetched: AgentAttachment[] = [];
   for (const f of slice) {
     const rawUrl = typeof f?.url === "string" ? f.url : "";
@@ -1191,7 +1204,8 @@ async function fetchAgentAttachments(
       trace.push(`${actionLabel} source ${hasUrl ? rawUrl : rawPath} failed: ${(e as Error).message}`);
     }
   }
-  return fetched;
+  const skips = trace.slice(traceStart).filter((s) => s.includes(" skip") || s.includes(" failed:"));
+  return { attachments: fetched, skips };
 }
 
 // Agents may emit attachments via post_message. Require the file to have been
