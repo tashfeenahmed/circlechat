@@ -63,31 +63,70 @@ export async function chat(
   }
 }
 
-// Pull the first JSON object/array out of a model response. Tolerates ```json
-// fences and leading/trailing prose — small models rarely return clean JSON.
-// Returns null if nothing parses.
-export function extractJson<T = unknown>(text: string | null): T | null {
-  if (!text) return null;
-  // Strip a ```json … ``` (or bare ```) fence if present.
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fenced ? fenced[1] : text;
-  // Find the outermost {...} or [...] span.
-  const firstObj = candidate.search(/[[{]/);
-  if (firstObj === -1) return null;
-  const opener = candidate[firstObj];
-  const closer = opener === "{" ? "}" : "]";
-  const lastClose = candidate.lastIndexOf(closer);
-  if (lastClose <= firstObj) return null;
-  const slice = candidate.slice(firstObj, lastClose + 1);
-  try {
-    return JSON.parse(slice) as T;
-  } catch {
-    try {
-      return JSON.parse(candidate.trim()) as T;
-    } catch {
-      return null;
+// Every balanced top-level {...} / [...] span in the text, string-aware so
+// braces inside JSON strings don't break the scan.
+function scanJsonCandidates(text: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const open = text[i];
+    if (open !== "{" && open !== "[") continue;
+    const close = open === "{" ? "}" : "]";
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < text.length; j++) {
+      const c = text[j];
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (inStr) {
+        if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === open) depth++;
+      else if (c === close) {
+        depth--;
+        if (depth === 0) {
+          out.push(text.slice(i, j + 1));
+          i = j; // resume after this candidate
+          break;
+        }
+      }
     }
   }
+  return out;
+}
+
+// Pull a JSON object/array out of a model response. Tolerates ```json fences,
+// leading/trailing prose, AND reasoning-style replies that quote example JSON
+// in their analysis before emitting the real answer — the old first-brace/
+// last-closer slice broke on those (it spanned the prose in between). We scan
+// every balanced candidate and return the LAST one that parses: models put
+// the final answer at the end. Returns null if nothing parses.
+export function extractJson<T = unknown>(text: string | null): T | null {
+  if (!text) return null;
+  // Prefer the contents of a ```json … ``` (or bare ```) fence if present —
+  // a fence is an explicit "here is the answer" marker.
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1].trim()) as T;
+    } catch {
+      /* fall through to the scanner */
+    }
+  }
+  const candidates = scanJsonCandidates(text);
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    try {
+      return JSON.parse(candidates[i]) as T;
+    } catch {
+      /* try the next-earlier candidate */
+    }
+  }
+  return null;
 }
 
 // Convenience: chat() then extractJson(). Retries once with a terser nudge if
@@ -100,7 +139,14 @@ export async function chatJson<T = unknown>(
   const parsed = extractJson<T>(first);
   if (parsed !== null) return parsed;
   const retry = await chat(
-    [...messages, { role: "user", content: "Return ONLY the JSON, no prose, no code fence." }],
+    [
+      ...messages,
+      {
+        role: "user",
+        content:
+          "Return ONLY the final JSON object, starting with { and ending with } — no reasoning, no analysis, no prose, no code fence.",
+      },
+    ],
     opts,
   );
   return extractJson<T>(retry);
