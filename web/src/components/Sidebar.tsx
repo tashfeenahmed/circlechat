@@ -17,20 +17,8 @@ export default function Sidebar() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   // "More" disclosure for secondary nav (Analytics / Skills / Org chart).
-  // Sticky across reloads; force-open when the current route lives inside it.
-  const moreRoute =
-    location.pathname === "/analytics" ||
-    location.pathname.startsWith("/skills") ||
-    location.pathname === "/org";
-  const [moreOpen, setMoreOpen] = useState<boolean>(
-    () => localStorage.getItem("cc:sb-more") === "1",
-  );
-  const showMore = moreOpen || moreRoute;
-  function toggleMore() {
-    const next = !showMore;
-    setMoreOpen(next);
-    localStorage.setItem("cc:sb-more", next ? "1" : "0");
-  }
+  // Collapsed on every load; expands for the session when asked.
+  const [moreOpen, setMoreOpen] = useState(false);
   const presence = useBus((s) => s.presence);
   const pendingApprovals = approvalsQ.data?.approvals.length ?? 0;
 
@@ -172,17 +160,11 @@ export default function Sidebar() {
             <span className="sb-badge mention">{pendingApprovals}</span>
           )}
         </Link>
-        <button type="button" onClick={toggleMore} className="sb-item sb-more" aria-expanded={showMore}>
-          <span className="sb-glyph">
-            <MoreHorizontal size={14} strokeWidth={2} />
-          </span>
-          <span className="sb-name">{showMore ? "Show less" : "Show more"}</span>
-        </button>
-        {showMore && (
+        {moreOpen && (
           <>
             <Link
               to="/analytics"
-              className={`sb-item sb-sub ${location.pathname === "/analytics" ? "active" : ""}`}
+              className={`sb-item ${location.pathname === "/analytics" ? "active" : ""}`}
             >
               <span className="sb-glyph">
                 <BarChart3 size={14} strokeWidth={2} />
@@ -191,7 +173,7 @@ export default function Sidebar() {
             </Link>
             <Link
               to="/skills"
-              className={`sb-item sb-sub ${location.pathname.startsWith("/skills") ? "active" : ""}`}
+              className={`sb-item ${location.pathname.startsWith("/skills") ? "active" : ""}`}
             >
               <span className="sb-glyph">
                 <BookOpen size={14} strokeWidth={2} />
@@ -200,7 +182,7 @@ export default function Sidebar() {
             </Link>
             <Link
               to="/org"
-              className={`sb-item sb-sub ${location.pathname === "/org" ? "active" : ""}`}
+              className={`sb-item ${location.pathname === "/org" ? "active" : ""}`}
             >
               <span className="sb-glyph">
                 <Network size={14} strokeWidth={2} />
@@ -209,6 +191,17 @@ export default function Sidebar() {
             </Link>
           </>
         )}
+        <button
+          type="button"
+          onClick={() => setMoreOpen((v) => !v)}
+          className="sb-item sb-more"
+          aria-expanded={moreOpen}
+        >
+          <span className="sb-glyph">
+            <MoreHorizontal size={14} strokeWidth={2} />
+          </span>
+          <span className="sb-name">{moreOpen ? "Show less" : "Show more"}</span>
+        </button>
       </div>
 
       <div className="sb-group">
