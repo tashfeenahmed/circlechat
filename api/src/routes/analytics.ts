@@ -192,7 +192,7 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
           from agent_runs r
           cross join lateral jsonb_array_elements_text(coalesce(r.result_json->'errors', '[]'::jsonb)) e
           where r.agent_id in (${sql.join(agentIds.map((x) => sql`${x}`), sql`, `)})
-            and r.started_at >= ${since}
+            and r.started_at >= ${since.toISOString()}::timestamptz
         `)) as unknown as Array<{ agent_id: string; err: string }>)
       : [];
     const handleByAgentId = new Map(roster.map((a) => [a.id, a.handle]));
