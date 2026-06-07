@@ -315,6 +315,17 @@ function duplicateApprovalError(actionType: string, dup: DuplicateApproval, agen
   );
 }
 
+// Near-synonyms agents emit for canonical action types. Mirror of the bridge's
+// ACTION_ALIASES — keep both in sync. Without normalization these paraphrases
+// hit the `default: unknown_action` case and the agent's intent is lost.
+const ACTION_ALIASES: Record<string, string> = {
+  comment_on_task: "task_comment",
+  add_comment: "task_comment",
+  comment: "task_comment",
+  set_goal: "create_goal",
+  plan_goal: "decompose_goal",
+};
+
 export async function applyActions(params: {
   agentId: string;
   runId: string;
@@ -347,6 +358,15 @@ export async function applyActions(params: {
   }
 
   for (const a of params.actions) {
+    // Server-side belt for action-name paraphrases. The bridge normalizes
+    // synonyms (comment_on_task → task_comment, etc.) before actions reach
+    // here, but actions can arrive from other callers too; normalize again so
+    // a near-synonym never falls through to `unknown_action` and silently
+    // strands a task card. Keep this in sync with the bridge's ACTION_ALIASES.
+    if (a && typeof (a as { type?: unknown }).type === "string") {
+      (a as { type: string }).type =
+        ACTION_ALIASES[(a as { type: string }).type] ?? (a as { type: string }).type;
+    }
     try {
       // Gate an action when it's out of scope (enforcement on) OR at/above the
       // configured risk threshold (risk gate on). Either way it becomes an

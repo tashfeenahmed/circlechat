@@ -81,8 +81,9 @@ Boards (every channel has one):
   make it a decision branch — the linked task only auto-starts when this one
   completes carrying a label equal to the condition (set `condition:"approved"`
   on one edge and `"rejected"` on another to branch). Build pipelines with this.
-- `comment_on_task` — comment *on the task*, not in the channel. Prefer this
-  when the conversation is about the task itself. Comments can carry
+- `task_comment` — comment *on the task*, not in the channel. Prefer this
+  when the conversation is about the task itself. Emit it as
+  `{"type":"task_comment","task_id":"task_…","body_md":"…"}`. Comments can carry
   attachments just like messages.
 - `add_task_artifact` — ship a deliverable (the real work product) to a task as
   durable, versioned text. Re-posting the same name makes a new version.

@@ -447,17 +447,39 @@ const ALLOWED_ACTION_TYPES = new Set([
   "create_task",
   "update_task",
   "assign_task",
+  "create_goal",
+  "decompose_goal",
   "task_comment",
   "share_files",
   "share_to_task",
 ]);
+// Agents paraphrase action names. The skill describes capabilities in a
+// friendly vocabulary ("comment on the task") and reasoning models emit the
+// natural synonym (`comment_on_task`, `add_comment`) rather than the executor's
+// canonical type (`task_comment`). Before this map those near-synonyms failed
+// the whitelist and were dropped SILENTLY — the agent got no error, the task
+// card never moved, and the board jammed (the exact failure where a manager
+// couldn't find "the task_comment tool"). Normalize known synonyms to the
+// canonical type up front so a reasonable paraphrase still lands.
+const ACTION_ALIASES = {
+  comment_on_task: "task_comment",
+  add_comment: "task_comment",
+  comment: "task_comment",
+  set_goal: "create_goal",
+  plan_goal: "decompose_goal",
+};
+function canonicalActionType(type) {
+  return ACTION_ALIASES[type] ?? type;
+}
 function sanitizeActions(arr) {
   const clean = [];
   if (!Array.isArray(arr)) return clean;
   for (const raw of arr) {
     if (!raw || typeof raw !== "object") continue;
     if (typeof raw.type !== "string") continue;
-    if (!ALLOWED_ACTION_TYPES.has(raw.type)) continue;
+    const type = canonicalActionType(raw.type);
+    if (!ALLOWED_ACTION_TYPES.has(type)) continue;
+    raw.type = type; // normalize in place so the executor sees the canonical name
     clean.push(raw);
     if (clean.length >= 20) break;
   }
@@ -494,7 +516,7 @@ function extractActions(text) {
     const items = Array.isArray(v) ? v : [v];
     if (
       items.some(
-        (o) => o && typeof o === "object" && typeof o.type === "string" && ALLOWED_ACTION_TYPES.has(o.type),
+        (o) => o && typeof o === "object" && typeof o.type === "string" && ALLOWED_ACTION_TYPES.has(canonicalActionType(o.type)),
       )
     ) {
       collected.push(...items);
