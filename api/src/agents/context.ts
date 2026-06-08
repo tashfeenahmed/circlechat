@@ -151,6 +151,7 @@ export interface ContextPacket {
       triedDeadEnds: string[];
       recentProgress: string[];
       stallCount: number;
+      progress: { isInLoop: boolean; nextStep: string } | null;
     } | null;
   }>;
   // Open tasks assigned to this agent, freshest first. Present on every
@@ -565,6 +566,14 @@ export async function buildContext(opts: {
             triedDeadEnds: led.triedDeadEnds,
             recentProgress: led.progressNotes.slice(-5).map((p) => p.note),
             stallCount: led.stallCount,
+            // Typed per-round progress signal — when the sweeper has flagged the
+            // team as looping, surface it so the agent changes approach instead
+            // of repeating the same step. Only attached when there's something
+            // actionable to say (looping or no progress).
+            progress:
+              led.progressLedger && (led.progressLedger.isInLoop || !led.progressLedger.isProgressBeingMade)
+                ? { isInLoop: led.progressLedger.isInLoop, nextStep: led.progressLedger.nextStep }
+                : null,
           }
         : null,
     };

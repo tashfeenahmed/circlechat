@@ -581,8 +581,16 @@ export const goalLedgers = pgTable(
       .notNull()
       .default([]),
     triedDeadEnds: jsonb("tried_dead_ends").$type<string[]>().notNull().default([]),
+    // PROGRESS LEDGER (Magentic-style, typed per-round): the latest assessment of
+    // whether the team is actually advancing or looping. Distinct from the
+    // free-form progress NOTES above — these are typed signals the stall
+    // machinery and the agent context both read, so loop-breaking no longer
+    // depends only on a wall-clock gap. `signal` is the internal snapshot
+    // signature used to diff progress between sweeps. Null until first assessed.
+    progressLedger: jsonb("progress_ledger").$type<ProgressLedger>(),
     // Stall machinery.
     stallCount: integer("stall_count").notNull().default(0),
+    loopCount: integer("loop_count").notNull().default(0), // consecutive sweeps assessed in-loop
     lastProgressAt: timestamp("last_progress_at", { withTimezone: true }).defaultNow().notNull(),
     replanCount: integer("replan_count").notNull().default(0),
     version: integer("version").notNull().default(1),
@@ -592,5 +600,17 @@ export const goalLedgers = pgTable(
     wsIdx: index("goal_ledgers_ws_idx").on(t.workspaceId),
   }),
 );
+
+// One typed per-round Progress Ledger assessment (Magentic's five-field shape,
+// adapted): is the goal done, is real progress happening, is the team looping,
+// and what to do next. Stored on the ledger row + surfaced to agents.
+export type ProgressLedger = {
+  isRequestSatisfied: boolean;
+  isProgressBeingMade: boolean;
+  isInLoop: boolean;
+  nextStep: string;
+  signal: string; // internal: snapshot signature for cross-sweep progress diffing
+  assessedAt: string; // ISO
+};
 
 export type GoalLedger = typeof goalLedgers.$inferSelect;

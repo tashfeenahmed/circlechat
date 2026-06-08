@@ -6,11 +6,14 @@
 // "work is supposedly happening but nothing advanced" and trigger a re-plan.
 import { eq, inArray, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { goalLedgers, type GoalLedger } from "../db/schema.js";
+import { goalLedgers, type GoalLedger, type ProgressLedger } from "../db/schema.js";
 
 const MAX_FACTS = 40;
 const MAX_PROGRESS_NOTES = 30;
 const MAX_DEAD_ENDS = 30;
+// How many recent progress notes feed the loop heuristic, and how few distinct
+// ones among them count as "the team keeps saying the same thing".
+const LOOP_WINDOW = 4;
 
 export async function loadLedger(goalId: string): Promise<GoalLedger | null> {
   const [row] = await db.select().from(goalLedgers).where(eq(goalLedgers.goalId, goalId)).limit(1);
@@ -48,6 +51,10 @@ export async function writePlan(opts: {
       set: {
         plan: opts.plan,
         stallCount: 0,
+        // A fresh plan is a clean slate for loop detection — drop the stale
+        // assessment so a new approach isn't immediately flagged as looping.
+        loopCount: 0,
+        progressLedger: null,
         lastProgressAt: now,
         updatedAt: now,
         ...(opts.isReplan
@@ -96,12 +103,12 @@ export async function appendDeadEnd(goalId: string, deadEnd: string): Promise<vo
     .catch(() => {});
 }
 
-// Real forward motion happened (a task advanced): reset the stall counter and
-// stamp the progress clock. Idempotent / best-effort.
+// Real forward motion happened (a task advanced): reset the stall AND loop
+// counters and stamp the progress clock. Idempotent / best-effort.
 export async function recordProgress(goalId: string): Promise<void> {
   await db
     .update(goalLedgers)
-    .set({ stallCount: 0, lastProgressAt: new Date(), updatedAt: new Date() })
+    .set({ stallCount: 0, loopCount: 0, lastProgressAt: new Date(), updatedAt: new Date() })
     .where(eq(goalLedgers.goalId, goalId))
     .catch(() => {});
 }
@@ -114,4 +121,57 @@ export async function bumpStall(goalId: string): Promise<number> {
     .where(eq(goalLedgers.goalId, goalId))
     .returning({ stallCount: goalLedgers.stallCount });
   return row?.stallCount ?? 0;
+}
+
+function norm(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// Compute the typed per-round Progress Ledger for a goal from its current state.
+// Deterministic + cheap (no LLM): "progress" is whether the done-task count or
+// the progress-note stream advanced since the last sweep (encoded in `signal`);
+// "in a loop" is the team being ACTIVE (recent notes) yet NOT progressing while
+// repeating itself (few distinct recent notes). This catches the active-echo
+// case the wall-clock stall gate misses, and the typed flags are surfaced to
+// agents so they self-correct. Pure — the caller persists the result.
+export function assessProgress(
+  led: GoalLedger,
+  state: { doneCount: number; openCount: number; lastActivityMs: number },
+  activeWindowMs: number,
+): { pl: ProgressLedger; nextLoopCount: number } {
+  const recent = led.progressNotes.slice(-LOOP_WINDOW).map((p) => norm(p.note)).filter(Boolean);
+  const distinct = new Set(recent).size;
+  // Signature of observable progress: done-count + how many notes exist + the
+  // newest note. If unchanged vs the stored signal, nothing advanced this sweep.
+  const newest = led.progressNotes.length ? norm(led.progressNotes[led.progressNotes.length - 1].note) : "";
+  const signal = `${state.doneCount}|${led.progressNotes.length}|${newest.slice(0, 80)}`;
+  const prev = led.progressLedger?.signal ?? "";
+  const isProgressBeingMade = prev === "" ? true : signal !== prev;
+  const isRequestSatisfied = state.openCount === 0;
+  // Active = something touched the goal recently; repetitive = the team keeps
+  // saying near-identical things. A loop = active + repetitive + not advancing.
+  const active = state.lastActivityMs <= activeWindowMs;
+  const repetitive = recent.length >= LOOP_WINDOW && distinct <= 1;
+  const isInLoop = !isRequestSatisfied && !isProgressBeingMade && active && repetitive;
+  const nextLoopCount = isInLoop ? led.loopCount + 1 : 0;
+  const nextStep = isRequestSatisfied
+    ? "All tasks done — roll up and close the goal."
+    : isInLoop
+      ? "The team is repeating the same step without progress. STOP, try a different approach, or escalate to the goal owner."
+      : isProgressBeingMade
+        ? "Progress is being made — continue the current plan."
+        : "No recent progress — pick up the next open task or unblock what's stuck.";
+  return {
+    pl: { isRequestSatisfied, isProgressBeingMade, isInLoop, nextStep, signal, assessedAt: new Date().toISOString() },
+    nextLoopCount,
+  };
+}
+
+// Persist a typed progress assessment + the running loop counter.
+export async function writeProgressAssessment(goalId: string, pl: ProgressLedger, loopCount: number): Promise<void> {
+  await db
+    .update(goalLedgers)
+    .set({ progressLedger: pl, loopCount, updatedAt: new Date() })
+    .where(eq(goalLedgers.goalId, goalId))
+    .catch(() => {});
 }

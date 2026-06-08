@@ -927,6 +927,13 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         sub.push(`      Dead-ends (do NOT repeat): ${led.triedDeadEnds.slice(-6).map((d) => `• ${d}`).join("  ")}`);
       if (led.recentProgress && led.recentProgress.length)
         sub.push(`      Recent progress: ${led.recentProgress.map((p) => `• ${p}`).join("  ")}`);
+      // Typed per-round progress signal from the sweeper. A loop warning is
+      // high-priority: the team keeps repeating a step without advancing, so
+      // tell the agent to change approach instead of spinning.
+      if (led.progress && led.progress.isInLoop)
+        sub.push(`      ⚠️ LOOP DETECTED — the team has repeated the same step without progress. ${led.progress.nextStep || "Change approach or escalate to the goal owner."}`);
+      else if (led.progress && led.progress.nextStep)
+        sub.push(`      ▸ Next step: ${led.progress.nextStep}`);
       return [head, ...sub];
     });
     goalsBlock = [
