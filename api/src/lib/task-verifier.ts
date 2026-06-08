@@ -14,6 +14,7 @@ import { z } from "zod";
 import { chatJson, plannerEnabled } from "./completion.js";
 import { liveArtifactRows, isSubstantiveArtifact, isTextualContentType } from "./task-artifacts.js";
 import { readObject } from "./storage.js";
+import { renderWebDeliverable, type RenderObservation } from "./deliverable-render.js";
 import { db } from "../db/index.js";
 import { taskVerifications, type TaskArtifact } from "../db/schema.js";
 import { id } from "./ids.js";
@@ -39,6 +40,12 @@ export function verifierEnabled(): boolean {
 function passThreshold(): number {
   const n = Number(process.env.VERIFIER_PASS_THRESHOLD);
   return Number.isFinite(n) ? n : 0.6;
+}
+// The execution check (headless render) is separately opt-in: it spawns a
+// Chromium subprocess, so it must never surprise a deployment that didn't ask
+// for it or lacks the binary. Requires the rubric gate to be on too.
+function execEnabled(): boolean {
+  return process.env.VERIFY_EXEC === "on" && verifierEnabled();
 }
 
 function inferType(name: string, ct: string): "code" | "research" | "design" | "general" {
@@ -86,6 +93,25 @@ export async function verifyTaskForDone(opts: {
   if (!chosen) return null; // no readable TEXT deliverable to judge → defer to heuristic outcome
 
   const taskType = inferType(chosen.name, chosen.contentType);
+
+  // EXECUTION CHECK (opt-in, VERIFY_EXEC=on): for a web deliverable, render it
+  // in headless Chromium and feed what ACTUALLY loaded to the judge, so it
+  // scores an observed final state — not source that merely looks complete.
+  // Strictly additive + fail-open: a null observation (chromium absent, error,
+  // not web) just means the judge runs text-only, exactly as before.
+  let obs: RenderObservation | null = null;
+  let renderBlock = "";
+  if (execEnabled() && taskType === "code" && /\.html?$/i.test(chosen.name)) {
+    obs = await renderWebDeliverable({ taskId: opts.taskId, entryName: chosen.name }).catch(() => null);
+    if (obs) {
+      renderBlock =
+        `\n\nRENDER OBSERVATION (headless Chromium actually loaded this deliverable):\n` +
+        `- loaded_ok: ${obs.ok}\n` +
+        `- rendered_visible_text_chars: ${obs.renderedTextLen}\n` +
+        `- console_errors: ${obs.consoleErrors.length ? obs.consoleErrors.slice(0, 5).join(" | ") : "none"}\n`;
+    }
+  }
+
   const raw = await chatJson<unknown>(
     [
       {
@@ -96,6 +122,9 @@ export async function verifyTaskForDone(opts: {
           "FAIL if the deliverable is a plan/promise/placeholder/status-update instead of the " +
           "real work product, if it is off-topic, if it only restates the task, or if it " +
           "fabricates results (claims of tests passing, deploys, or data with no evidence). " +
+          "If a RENDER OBSERVATION is present, weight it HEAVILY: a deliverable that failed to " +
+          "load (loaded_ok:false), rendered almost no visible text, or threw console errors " +
+          "FAILS regardless of how complete the source looks. " +
           'Return ONLY a JSON object: {"meets_acceptance_criteria":0..1,' +
           '"artifact_present_substantive":true|false,"not_fabricated":true|false,' +
           '"verdict":"pass"|"fail","score":0..1,"rationale":"one short paragraph"}',
@@ -105,21 +134,23 @@ export async function verifyTaskForDone(opts: {
         content:
           `TASK TITLE: ${opts.title}\n` +
           `ACCEPTANCE CRITERIA / DESCRIPTION:\n${opts.bodyMd || "(none stated — judge against the title)"}\n\n` +
-          `DELIVERABLE (${chosen.name}, ${chosen.contentType}):\n${chosenText}`,
+          `DELIVERABLE (${chosen.name}, ${chosen.contentType}):\n${chosenText}` +
+          renderBlock,
       },
     ],
     { temperature: 0, maxTokens: 800, timeoutMs: 60_000 },
   );
 
+  const method = obs ? "render" : taskType === "code" ? "test" : "rubric";
   const parsed = VerdictSchema.safeParse(raw);
   if (!parsed.success) {
     // Fail-open: a judge we can't reach/parse must not freeze the board.
-    await record(opts, taskType, chosen.id, "error", null, {}, "judge unreachable or unparseable — failing open");
+    await record(opts, taskType, chosen.id, "error", null, obs ? { render: obs } : {}, "judge unreachable or unparseable — failing open", method);
     return null;
   }
   const v: Verdict = parsed.data;
   const pass = v.verdict === "pass" && v.not_fabricated && v.score >= passThreshold();
-  await record(opts, taskType, chosen.id, pass ? "pass" : "fail", v.score, v, v.rationale);
+  await record(opts, taskType, chosen.id, pass ? "pass" : "fail", v.score, obs ? { ...v, render: obs } : v, v.rationale, method);
   return pass ? null : "verification_failed";
 }
 
@@ -144,6 +175,7 @@ async function record(
   score: number | null,
   rubric: Record<string, unknown>,
   rationale: string,
+  method: string,
 ): Promise<void> {
   await db
     .insert(taskVerifications)
@@ -152,7 +184,7 @@ async function record(
       taskId: opts.taskId,
       workspaceId: opts.workspaceId,
       taskType,
-      method: taskType === "code" ? "test" : "rubric",
+      method,
       verdict,
       score: score ?? undefined,
       rubricJson: rubric,

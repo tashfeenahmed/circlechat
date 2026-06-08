@@ -39,6 +39,9 @@ These change agent behaviour, so they are deliberately conservative by default.
 |-----|---------|--------|
 | `VERIFY_GATE` | _off_ | `on` enables the **LLM-as-judge verification gate**: before a reviewer agent can flip a task `review → done`, the judge scores the deliverable against the task's acceptance criteria and blocks the flip on a fail (rationale fed back to the reviewer). Requires a planner backend. **Only judges textual deliverables** (binary artifacts pass on the substance heuristic). **Fails open** on any judge outage — never freezes the board. Humans always bypass. Off by default because it adds an LLM call per done-flip and a weak/idiosyncratic model can mis-judge. |
 | `VERIFIER_PASS_THRESHOLD` | `0.6` | Min judge score (0–1) to pass, in addition to a `pass` verdict and a not-fabricated check. Raise for a stricter bar. |
+| `VERIFY_EXEC` | _off_ | `on` adds an **execution check** to the gate: for a web deliverable (`.html`), the task's files are reconstructed into a temp dir and **rendered in headless Chromium** (`--dump-dom`); the observed result (did it load, visible-text length, console errors) is fed to the judge, which is told to weight it heavily — so a plausible-but-broken site fails even when the source looks complete. Requires `VERIFY_GATE=on` and a Chromium binary. **Strictly additive + fails open:** if Chromium is absent, the render errors, or the deliverable isn't web, the judge runs text-only exactly as before. Recorded with `method:"render"` and the observation in `rubric_json`. |
+| `VERIFY_EXEC_TIMEOUT_MS` | `8000` | Hard per-render cap (ms); Chromium is SIGKILL'd on overrun and the render is treated as a non-blocking miss. |
+| `CHROMIUM_BIN` | `/usr/bin/chromium` | Path to the Chromium/Chrome binary used by `VERIFY_EXEC` (and the agent-browser skill). |
 | `ENFORCE_AGENT_SCOPES` | _on_ | Agents may only perform actions covered by their `scopes` (e.g. `channels.reply`, `tasks.write`); out-of-scope actions become approval cards. An agent with empty scopes gets the safe defaults. Set to `0`/`false`/`no`/`off` to disable for a trusted single-tenant deployment. |
 | `APPROVE_RISK_AT` | _off_ | Set to `low`/`medium`/`high` to force approval for any action at/above that risk level, even if in-scope. Unset = no risk gate. |
 | `CC_MODEL_IMPORTANT` | _unset_ | Pin a specific model for human-facing / decision triggers (e.g. `moonshotai/kimi-k2.6`); heartbeats stay on `auto`. Empty = always `auto`. |
@@ -119,8 +122,10 @@ The extras below mainly matter for tuning/observability:
 ## Recommended posture by deployment
 
 - **Trusted single-tenant (your own team):** enable the quality features —
-  `VERIFY_GATE=on`, optionally `GOAL_STALL_REPLAN=on`. Consider relaxing
-  `ENFORCE_AGENT_SCOPES` if scopes are noise for you.
+  `VERIFY_GATE=on`, and if you ship web deliverables and have Chromium on the
+  host, `VERIFY_EXEC=on` (renders sites before the judge scores them); optionally
+  `GOAL_STALL_REPLAN=on`. Consider relaxing `ENFORCE_AGENT_SCOPES` if scopes are
+  noise for you.
 - **Multi-tenant / untrusted / unknown model quality:** leave `VERIFY_GATE` and
   `GOAL_STALL_REPLAN` off (the safe defaults), keep `ENFORCE_AGENT_SCOPES` on,
   and consider `APPROVE_RISK_AT=medium` to gate risky actions.
