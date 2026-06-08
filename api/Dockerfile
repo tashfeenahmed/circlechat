@@ -18,7 +18,11 @@ ENV NODE_ENV=production
 # docker-cli lets the agent-install route and the multi-bridge spawn
 # Hermes/OpenClaw agent containers via a mounted Docker socket. Only used when
 # the agent runtime is enabled (see compose.agents.yml); harmless otherwise.
-RUN apk add --no-cache docker-cli
+# chromium powers the verification gate's execution check (VERIFY_EXEC=on):
+# the verifier renders web deliverables headless to score what actually loads.
+# Only spawned when VERIFY_EXEC is on; otherwise it's just unused bytes.
+# Binary lands at /usr/bin/chromium-browser on Alpine (set CHROMIUM_BIN to match).
+RUN apk add --no-cache docker-cli chromium ttf-freefont
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/migrations ./migrations
