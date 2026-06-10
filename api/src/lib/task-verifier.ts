@@ -154,6 +154,31 @@ export async function verifyTaskForDone(opts: {
   return pass ? null : "verification_failed";
 }
 
+// The latest recorded verdict for a task, summarized for the reviewer's task
+// context so they review WITH a pre-computed quality signal (pass/fail + score
+// + rationale) instead of cold. Null when the verifier never ran (dormant, or
+// no textual deliverable) — the reviewer then falls back to reading artifacts.
+export async function latestVerdictSummary(
+  taskId: string,
+): Promise<{ verdict: string; score: number | null; rationale: string } | null> {
+  const [row] = await db
+    .select({
+      verdict: taskVerifications.verdict,
+      score: taskVerifications.score,
+      rationale: taskVerifications.rationale,
+    })
+    .from(taskVerifications)
+    .where(eqTask(taskId))
+    .orderBy(descCreated())
+    .limit(1);
+  if (!row || row.verdict === "error") return null; // fail-open verdicts carry no signal
+  return {
+    verdict: row.verdict,
+    score: row.score == null ? null : Number(row.score),
+    rationale: row.rationale || "",
+  };
+}
+
 // The most recent verdict's rationale, so the reviewer agent learns WHAT the
 // judge flagged instead of a bare "verification_failed".
 export async function latestVerificationRationale(taskId: string): Promise<string | null> {

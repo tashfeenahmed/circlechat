@@ -2,7 +2,7 @@ import { Worker } from "bullmq";
 import { and, eq, lt, inArray, sql as dsql } from "drizzle-orm";
 import { redis } from "../lib/redis.js";
 import { db } from "../db/index.js";
-import { goals, tasks, workspaces, goalLedgers } from "../db/schema.js";
+import { goals, tasks, workspaces, goalLedgers, members } from "../db/schema.js";
 import { GOAL_QUEUE, type GoalPlanJob, enqueueGoalPlan } from "../lib/goal-queue.js";
 import { planGoal } from "../lib/planner.js";
 import { bumpStall, assessProgress, writeProgressAssessment } from "../lib/ledger-core.js";
@@ -28,6 +28,12 @@ const MAX_REPLANS = Number(process.env.GOAL_MAX_REPLANS ?? 2);
 // not the wall-clock stall gate. After this many consecutive in-loop sweeps it
 // escalates the same way a stall does (notify, or re-plan if GOAL_STALL_REPLAN).
 const LOOP_REPLAN_THRESHOLD = Number(process.env.GOAL_LOOP_REPLAN_THRESHOLD ?? 2);
+// Review-queue SLA: a task sitting in `review` longer than this with nobody
+// flipping it has fallen through the cracks — escalate to a human so the board
+// doesn't freeze with finished-but-uncertified work (3 tasks sat 30h+ in
+// practice). Dedup is via touching updated_at, so a task re-escalates at most
+// once per SLA period.
+const REVIEW_SLA_MS = Number(process.env.REVIEW_SLA_MS ?? 6 * 60 * 60 * 1000); // 6h
 
 // Errors that mean "stop, don't count an attempt" (nothing to retry).
 const TERMINAL_NO_COUNT = new Set(["already_planned", "goal_not_found", "wrong_workspace"]);
@@ -79,21 +85,83 @@ async function handleSweep(): Promise<void> {
     .innerJoin(workspaces, eq(workspaces.id, goals.workspaceId))
     .where(and(eq(goals.status, "open"), lt(goals.planAttempts, MAX_PLAN_ATTEMPTS), eq(workspaces.autoPlan, "auto")))
     .limit(SWEEP_BATCH);
-  if (!candidates.length) return;
 
-  const ids = candidates.map((c) => c.id);
-  const withTasks = new Set(
-    (await db.select({ goalId: tasks.goalId }).from(tasks).where(and(inArray(tasks.goalId, ids), eq(tasks.archived, false)))).map(
-      (t) => t.goalId,
-    ),
-  );
-  for (const c of candidates) {
-    if (withTasks.has(c.id)) continue; // already planned
-    await enqueueGoalPlan(c.id, c.workspaceId, true);
+  // NOTE: the stall/loop pass (step 3) MUST run every sweep, independently of
+  // whether there are unplanned OPEN goals to enqueue. An earlier version
+  // `return`ed here when `candidates` was empty — the steady state once every
+  // goal is planned and in_progress — which silently disabled stall/loop
+  // detection entirely (the ledger's progress assessment froze and the
+  // credential-begging loop was never caught). Only the enqueue step is gated
+  // on candidates; the assessment always runs.
+  if (candidates.length) {
+    const ids = candidates.map((c) => c.id);
+    const withTasks = new Set(
+      (await db.select({ goalId: tasks.goalId }).from(tasks).where(and(inArray(tasks.goalId, ids), eq(tasks.archived, false)))).map(
+        (t) => t.goalId,
+      ),
+    );
+    for (const c of candidates) {
+      if (withTasks.has(c.id)) continue; // already planned
+      await enqueueGoalPlan(c.id, c.workspaceId, true);
+    }
   }
 
-  // 3. Stall detection: re-plan goals that stopped making progress.
+  // 3. Stall/loop detection + per-round progress assessment. Runs EVERY sweep.
   await handleStalls().catch((e) => console.error("[goal-planner] stall pass error", e));
+
+  // 4. Review-queue SLA: escalate review tasks nobody has certified.
+  await handleReviewQueue().catch((e) => console.error("[goal-planner] review pass error", e));
+}
+
+// Escalate tasks stuck in `review` past the SLA to a human, so finished work
+// doesn't rot uncertified. The reviewer was already woken on review entry; this
+// is the backstop for when that wake was missed or ignored. Touches updated_at
+// to dedup (re-fires at most once per SLA window). Notifies a HUMAN only — the
+// goal owner if human, else the human task creator — never re-pings agents.
+async function handleReviewQueue(): Promise<void> {
+  const cutoff = new Date(Date.now() - REVIEW_SLA_MS);
+  const rows = await db
+    .select({
+      id: tasks.id,
+      title: tasks.title,
+      workspaceId: tasks.workspaceId,
+      createdBy: tasks.createdBy,
+      goalOwner: goals.ownerMemberId,
+    })
+    .from(tasks)
+    .innerJoin(workspaces, eq(workspaces.id, tasks.workspaceId))
+    .leftJoin(goals, eq(goals.id, tasks.goalId))
+    .where(
+      and(
+        eq(tasks.status, "review"),
+        eq(tasks.archived, false),
+        lt(tasks.updatedAt, cutoff),
+        eq(workspaces.autoPlan, "auto"),
+      ),
+    )
+    .limit(SWEEP_BATCH);
+
+  for (const r of rows) {
+    // Prefer the goal owner, fall back to the task creator; only notify if it's
+    // a human member (agents were already woken on review entry).
+    for (const candidate of [r.goalOwner, r.createdBy]) {
+      if (!candidate) continue;
+      const [m] = await db.select({ kind: members.kind }).from(members).where(eq(members.id, candidate)).limit(1);
+      if (m?.kind !== "user") continue;
+      await notify({
+        workspaceId: r.workspaceId,
+        memberId: candidate,
+        kind: "system",
+        title: "A task has been waiting for review",
+        body: `${r.title} — finished and awaiting sign-off for over ${Math.round(REVIEW_SLA_MS / 3_600_000)}h. Review it and mark it done, or send it back.`,
+        link: `/board?task=${r.id}`,
+      }).catch(() => {});
+      break;
+    }
+    // Touch updated_at so it won't re-escalate until another SLA window passes.
+    await db.update(tasks).set({ updatedAt: new Date() }).where(eq(tasks.id, r.id)).catch(() => {});
+  }
+  if (rows.length) console.log(`[goal-planner] review SLA: escalated ${rows.length} stale review task(s)`);
 }
 
 // Per-sweep progress assessment + escalation. Every in-progress goal (active OR
@@ -122,6 +190,8 @@ async function handleStalls(): Promise<void> {
     .where(and(eq(goals.status, "in_progress"), eq(workspaces.autoPlan, "auto")))
     .limit(SWEEP_BATCH);
 
+  let assessed = 0;
+  let flagged = 0;
   for (const r of rows) {
     const led = r.led;
     // Per-goal task counts (done vs still-open). No open work → awaiting roll-up,
@@ -140,10 +210,12 @@ async function handleStalls(): Promise<void> {
     const lastActivityMs = Date.now() - led.lastProgressAt.getTime();
     const { pl, nextLoopCount } = assessProgress(led, { doneCount, openCount, lastActivityMs }, STALL_WINDOW_MS);
     await writeProgressAssessment(led.goalId, pl, nextLoopCount);
+    assessed++;
 
     const quietStalled = led.lastProgressAt.getTime() < cutoffMs;
     const looping = nextLoopCount >= LOOP_REPLAN_THRESHOLD;
     if (!quietStalled && !looping) continue;
+    flagged++;
 
     // Only the quiet path increments the wall-clock stall counter (preserve the
     // original semantics); the loop path escalates on its own counter.
@@ -159,6 +231,9 @@ async function handleStalls(): Promise<void> {
       title: r.title,
       reason: looping ? "loop" : "stall",
     });
+  }
+  if (assessed || flagged) {
+    console.log(`[goal-planner] stall pass: assessed=${assessed} flagged=${flagged} of ${rows.length} in-progress goal(s)`);
   }
 }
 

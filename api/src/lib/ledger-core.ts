@@ -173,5 +173,5 @@ export async function writeProgressAssessment(goalId: string, pl: ProgressLedger
     .update(goalLedgers)
     .set({ progressLedger: pl, loopCount, updatedAt: new Date() })
     .where(eq(goalLedgers.goalId, goalId))
-    .catch(() => {});
+    .catch((e) => console.error(`[ledger] writeProgressAssessment failed for ${goalId}:`, (e as Error).message));
 }

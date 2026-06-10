@@ -13,7 +13,7 @@
 
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { messages } from "../db/schema.js";
+import { messages, taskComments } from "../db/schema.js";
 
 const RECENT_LIMIT = 50;
 const SIMILARITY_THRESHOLD = 0.85;
@@ -80,6 +80,38 @@ export async function checkRecentDuplicate(
         againstId: r.id,
         score: Math.round(score * 100) / 100,
       };
+    }
+  }
+  return { ok: true };
+}
+
+// Same cross-message dedupe, but for TASK COMMENTS. The begging loop relocated
+// here: approval-level dedupe killed duplicate approval CARDS, so agents moved
+// to re-posting "still blocked, need credentials" as a fresh task_comment every
+// hour (no message-table dedupe ever saw those). Compare an incoming comment
+// against the recent comments on the SAME task; a near-identical restatement is
+// noise, not progress. Threshold matches the message dedupe.
+export async function checkRecentDuplicateTaskComment(
+  taskId: string,
+  bodyMd: string,
+): Promise<DedupeResult> {
+  const incomingNorm = normalize(bodyMd);
+  if (incomingNorm.length < MIN_NORMALIZED_LEN) return { ok: true };
+  const incoming = shingles(incomingNorm, SHINGLE_SIZE);
+
+  const recents = await db
+    .select({ id: taskComments.id, bodyMd: taskComments.bodyMd })
+    .from(taskComments)
+    .where(and(eq(taskComments.taskId, taskId), isNull(taskComments.deletedAt)))
+    .orderBy(desc(taskComments.ts))
+    .limit(RECENT_LIMIT);
+
+  for (const r of recents) {
+    const n = normalize(r.bodyMd);
+    if (n.length < MIN_NORMALIZED_LEN) continue;
+    const score = jaccard(incoming, shingles(n, SHINGLE_SIZE));
+    if (score >= SIMILARITY_THRESHOLD) {
+      return { ok: false, reason: "duplicate_of_recent", againstId: r.id, score: Math.round(score * 100) / 100 };
     }
   }
   return { ok: true };

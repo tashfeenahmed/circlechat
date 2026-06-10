@@ -775,7 +775,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  {"type":"react","message_id":"<id>","emoji":"🙏"}            — react instead of writing an ack/thanks/agreement`,
     `  {"type":"share_files","conversation_id":"<id>","body_md":"<optional, can be empty>","reply_to":"<optional>","files":[{"url":"https://…","name":"cat.jpg"},{"path":"/workspace/report.pdf","name":"Q3-report.pdf"}]}`,
     `                                                                — each file entry has EXACTLY ONE of "url" (http/https, server fetches it) or "path" (absolute under /workspace/ or /tmp/, server reads from disk). Use this to share web assets OR files you wrote to /workspace this turn. Up to 10 files, 20MB each. This replaces the old urllib/curl + /agent-api/uploads + <attachments> dance — always prefer share_files.`,
-    `  {"type":"create_task","title":"…","body_md":"…","status":"backlog|in_progress|blocked|review|done","conversation_id":"<optional channel>","parent_id":"<optional parent task_…>","assignees":["<memberId>","<memberId>"],"labels":["eng"],"due_at":"2026-05-01"}`,
+    `  {"type":"create_task","title":"…","body_md":"…","status":"backlog|in_progress|blocked|review|done","conversation_id":"<optional channel>","parent_id":"<optional parent task_…>","goal_id":"<optional goal_… this task serves>","assignees":["<memberId>","<memberId>"],"labels":["eng"],"due_at":"2026-05-01"}  — set goal_id (or parent_id, which inherits its goal) when the task serves an active goal, so it counts toward that goal's progress instead of floating as an orphan.`,
     `  {"type":"update_task","task_id":"task_…","status":"in_progress|blocked|review|done","progress":50,"title":"…","body_md":"…","due_at":"2026-05-01","archived":true}`,
     `                                                                — STATUS RULES (server-enforced): "blocked" = waiting on something outside your control (see BLOCKED PROTOCOL). "review" = your work is finished and a deliverable is attached — this is YOUR terminal state on tasks you're assigned to: the MAKER CANNOT MARK THEIR OWN WORK DONE (done_requires_review). Your manager or a human verifies the evidence and flips review → done. Flipping someone ELSE'S task to done (e.g. you're the reviewing manager) requires EVIDENCE on the card: a substantive deliverable in its artifacts store, or human sign-off after the maker's last comment (done_requires_evidence otherwise). So the flow is: do the work → share_to_task the real artifact → status:"review" → reviewer flips done.`,
     `  {"type":"assign_task","task_id":"task_…","member_id":"m_…"}`,
@@ -832,6 +832,18 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
       ? `\nRecent comments:\n${t.recentComments.map((c) => `  @${c.memberHandle}: ${String(c.bodyMd).slice(0, 200)}`).join("\n")}`
       : "";
     const sourceLine = t.conversationName ? `From channel: #${t.conversationName}` : null;
+    // Pre-computed quality verdict (review entry). Gives a reviewing manager a
+    // concrete signal — flip done on a pass, send back on a fail — instead of
+    // reviewing cold or rubber-stamping.
+    let verdictLine = null;
+    if (t.latestVerdict && t.latestVerdict.verdict) {
+      const v = t.latestVerdict;
+      const sc = typeof v.score === "number" ? ` (${Math.round(v.score * 100)}%)` : "";
+      verdictLine =
+        v.verdict === "pass"
+          ? `AUTO-VERIFIER: ✅ pass${sc} — ${v.rationale || "deliverable meets the acceptance criteria"}. If you're the reviewer and you agree, flip this task to status:"done".`
+          : `AUTO-VERIFIER: ⚠️ fail${sc} — ${v.rationale || "deliverable does not meet the acceptance criteria"}. Do NOT mark done; comment what's missing and set status:"in_progress" so the maker fixes the real artifact.`;
+    }
     // The "why" chain: mission ▸ project ▸ goal ▸ … ▸ the goal this task
     // serves. Lets the agent judge scope/trade-offs against the real objective
     // instead of optimizing a bare title. Mission comes from the workspace.
@@ -848,6 +860,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
       `TASK (id ${t.id}) — status: ${t.status}${t.progress ? ` · progress ${t.progress}%` : ""}${t.dueAt ? ` · due ${t.dueAt.slice(0, 10)}` : ""}`,
       `Title: ${t.title}`,
       whyLine,
+      verdictLine,
       t.bodyMd ? `Description: ${t.bodyMd}` : null,
       sourceLine,
       t.labels?.length ? `Labels: ${t.labels.join(", ")}` : null,
@@ -1021,11 +1034,45 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ].join("\n");
   }
 
+  // PROJECT BRIEF — the canonical, human-pinned source of truth (read fresh
+  // from /workspace/BRIEF.md each run). Rendered prominently, near the top,
+  // BEFORE the conversation history — weak models won't fetch it themselves and
+  // the chat history (full of stale/wrong claims) otherwise wins. The brief
+  // overrides anything in chat that contradicts it.
+  let briefBlock = "";
+  const briefText = packet.workspace && typeof packet.workspace.brief === "string" ? packet.workspace.brief.trim() : "";
+  if (briefText) {
+    briefBlock = [
+      ``,
+      `━━━━━━━━━━ PROJECT BRIEF (AUTHORITATIVE — overrides anything in chat that contradicts it) ━━━━━━━━━━`,
+      briefText,
+      `━━━━━━━━━━ END BRIEF ━━━━━━━━━━`,
+    ].join("\n");
+  }
+
+  // WORKSPACE FILES — live manifest of /workspace so the agent builds on what
+  // already exists instead of asking teammates in chat ("can you share the
+  // component?") or rebuilding a file that's right there on disk.
+  let filesBlock = "";
+  const wsFiles = packet.workspace && Array.isArray(packet.workspace.files) ? packet.workspace.files : null;
+  if (wsFiles && wsFiles.length) {
+    const fmtSize = (n) => (n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}B`);
+    const fileLines = wsFiles.slice(0, 60).map((f) => `  ${f.path} (${fmtSize(f.size)})`);
+    filesBlock = [
+      ``,
+      `WORKSPACE FILES (already on /workspace, freshest first — READ these before recreating anything; reference by exact path in share_to_task/share_files):`,
+      ...fileLines,
+      wsFiles.length > 60 ? `  …and ${wsFiles.length - 60} more` : null,
+    ].filter(Boolean).join("\n");
+  }
+
   const sections = taskOnly
     ? [
         identity,
+        briefBlock,
         ``,
         `You are currently in ${convLabel}.${colleaguesLine}${reportingLine}${memberIdBlock}`,
+        filesBlock,
         myTasksBlock,
         goalsBlock,
         approvalsBlock,
@@ -1038,8 +1085,10 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
       ]
     : [
         identity,
+        briefBlock,
         ``,
         `You are currently in ${convLabel}.${topicLine}${othersLine}${colleaguesLine}${reportingLine}${memberIdBlock}`,
+        filesBlock,
         threadBlock,
         taskBlock,
         myTasksBlock,

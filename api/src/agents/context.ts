@@ -19,6 +19,7 @@ import {
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
 import { listGoals, getGoalAncestry } from "../lib/goals-core.js";
 import { loadLedgers } from "../lib/ledger-core.js";
+import { latestVerdictSummary } from "../lib/task-verifier.js";
 
 export interface MemberInfo {
   memberId: string;
@@ -73,6 +74,16 @@ export interface ContextPacket {
     name: string;
     handle: string;
     mission: string;
+    // Canonical project brief, read fresh from <workspace mount>/BRIEF.md every
+    // run. This is the single source of truth a human pins for the team (brand,
+    // acceptance criteria, the deploy/preview story, "never ask for creds").
+    // Weak models won't `cat` it on their own, so we inject it — the steering
+    // that was silently invisible before. Empty string when no BRIEF.md exists.
+    brief: string;
+    // Live manifest of the shared /workspace dir (names + sizes), so agents see
+    // what already exists on disk instead of asking teammates in chat or
+    // re-deriving files that are right there. Capped; null when unreadable.
+    files: Array<{ path: string; size: number }> | null;
   };
   trigger: string;
   triggerConversationId?: string | null;
@@ -194,6 +205,10 @@ export interface ContextPacket {
     // goal), so the agent sees the "why", not just a title. Empty when the
     // task isn't attached to a goal.
     goalAncestry: Array<{ id: string; title: string; kind: string; status: string }>;
+    // Latest automated quality verdict on the deliverable (pre-computed on
+    // review entry), so a reviewing manager acts on a signal instead of cold.
+    // Null when the verifier never ran for this task.
+    latestVerdict: { verdict: string; score: number | null; rationale: string } | null;
   };
 }
 
@@ -541,6 +556,12 @@ export async function buildContext(opts: {
 
   const reporting = await loadReportingFor(a.workspaceId, agentMemberId);
 
+  // Pinned brief + live workspace file manifest (fail-safe, read fresh).
+  const [workspaceBrief, workspaceFiles] = await Promise.all([
+    readWorkspaceBrief(),
+    readWorkspaceManifest(),
+  ]);
+
   // Active goals (not done/archived), most recent first, bounded for prompt size.
   const allGoals = (await listGoals(a.workspaceId)).goals;
   const activeGoalsRaw = allGoals
@@ -656,6 +677,9 @@ export async function buildContext(opts: {
             status: g.status,
           }))
         : [];
+      // Surface the pre-computed quality verdict only while the task is in
+      // review (that's when a reviewer needs it); skip the lookup otherwise.
+      const latestVerdict = t.status === "review" ? await latestVerdictSummary(opts.taskId).catch(() => null) : null;
       taskCtx = {
         id: t.id,
         conversationId: t.conversationId,
@@ -687,6 +711,7 @@ export async function buildContext(opts: {
             ts: c.ts.toISOString(),
           })),
         goalAncestry,
+        latestVerdict,
       };
     }
   }
@@ -824,6 +849,8 @@ export async function buildContext(opts: {
       name: ws.name,
       handle: ws.handle,
       mission: ws.mission,
+      brief: workspaceBrief,
+      files: workspaceFiles,
     },
     trigger: opts.trigger,
     triggerConversationId: opts.conversationId ?? null,
@@ -857,6 +884,59 @@ export async function buildContext(opts: {
     myTasks,
     task: taskCtx,
   };
+}
+
+// The shared workspace mount inside the api/worker container (same host dir the
+// agent containers see at /workspace). Configurable for non-standard deploys;
+// every read is fail-safe so a missing mount just yields empty brief/manifest.
+const WORKSPACE_MOUNT = process.env.CC_WORKSPACE_MOUNT || "/workspace";
+const BRIEF_MAX_CHARS = 6000;
+const MANIFEST_MAX_ENTRIES = 80;
+const MANIFEST_SKIP = /(^|\/)(node_modules|\.venv|\.git|__pycache__)(\/|$)/;
+
+// Read <mount>/BRIEF.md (capped). Fresh every call so a human editing the brief
+// steers the team on their next wake with no redeploy.
+async function readWorkspaceBrief(): Promise<string> {
+  try {
+    const { promises: fsp } = await import("node:fs");
+    const { join } = await import("node:path");
+    const buf = await fsp.readFile(join(WORKSPACE_MOUNT, "BRIEF.md"), "utf8");
+    return buf.length > BRIEF_MAX_CHARS ? buf.slice(0, BRIEF_MAX_CHARS) + "\n…(brief truncated)" : buf;
+  } catch {
+    return "";
+  }
+}
+
+// Shallow-recursive manifest of the shared workspace: relative path + size for
+// each regular file, depth-bounded, junk dirs skipped, capped. Sorted by mtime
+// so the freshest files are at the top of the (possibly truncated) list.
+async function readWorkspaceManifest(): Promise<Array<{ path: string; size: number }> | null> {
+  try {
+    const { promises: fsp } = await import("node:fs");
+    const { join, relative } = await import("node:path");
+    const collected: Array<{ path: string; size: number; mtime: number }> = [];
+    async function walk(dir: string, depth: number): Promise<void> {
+      if (depth > 4 || collected.length > MANIFEST_MAX_ENTRIES * 3) return;
+      const ents = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const e of ents) {
+        const abs = join(dir, e.name);
+        const rel = relative(WORKSPACE_MOUNT, abs);
+        if (MANIFEST_SKIP.test(rel) || e.name.startsWith(".")) continue;
+        if (e.isDirectory()) {
+          await walk(abs, depth + 1);
+        } else if (e.isFile()) {
+          const st = await fsp.stat(abs).catch(() => null);
+          if (st) collected.push({ path: rel, size: st.size, mtime: st.mtimeMs });
+        }
+      }
+    }
+    await walk(WORKSPACE_MOUNT, 0);
+    if (!collected.length) return [];
+    collected.sort((a, b) => b.mtime - a.mtime);
+    return collected.slice(0, MANIFEST_MAX_ENTRIES).map(({ path, size }) => ({ path, size }));
+  } catch {
+    return null;
+  }
 }
 
 // Prune a record-of-records to only include the requested keys. Used to

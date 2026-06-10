@@ -240,10 +240,16 @@ export interface CreateTaskInput {
 }
 
 export async function createTask(input: CreateTaskInput, creatorMemberId: string, workspaceId: string) {
+  // Inherit the parent's goal when none is given, so a subtask an agent spins
+  // up under a goal task stays attached to that goal (otherwise it's an orphan,
+  // invisible to the ledger / stall detector / goal roll-up — a real source of
+  // board fragmentation where active work didn't count toward its goal).
+  let goalId = input.goalId ?? null;
   if (input.parentId) {
     const parent = await loadTask(input.parentId);
     if (!parent || parent.workspaceId !== workspaceId)
       return { error: "invalid_parent" as const };
+    if (!goalId && parent.goalId) goalId = parent.goalId;
   }
   const status: Status = input.status ?? "backlog";
   let position = input.position;
@@ -260,7 +266,7 @@ export async function createTask(input: CreateTaskInput, creatorMemberId: string
     workspaceId,
     conversationId: input.conversationId ?? null,
     parentId: input.parentId ?? null,
-    goalId: input.goalId ?? null,
+    goalId,
     title: input.title,
     bodyMd: input.bodyMd ?? "",
     status,
@@ -411,6 +417,18 @@ async function wakeReviewer(
   if (!actor || actor.kind !== "agent") return; // humans manage their own review flow
   const reviewerId = actor.reportsTo ?? task.createdBy;
   if (!reviewerId || reviewerId === actorMemberId) return;
+  // Pre-compute the quality verdict on review ENTRY so the reviewer has a signal
+  // waiting instead of reviewing cold (the verifier otherwise only ran on the
+  // review→done flip — which, when reviews stall, never happened). Fail-open,
+  // fire-and-forget; recorded to task_verifications and surfaced in the
+  // reviewer's task context (see context.ts `task.latestVerdict`).
+  void verifyTaskForDone({
+    taskId,
+    workspaceId,
+    title: task.title,
+    bodyMd: task.bodyMd,
+    decidedBy: null,
+  }).catch(() => {});
   await maybeFireAgentTrigger(reviewerId, taskId, task.conversationId, "task_comment");
   notify({
     workspaceId,
@@ -853,9 +871,20 @@ export async function addComment(
     attachmentsJson: safeAttachments,
   });
   await logActivity(taskId, actorMemberId, "comment", { commentId });
-  // A comment on a goal task is real activity — count it as forward motion so
-  // the stall detector doesn't misread a slow-but-working goal as stalled.
-  if (t!.goalId) await recordProgress(t!.goalId).catch(() => {});
+  const [actorRow] = await db
+    .select({ kind: members.kind })
+    .from(members)
+    .where(eq(members.id, actorMemberId))
+    .limit(1);
+  const actorIsAgent = actorRow?.kind === "agent";
+  // Progress signal: a HUMAN comment is genuine steering, so it counts as
+  // forward motion and resets the goal's stall/loop counters. An AGENT comment
+  // does NOT — otherwise the credential-begging spiral (an agent re-commenting
+  // "still blocked, need creds" every hour) keeps resetting the stall clock and
+  // the loop detector never fires, which is exactly what happened in practice.
+  // Real agent progress still records via createArtifact (share_to_task) and via
+  // updateTask status/progress changes — a bare comment is just talk.
+  if (t!.goalId && !actorIsAgent) await recordProgress(t!.goalId).catch(() => {});
   const [row] = await db.select().from(taskComments).where(eq(taskComments.id, commentId));
   await publishToWorkspace(workspaceId, {
     type: "task.comment.new",
@@ -868,12 +897,6 @@ export async function addComment(
   // @-mentions. Fanning agent comments out to all assignees created
   // comment→wake→comment echo loops between co-assigned agents (the
   // credential-begging spiral: 119 task_comment runs/48h on one card).
-  const [actorRow] = await db
-    .select({ kind: members.kind })
-    .from(members)
-    .where(eq(members.id, actorMemberId))
-    .limit(1);
-  const actorIsAgent = actorRow?.kind === "agent";
   const wake = new Set<string>(cleanMentions);
   if (!actorIsAgent) {
     const assignees = await db

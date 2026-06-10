@@ -35,6 +35,27 @@ const TOOL_USE_RE = /<\/?tool_use\b|<\/?function_calls\b|<\/?invoke\b/i;
 //       of the literal <actions>[…]</actions> envelope.
 const TOOL_CALL_JSON_RE =
   /\{[\s\S]{0,1200}["“]tool["”]\s*:\s*["“][^"”]+["”][\s\S]{0,1200}["“](?:input|arguments|parameters)["”]\s*:/i;
+// Bare function-call JSON: `{"name":"read_file","parameters":{…}}` /
+// `{"name":"write_file","arguments":{…}}`. The runtime's internal tool-call
+// shape leaking as the reply body (observed verbatim from Samantha:
+// {"name": "read_file", "parameters": {"offset": 51, …}}). Distinct from the
+// "tool"-keyed form above — this one keys on "name" + parameters/arguments.
+const TOOL_NAME_JSON_RE =
+  /\{\s*["“]name["”]\s*:\s*["“][a-z_][a-z0-9_]*["”]\s*,\s*["“](?:parameters|arguments|args|input)["”]\s*:/i;
+// A code-runtime/interpreter banner dumped into the reply — the agent printed
+// its sandbox env instead of replying. Observed: "Fiber: 0.7.0 (standalone) /
+// Python: 3.13.5 / Pyodide: 0.x". None of these appear in organic chat.
+const RUNTIME_BANNER_RE = /\b(?:Pyodide|Fiber)\s*:\s*\d|\bPython\s*:\s*3\.\d+\.\d+\b/i;
+// A leaked structured-metadata fragment — usually a truncated tool/preamble
+// envelope like "<metadata" or "<thinking" the model emitted as prose.
+const META_TAG_FRAGMENT_RE = /^\s*<\/?(?:metadata|thinking|reasoning|scratchpad|plan)\b/i;
+// Capability-failure boilerplate: the model gives up citing missing/unavailable
+// tools instead of using its real action channel. Observed: "I can't help you
+// without access to specific unavailable tools.", "the available tools do not
+// seem to match". A real agent emits an <actions> block — it never narrates a
+// tool deficit. Narrow to the deficit phrasings.
+const CAPABILITY_FAILURE_RE =
+  /\bI (?:can(?:'|’)?t|cannot|can not) help (?:you )?without access to\b|\b(?:the )?available tools (?:do|does) ?n(?:o|')t (?:seem to )?(?:match|include|have|support)\b|\bI (?:don'?t|do not) have (?:the )?(?:specific |necessary |required )?(?:unavailable |missing )?tools?\b/i;
 const ACTION_JSON_RE =
   /\{[\s\S]{0,400}["“]type["”]\s*:\s*["“](?:post_message|react|open_thread|request_approval|set_memory|delete_memory|call_tool|create_task|update_task|assign_task|task_comment|share_files|share_to_task)["”]/i;
 // Bare tool-call SYNTAX leaked as assistant text — a body that is (or starts
@@ -72,6 +93,17 @@ const HISTORY_ECHO_RE = /^\s*\[m_[a-z0-9]{12,}\]\s*@?/i;
 // real replies ("I posted the report to the shared drive") aren't caught.
 const META_NARRATION_RE =
   /^\s*(?:Reply posted|(?:I(?:'ve| have)) (?:successfully |just |now )?posted (?:a |the |my )?(?:reply|response|message)|(?:Successfully |Just )?posted (?:a |the |my )?(?:reply|response|message) (?:to @|in #|in the)|Message (?:sent|posted) successfully|Sent (?:a |the |my )?(?:reply|response|message) to @|Action (?:completed|executed) successfully)/i;
+
+// Asking a human to hand over a secret in a logged surface. The CREDENTIALS
+// rule is absolute: the ONLY channel for a secret is request_approval (the
+// human attaches it to the approval and it lands as an env var). Begging for a
+// token/password/credential in chat or a task comment is both a security
+// problem and the engine of the credential-begging loop. Narrow to an explicit
+// imperative ask for a SECRET so genuine prose ("the API returned a token") and
+// blocker-naming ("blocked: filed an approval for the deploy token") don't trip
+// it — it needs a request verb AND a secret noun.
+const CREDENTIAL_BEG_RE =
+  /\b(?:provide|paste|share|send|give|hand\s+over|need\s+you\s+to\s+(?:provide|share|send)|can\s+you\s+(?:provide|share|paste|send)|please\s+(?:provide|share|paste|send))\b[^.\n]{0,60}\b(?:password|api[\s-]?key|api[\s-]?token|access[\s-]?token|auth[\s-]?token|secret|credentials?|github\s+pat|personal\s+access\s+token|netlify\s+(?:token|key)|vercel\s+token)\b/i;
 
 // Detect degenerate repetition: same non-trivial line emitted 3+ times. 3B
 // models occasionally lock into a loop and emit the same sentence dozens of
@@ -143,14 +175,17 @@ const API_SCRIPT_RE =
 // Status Report", "+**Issue**: …"). Both stay anchored to a leading `+` so
 // markdown bullets ("- foo") and "+1" acks don't trip it.
 function looksLikeCodeDiffDump(s: string): boolean {
-  const codePlus = (
+  // Both diff polarities: agents paste removed-line (`-`) hunks too, which the
+  // older `+`-only detector missed (observed: Phil dumping "-// Demo Widget…",
+  // "-document.addEventListener(…" lines). `[+-]` covers add AND remove.
+  const codeDiff = (
     s.match(
-      /^\s*\+\s*(?:import |from |def |class |with |try:|except|return |print\(|req\b|resp\b|headers\b|url\b|token\b|api_base\b|[A-Za-z_][\w.]*\s*=\s*\S)/gim,
+      /^\s*[+-]\s*(?:import |from |def |class |with |try:|except|return |print\(|const |let |var |function |document\.|window\.|\/\/|\/\*|<!--|req\b|resp\b|headers\b|url\b|token\b|api_base\b|<\/?[a-z]|[A-Za-z_][\w.]*\s*=\s*\S)/gim,
     ) || []
   ).length;
-  const mdPlus = (s.match(/^\+\s*(?:#{1,6}\s|\*\*\S|[-*]\s+\S|>\s)/gm) || [])
+  const mdDiff = (s.match(/^[+-]\s*(?:#{1,6}\s|\*\*\S|[-*]\s+\S|>\s)/gm) || [])
     .length;
-  return codePlus >= 3 || mdPlus >= 3;
+  return codeDiff >= 3 || mdDiff >= 3;
 }
 
 function scrubSecrets(s: string): string {
@@ -180,6 +215,14 @@ export function guardRejectHint(reason: string): string {
       return " An action's JSON ended up in your visible reply. Wrap actions in an <actions>[ … ]</actions> block — they are executed from there and stripped from the message, never posted as text.";
     case "cot_leak":
       return " Your reply leaked planning/persona narration (\"The user wants…\", \"I am acting as…\"). Reply directly in your own voice — don't describe the conversation or announce your role.";
+    case "credential_beg":
+      return " You asked a human to hand over a secret in chat — never do that. The ONLY way to receive a credential is a request_approval action: describe what you need; if the human approves they attach the secret and it arrives as an env var. If a similar request was already denied, that's final — mark the dependent task \"blocked\" or take an approach that needs no credential.";
+    case "capability_failure":
+      return " Don't narrate missing tools. You act on the board by emitting an <actions> JSON block (task_comment, update_task, share_to_task, …) and read context with curl against $CC_API_BASE — those always work. Do the next concrete step instead of declaring you can't.";
+    case "runtime_banner_leak":
+      return " Your reply leaked a code-runtime/interpreter banner (Pyodide/Fiber/Python version). That's sandbox noise, not a reply — write your answer in plain prose, and emit any board action in an <actions> block.";
+    case "meta_tag_fragment":
+      return " Your reply started with a leaked envelope tag (<metadata>/<thinking>/…). Reply with plain prose only; put any action in an <actions>[…]</actions> block.";
     case "pure_json_dump":
       return " Your whole message is a JSON blob. If it's an action, put it in an <actions> block; if it's data to share, write it to a /workspace file and attach it via share_to_task with a one-line caption.";
     case "curl_transcript":
@@ -200,10 +243,15 @@ export function checkReplyBody(
   if (TRACEBACK_RE.test(trimmed)) return { ok: false, reason: "python_traceback" };
   if (TOOL_USE_RE.test(trimmed)) return { ok: false, reason: "tool_use_markup" };
   if (TOOL_CALL_JSON_RE.test(trimmed)) return { ok: false, reason: "tool_call_json" };
+  if (TOOL_NAME_JSON_RE.test(trimmed)) return { ok: false, reason: "tool_call_json" };
   if (ACTION_JSON_RE.test(trimmed)) return { ok: false, reason: "action_json_leaked" };
   if (TOOL_CALL_SYNTAX_RE.test(trimmed)) return { ok: false, reason: "tool_call_syntax" };
+  if (RUNTIME_BANNER_RE.test(trimmed)) return { ok: false, reason: "runtime_banner_leak" };
+  if (META_TAG_FRAGMENT_RE.test(trimmed)) return { ok: false, reason: "meta_tag_fragment" };
   if (GATEWAY_ERROR_RE.test(trimmed)) return { ok: false, reason: "gateway_error_echo" };
   if (ASSISTANT_REFUSAL_RE.test(trimmed)) return { ok: false, reason: "assistant_refusal" };
+  if (CAPABILITY_FAILURE_RE.test(trimmed)) return { ok: false, reason: "capability_failure" };
+  if (CREDENTIAL_BEG_RE.test(trimmed)) return { ok: false, reason: "credential_beg" };
   if (HISTORY_ECHO_RE.test(trimmed)) return { ok: false, reason: "history_format_echo" };
   if (META_NARRATION_RE.test(trimmed)) return { ok: false, reason: "meta_narration" };
   if (VISIBLE_ACTIONS_RE.test(trimmed)) return { ok: false, reason: "actions_block_visible" };

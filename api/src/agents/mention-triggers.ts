@@ -186,6 +186,12 @@ export async function fireMentionTriggers(params: {
   // broadcasts are staggered so agents see each other's replies.
   const broadcastAgents: Array<{ memberId: string; agentRefId: string }> = [];
   for (const mentionMemberId of resolvedMentionIds) {
+    // Never wake the author from their own mention. The fallback resolver
+    // (line ~130) filters the author out, but callers that pass
+    // resolvedMentionIds explicitly (the executor) don't — so an agent that
+    // @-mentions itself (observed: Phil → @phil) would self-trigger an endless
+    // wake loop. Guard here so every path is covered.
+    if (mentionMemberId === authorMemberId) continue;
     const [mm] = await db
       .select()
       .from(members)

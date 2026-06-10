@@ -14,7 +14,7 @@ import {
 import { id } from "../lib/ids.js";
 import { publishToConversation } from "../lib/events.js";
 import { checkReplyBody, guardRejectHint } from "./reply-guard.js";
-import { checkRecentDuplicate } from "./dedupe.js";
+import { checkRecentDuplicate, checkRecentDuplicateTaskComment } from "./dedupe.js";
 import {
   extractMentionHandles,
   resolveHandlesToMemberIds,
@@ -71,6 +71,7 @@ export type AgentAction =
       body_md?: string;
       status?: "backlog" | "in_progress" | "blocked" | "review" | "done";
       parent_id?: string;
+      goal_id?: string;
       conversation_id?: string;
       assignees?: string[];
       labels?: string[];
@@ -321,6 +322,13 @@ function duplicateApprovalError(actionType: string, dup: DuplicateApproval, agen
     `do not retry or rephrase it; you'll be woken with trigger:"approval_response" when it's decided.`
   );
 }
+
+// Credential-/access-begging or bare "still blocked" restatement. Used to stop
+// agents re-posting the same blocker on an already-blocked task every wake.
+// Narrow: needs a blocked/blocker/waiting cue OR an explicit credential ask, so
+// a genuine progress comment isn't caught.
+const BLOCKER_RESTATEMENT_RE =
+  /\b(?:still\s+blocked|i'?m\s+blocked|remain(?:s|ing)?\s+blocked|blocked\s*[:\-]|need\s+(?:the\s+)?(?:site\s+)?(?:access\s+)?credentials?|need\s+(?:access|a\s+token|the\s+token|api\s+(?:key|token)|a\s+(?:github|netlify|vercel)\b)|provide\s+(?:the\s+)?(?:credentials?|access|a\s+token|github\s+pat|netlify\s+token)|waiting\s+(?:for|on)\s+(?:credentials?|access|approval|the\s+token)|awaiting\s+(?:credentials?|access|approval))\b/i;
 
 // Near-synonyms agents emit for canonical action types. Mirror of the bridge's
 // ACTION_ALIASES — keep both in sync. Without normalization these paraphrases
@@ -850,6 +858,7 @@ async function applyOne(
           bodyMd: a.body_md,
           status: a.status,
           parentId: a.parent_id,
+          goalId: a.goal_id,
           conversationId: a.conversation_id ?? null,
           assignees: a.assignees,
           labels: a.labels,
@@ -977,6 +986,30 @@ async function applyOne(
       if (!guard.ok) {
         out.errors.push(
           `task_comment rejected: ${guard.reason}.${guardRejectHint(guard.reason)}`,
+        );
+        return;
+      }
+      // BLOCKED PROTOCOL enforcement: re-stating a blocker (esp. begging for
+      // credentials/access) on a task that's ALREADY blocked is noise, not
+      // progress — it was the dominant failure mode (hourly "still need creds"
+      // comments). The prompt forbids it; enforce it server-side. Only gate
+      // bare restatements with no attachment — a real update (a file shipped,
+      // the blocker cleared) still gets through.
+      if (!hasAttachments && BLOCKER_RESTATEMENT_RE.test(guard.bodyMd)) {
+        const target = await loadTask(a.task_id);
+        if (target && target.status === "blocked") {
+          out.errors.push(
+            `task_comment skipped: ${a.task_id} is already status="blocked" and your comment just re-states the blocker. Per the BLOCKED PROTOCOL, say it ONCE then stop — a blocked task is off your rotation until something actually changes (a human replies, an approval is decided). Do NOT re-ask. Pick up different work.`,
+          );
+          return;
+        }
+      }
+      // Comment-level dedupe: a near-identical restatement of a recent comment
+      // on the same task is the relocated begging loop — drop it with a hint.
+      const cdup = await checkRecentDuplicateTaskComment(a.task_id, guard.bodyMd);
+      if (!cdup.ok) {
+        out.errors.push(
+          `task_comment skipped: near-duplicate of an existing comment on ${a.task_id} (vs ${cdup.againstId}). You already said this — don't repeat it. Either do the next concrete step (ship a file via share_to_task, change status) or stay silent.`,
         );
         return;
       }
