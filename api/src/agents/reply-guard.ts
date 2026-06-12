@@ -10,6 +10,8 @@
 // violation is logged and the write is refused so the only human-visible
 // consequence is that the agent doesn't manage to spam a channel.
 
+import { redactSecrets } from "../lib/redaction.js";
+
 export type GuardResult =
   | { ok: true; bodyMd: string }
   | { ok: false; reason: string };
@@ -189,7 +191,9 @@ function looksLikeCodeDiffDump(s: string): boolean {
 }
 
 function scrubSecrets(s: string): string {
-  return s
+  // Shared redaction (provider token shapes, key=value assignments, PEM, JWT)
+  // plus the two chat-specific shapes that predate it.
+  return redactSecrets(s)
     .replace(BEARER_LEAK_RE, "Authorization: Bearer ***")
     .replace(RAW_BOT_TOKEN_RE, "cc_***");
 }

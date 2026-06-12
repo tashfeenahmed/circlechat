@@ -20,6 +20,7 @@ import { materialiseScheduledRun, cancelAgentHeartbeat } from "./agents/schedule
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 import { exportRunTrace } from "./lib/tracing.js";
 import { enforceBudgets, estimateRunCost } from "./lib/budgets.js";
+import { redactSecrets, redactLines } from "./lib/redaction.js";
 import { startGoalPlanWorker } from "./agents/goal-planner-worker.js";
 import { scheduleGoalSweep, scheduleMissionSweep } from "./lib/goal-queue.js";
 
@@ -175,7 +176,7 @@ const worker = new Worker<AgentJobPayload>(
         .update(agentRuns)
         .set({
           status: "failed",
-          errorText: (e as Error).message,
+          errorText: redactSecrets((e as Error).message),
           tokensEst,
           costUsd,
           finishedAt: new Date(),
@@ -207,8 +208,8 @@ const worker = new Worker<AgentJobPayload>(
       .update(agentRuns)
       .set({
         status: "ok",
-        resultJson: { applied: outcome.actionsApplied, errors: outcome.errors },
-        traceJson: [...trace, ...outcome.trace],
+        resultJson: { applied: outcome.actionsApplied, errors: redactLines(outcome.errors) },
+        traceJson: redactLines([...trace, ...outcome.trace]),
         tokensEst,
         costUsd,
         finishedAt: new Date(),
