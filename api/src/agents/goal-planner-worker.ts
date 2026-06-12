@@ -8,6 +8,7 @@ import { planGoal } from "../lib/planner.js";
 import { runMissionPlanning } from "../lib/mission-planner.js";
 import { bumpStall, assessProgress, writeProgressAssessment } from "../lib/ledger-core.js";
 import { notify } from "../lib/notifications.js";
+import { runProductivityReview } from "../lib/productivity.js";
 
 // Give up after this many failed planning attempts (the sweeper is the retry
 // driver, so each attempt is one sweep tick apart — backoff for free).
@@ -112,6 +113,10 @@ async function handleSweep(): Promise<void> {
 
   // 4. Review-queue SLA: escalate review tasks nobody has certified.
   await handleReviewQueue().catch((e) => console.error("[goal-planner] review pass error", e));
+
+  // 5. Productivity review: flag agents burning real runs with zero applied
+  //    actions (spend without output) to the workspace admins.
+  await runProductivityReview().catch((e) => console.error("[goal-planner] productivity pass error", e));
 }
 
 // Escalate tasks stuck in `review` past the SLA to a human, so finished work

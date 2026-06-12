@@ -187,7 +187,7 @@ async function markWorkspaceWarned(workspaceId: string, now: Date): Promise<void
   await db.update(workspaces).set({ budgetWarnedAt: now }).where(eq(workspaces.id, workspaceId));
 }
 
-async function notifyAdmins(
+export async function notifyAdmins(
   workspaceId: string,
   msg: { title: string; body: string; link: string },
 ): Promise<void> {
