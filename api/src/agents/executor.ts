@@ -365,7 +365,7 @@ const REQUIRED_STRING_FIELDS: Record<string, string[]> = {
   share_to_task: ["task_id"],
 };
 
-function validateActionShape(a: AgentAction): string | null {
+export function validateActionShape(a: AgentAction): string | null {
   const type = (a as { type?: unknown }).type;
   if (typeof type !== "string" || !type) return "action skipped: missing \"type\".";
   const rec = a as unknown as Record<string, unknown>;
