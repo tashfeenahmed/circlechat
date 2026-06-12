@@ -19,6 +19,7 @@ import { applyActions, type AgentAction } from "./agents/executor.js";
 import { materialiseScheduledRun, cancelAgentHeartbeat } from "./agents/scheduler.js";
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 import { exportRunTrace } from "./lib/tracing.js";
+import { enforceBudgets, estimateRunCost } from "./lib/budgets.js";
 import { startGoalPlanWorker } from "./agents/goal-planner-worker.js";
 import { scheduleGoalSweep, scheduleMissionSweep } from "./lib/goal-queue.js";
 
@@ -116,6 +117,31 @@ const worker = new Worker<AgentJobPayload>(
       }
     }
 
+    // Budget gate: month-to-date estimated spend vs the agent's and the
+    // workspace's monthly caps. A hard stop pauses the agent (agent scope) or
+    // skips every run (workspace scope) until a human raises the cap.
+    const gate = await enforceBudgets(agent);
+    if (!gate.allowed) {
+      await db
+        .update(agentRuns)
+        .set({
+          status: "ok",
+          resultJson: { skipped: gate.reason },
+          finishedAt: new Date(),
+        })
+        .where(eq(agentRuns.id, runId));
+      if (gate.reason === "agent_budget") {
+        // enforceBudgets already set status=paused + pause_reason='budget';
+        // drop the repeatable heartbeat too so the queue stays quiet (resume
+        // re-schedules it).
+        try { await cancelAgentHeartbeat(agent.id); } catch { /* ignore */ }
+      } else {
+        await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
+      }
+      await emitFinished(agent.id, runId, "ok", payload.conversationId);
+      return;
+    }
+
     const packet = await buildContext({
       agentId: agent.id,
       trigger: payload.trigger,
@@ -131,15 +157,20 @@ const worker = new Worker<AgentJobPayload>(
     const kind: "heartbeat" | "event" =
       payload.trigger === "scheduled" || payload.trigger === "ambient" ? "heartbeat" : "event";
 
+    const promptChars = JSON.stringify(packet).length;
+
     let response: Awaited<ReturnType<typeof callAgent>>;
     try {
       response = await callAgent(agent, kind, packet);
     } catch (e) {
+      const { tokensEst, costUsd } = estimateRunCost(promptChars, 0);
       await db
         .update(agentRuns)
         .set({
           status: "failed",
           errorText: (e as Error).message,
+          tokensEst,
+          costUsd,
           finishedAt: new Date(),
         })
         .where(eq(agentRuns.id, runId));
@@ -159,12 +190,20 @@ const worker = new Worker<AgentJobPayload>(
 
     const outcome = await applyActions({ agentId: agent.id, runId, actions });
 
+    const completionChars =
+      response === "HEARTBEAT_OK"
+        ? 0
+        : JSON.stringify(actions).length + trace.join("\n").length;
+    const { tokensEst, costUsd } = estimateRunCost(promptChars, completionChars);
+
     await db
       .update(agentRuns)
       .set({
         status: "ok",
         resultJson: { applied: outcome.actionsApplied, errors: outcome.errors },
         traceJson: [...trace, ...outcome.trace],
+        tokensEst,
+        costUsd,
         finishedAt: new Date(),
       })
       .where(eq(agentRuns.id, runId));

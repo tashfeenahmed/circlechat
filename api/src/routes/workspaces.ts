@@ -26,6 +26,8 @@ const CreateBody = z.object({
 
 const PatchBody = z.object({
   mission: z.string().max(2000).optional(),
+  // Workspace-wide monthly spend cap in estimated USD; null = unlimited.
+  budgetUsdMonth: z.number().min(0).max(1_000_000).nullable().optional(),
 });
 
 export default async function workspaceRoutes(app: FastifyInstance): Promise<void> {
@@ -40,6 +42,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
         name: workspaces.name,
         handle: workspaces.handle,
         mission: workspaces.mission,
+        budgetUsdMonth: workspaces.budgetUsdMonth,
         role: workspaceMembers.role,
       })
       .from(workspaceMembers)
@@ -67,6 +70,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
 
     const patch: Record<string, unknown> = {};
     if (body.mission !== undefined) patch.mission = body.mission;
+    if (body.budgetUsdMonth !== undefined) patch.budgetUsdMonth = body.budgetUsdMonth;
     if (Object.keys(patch).length === 0) return { ok: true, unchanged: true };
 
     await db.update(workspaces).set(patch).where(eq(workspaces.id, targetId));
@@ -76,6 +80,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
         name: workspaces.name,
         handle: workspaces.handle,
         mission: workspaces.mission,
+        budgetUsdMonth: workspaces.budgetUsdMonth,
       })
       .from(workspaces)
       .where(eq(workspaces.id, targetId))

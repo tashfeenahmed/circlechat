@@ -60,6 +60,7 @@ export interface Workspace {
   name: string;
   handle: string;
   mission: string;
+  budgetUsdMonth: number | null;
   role: string;
 }
 
@@ -149,9 +150,11 @@ export interface AgentRow {
   model: string;
   scopes: string[];
   status: string;
+  pauseReason: "manual" | "budget" | null;
   title: string;
   brief: string;
   heartbeatIntervalSec: number;
+  budgetUsdMonth: number | null;
   botToken: string;
   callbackUrl: string | null;
   createdBy: string;
@@ -320,6 +323,10 @@ export interface AnalyticsAgent {
   messages: number;
   taskComments: number;
   approvalsPending: number;
+  costUsdRange: number;
+  costUsdMonth: number;
+  budgetUsdMonth: number | null;
+  pauseReason: "manual" | "budget" | null;
 }
 
 export interface AnalyticsData {
@@ -333,6 +340,8 @@ export interface AnalyticsData {
     runs: number;
     failedRuns: number;
     openTasks: number;
+    costUsdRange: number;
+    costUsdMonth: number;
   };
   topErrors: Array<{ reason: string; count: number; agents: string[] }>;
   recentCompletions: Array<{

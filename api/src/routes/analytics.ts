@@ -40,7 +40,9 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
         handle: agents.handle,
         avatarColor: agents.avatarColor,
         status: agents.status,
+        pauseReason: agents.pauseReason,
         title: agents.title,
+        budgetUsdMonth: agents.budgetUsdMonth,
       })
       .from(agents)
       .where(eq(agents.workspaceId, workspaceId!));
@@ -142,6 +144,7 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
             applied: sql<number>`coalesce(sum((${agentRuns.resultJson}->>'applied')::int), 0)::int`,
             withErrors: sql<number>`count(*) filter (where jsonb_array_length(coalesce(${agentRuns.resultJson}->'errors', '[]'::jsonb)) > 0)::int`,
             skipped: sql<number>`count(*) filter (where ${agentRuns.resultJson}->>'skipped' is not null)::int`,
+            costUsd: sql<number>`coalesce(sum(${agentRuns.costUsd}), 0)::float`,
             durSec: sql<number>`coalesce(sum(extract(epoch from (${agentRuns.finishedAt} - ${agentRuns.startedAt}))) filter (where ${agentRuns.finishedAt} is not null), 0)::float`,
             nFinished: sql<number>`count(*) filter (where ${agentRuns.finishedAt} is not null)::int`,
             lastFinished: sql<string | null>`max(${agentRuns.finishedAt})`,
@@ -158,6 +161,7 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
       actionsApplied: number;
       runsWithErrors: number;
       skippedRuns: number;
+      costUsd: number;
       durSec: number;
       nFinished: number;
       lastActiveAt: string | null;
@@ -166,7 +170,7 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
     for (const r of runRows) {
       const agg =
         runsByAgent.get(r.agentId) ??
-        { total: 0, ok: 0, failed: 0, byTrigger: {}, actionsApplied: 0, runsWithErrors: 0, skippedRuns: 0, durSec: 0, nFinished: 0, lastActiveAt: null };
+        { total: 0, ok: 0, failed: 0, byTrigger: {}, actionsApplied: 0, runsWithErrors: 0, skippedRuns: 0, costUsd: 0, durSec: 0, nFinished: 0, lastActiveAt: null };
       agg.total += r.n;
       if (r.status === "ok") agg.ok += r.n;
       if (r.status === "failed") agg.failed += r.n;
@@ -174,6 +178,7 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
       agg.actionsApplied += r.applied;
       agg.runsWithErrors += r.withErrors;
       agg.skippedRuns += r.skipped;
+      agg.costUsd += r.costUsd;
       agg.durSec += r.durSec;
       agg.nFinished += r.nFinished;
       if (r.lastFinished && (!agg.lastActiveAt || r.lastFinished > agg.lastActiveAt)) {
@@ -181,6 +186,21 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
       }
       runsByAgent.set(r.agentId, agg);
     }
+
+    // ── month-to-date estimated spend per agent (budgets are calendar-month,
+    // independent of the selected range) ──
+    const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+    const mtdRows = agentIds.length
+      ? await db
+          .select({
+            agentId: agentRuns.agentId,
+            costUsd: sql<number>`coalesce(sum(${agentRuns.costUsd}), 0)::float`,
+          })
+          .from(agentRuns)
+          .where(and(inArray(agentRuns.agentId, agentIds), gte(agentRuns.startedAt, monthStart)))
+          .groupBy(agentRuns.agentId)
+      : [];
+    const mtdByAgent = new Map(mtdRows.map((r) => [r.agentId, r.costUsd]));
 
     // ── error taxonomy: every run-error string in range, normalized so the
     // same failure with different ids buckets together ("post_message
@@ -322,6 +342,10 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
           messages: msgsByAgent.get(a.id) ?? 0,
           taskComments: commentsByAgent.get(a.id) ?? 0,
           approvalsPending: approvalsByAgent.get(a.id) ?? 0,
+          costUsdRange: runs?.costUsd ?? 0,
+          costUsdMonth: mtdByAgent.get(a.id) ?? 0,
+          budgetUsdMonth: a.budgetUsdMonth ?? null,
+          pauseReason: a.pauseReason ?? null,
         };
       })
       .sort((x, y) => y.tasksCompleted - x.tasksCompleted || y.actionsApplied - x.actionsApplied);
@@ -345,6 +369,8 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
         runs: agentsOut.reduce((s, a) => s + a.runs.total, 0),
         failedRuns: agentsOut.reduce((s, a) => s + a.runs.failed, 0),
         openTasks: openTotal?.n ?? 0,
+        costUsdRange: agentsOut.reduce((s, a) => s + a.costUsdRange, 0),
+        costUsdMonth: agentsOut.reduce((s, a) => s + a.costUsdMonth, 0),
       },
       topErrors,
       recentCompletions: recent.map((r) => {

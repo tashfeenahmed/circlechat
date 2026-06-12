@@ -162,6 +162,13 @@
       "when": 1777700000000,
       "tag": "0022_ledger_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1777800000000,
+      "tag": "0023_budgets",
+      "breakpoints": true
     }
   ]
 }

@@ -27,6 +27,13 @@ export const workspaces = pgTable(
     // Auto-planning policy: 'auto' = a new goal is decomposed + started
     // automatically (no manual Plan button); 'off' = manual planning only.
     autoPlan: varchar("auto_plan", { length: 10 }).notNull().default("auto"),
+    // Workspace-wide monthly spend cap (estimated USD, NULL = unlimited).
+    // Exceeding it skips every agent run here without flipping agent statuses.
+    budgetUsdMonth: real("budget_usd_month"),
+    budgetWarnedAt: timestamp("budget_warned_at", { withTimezone: true }),
+    // When the hard-stop notification last fired (separate from the 80% warn
+    // marker so "budget reached" still notifies after a warning already did).
+    budgetStoppedAt: timestamp("budget_stopped_at", { withTimezone: true }),
   },
   (t) => ({
     handleIdx: uniqueIndex("workspaces_handle_key").on(t.handle),
@@ -85,6 +92,13 @@ export const agents = pgTable(
     // org chart says who reports to whom; capabilities say who can do what.
     capabilities: jsonb("capabilities").$type<string[]>().notNull().default([]),
     status: varchar("status", { length: 20 }).notNull().default("provisioning"),
+    // Why status=paused: 'manual' (human clicked pause) | 'budget' (monthly
+    // hard stop). Resume clears it; a budget pause re-trips until the cap is raised.
+    pauseReason: varchar("pause_reason", { length: 40 }),
+    // Monthly spend cap in estimated USD (NULL = unlimited): month-to-date
+    // sum of agent_runs.cost_usd is checked before every run.
+    budgetUsdMonth: real("budget_usd_month"),
+    budgetWarnedAt: timestamp("budget_warned_at", { withTimezone: true }),
     title: varchar("title", { length: 160 }).notNull().default(""),
     brief: text("brief").notNull().default(""),
     heartbeatIntervalSec: integer("heartbeat_interval_sec").notNull().default(3600),
@@ -212,6 +226,10 @@ export const agentRuns = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     costUsd: real("cost_usd"),
+    // Estimated tokens behind cost_usd (context+response chars/4 × loop
+    // multiplier) — agent runtimes call the gateway directly, so real usage
+    // never reaches us. Estimated is better than blind; see lib/budgets.ts.
+    tokensEst: integer("tokens_est"),
     errorText: text("error_text"),
   },
   (t) => ({

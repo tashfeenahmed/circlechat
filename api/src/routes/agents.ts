@@ -44,6 +44,8 @@ const PatchBody = z.object({
   heartbeatIntervalSec: z.number().int().min(5).max(86400).optional(),
   model: z.string().max(80).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
+  // Monthly spend cap in estimated USD; null clears it (unlimited).
+  budgetUsdMonth: z.number().min(0).max(1_000_000).nullable().optional(),
 });
 
 const RegisterBody = z.object({ callbackUrl: z.string().url() });
@@ -267,7 +269,7 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
       .where(and(eq(agents.id, aId), eq(agents.workspaceId, workspaceId!)))
       .limit(1);
     if (!a) return reply.code(404).send({ error: "not_found" });
-    await db.update(agents).set({ status: "paused" }).where(eq(agents.id, aId));
+    await db.update(agents).set({ status: "paused", pauseReason: "manual" }).where(eq(agents.id, aId));
     await cancelAgentHeartbeat(aId);
     return { ok: true };
   });
@@ -281,7 +283,9 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
       .where(and(eq(agents.id, aId), eq(agents.workspaceId, workspaceId!)))
       .limit(1);
     if (!a) return reply.code(404).send({ error: "not_found" });
-    await db.update(agents).set({ status: "idle" }).where(eq(agents.id, aId));
+    // Clears a budget pause too — if the cap wasn't raised, the next run's
+    // budget gate re-pauses immediately, which is the honest behavior.
+    await db.update(agents).set({ status: "idle", pauseReason: null }).where(eq(agents.id, aId));
     await scheduleAgentHeartbeat(aId, a.heartbeatIntervalSec);
     return { ok: true };
   });

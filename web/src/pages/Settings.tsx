@@ -91,6 +91,14 @@ export default function SettingsPage() {
           </section>
         )}
 
+        {ws && (
+          <WorkspaceBudgetSection
+            workspaceId={ws.id}
+            currentUsd={ws.budgetUsdMonth ?? null}
+            isAdmin={isAdmin}
+          />
+        )}
+
         {ws && isAdmin && <MembersAdminSection workspaceId={ws.id} workspaceHandle={ws.handle} />}
 
         <section className="border border-[var(--color-hair)] rounded p-4 mb-4">
@@ -291,6 +299,86 @@ function PasswordForm() {
         </button>
       </div>
     </div>
+  );
+}
+
+// Workspace-wide monthly spend cap (estimated USD). When month-to-date spend
+// crosses it, every agent run in the workspace is skipped until the cap is
+// raised or the month rolls over. Admins edit; members see the value.
+function WorkspaceBudgetSection({
+  workspaceId,
+  currentUsd,
+  isAdmin,
+}: {
+  workspaceId: string;
+  currentUsd: number | null;
+  isAdmin: boolean;
+}) {
+  const qc = useQueryClient();
+  const [value, setValue] = useState<string>(currentUsd != null ? String(currentUsd) : "");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setValue(currentUsd != null ? String(currentUsd) : "");
+  }, [workspaceId, currentUsd]);
+
+  const next = value.trim() === "" ? null : Number(value.trim());
+  const dirty = next !== currentUsd;
+
+  async function save() {
+    if (next != null && (!Number.isFinite(next) || next < 0)) {
+      setErr("Enter a dollar amount, or leave empty for unlimited.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    setSaved(false);
+    try {
+      await api.patch(`/workspaces/${workspaceId}`, { budgetUsdMonth: next });
+      await qc.invalidateQueries({ queryKey: ["me"] });
+      setSaved(true);
+    } catch (e) {
+      setErr(humanize((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="border border-[var(--color-hair)] rounded p-4 mb-4">
+      <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono mb-2">
+        Monthly agent budget
+      </h2>
+      <p className="text-[13px] text-[var(--color-muted)] mb-3">
+        A workspace-wide cap on estimated agent spend. When it's reached, all agent runs pause
+        until you raise it or a new month starts. Per-agent caps live on each agent's page.
+      </p>
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] text-[var(--color-muted)]">$</span>
+        <input
+          type="number"
+          value={value}
+          min={0}
+          step="1"
+          placeholder="unlimited"
+          disabled={!isAdmin || busy}
+          onChange={(e) => setValue(e.target.value)}
+          className="w-32 border border-[var(--color-hair-2)] rounded px-2 py-1.5 text-[13px] font-mono"
+        />
+        <span className="text-[12px] text-[var(--color-muted)]">/ month</span>
+        {isAdmin && (
+          <div className="flex items-center gap-3 ml-auto text-[12px] text-[var(--color-muted)]">
+            {err && <span className="text-[var(--color-err)]">{err}</span>}
+            {saved && !dirty && <span className="text-green-700">Saved.</span>}
+            <button onClick={save} disabled={!dirty || busy} className="btn sm primary disabled:opacity-40">
+              {busy ? "Saving…" : "Save budget"}
+            </button>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

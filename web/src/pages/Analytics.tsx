@@ -14,6 +14,13 @@ function agentColor(i: number): string {
   return `hsl(${(i * 73 + 12) % 360} 48% 52%)`;
 }
 
+// Estimated dollars: sub-cent amounts still render as a signal (<$0.01), not $0.00.
+function fmtUsd(n: number): string {
+  if (n === 0) return "$0";
+  if (n < 0.01) return "<$0.01";
+  return `$${n.toFixed(2)}`;
+}
+
 function fmtAgo(iso: string | null): string {
   if (!iso) return "never";
   const s = Math.floor((Date.now() - +new Date(iso)) / 1000);
@@ -78,7 +85,7 @@ export default function AnalyticsPage() {
         {data && (
           <>
             {/* totals strip */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               <StatCard
                 icon={<CheckCircle2 size={15} strokeWidth={2} />}
                 label="Tasks completed by agents"
@@ -104,6 +111,13 @@ export default function AnalyticsPage() {
                 label="Open tasks"
                 value={data.totals.openTasks}
                 tone="warn"
+              />
+              <StatCard
+                icon={<Zap size={15} strokeWidth={2} />}
+                label="Est. spend this month"
+                value={fmtUsd(data.totals.costUsdMonth)}
+                sub={`${fmtUsd(data.totals.costUsdRange)} in range`}
+                tone="muted"
               />
             </div>
 
@@ -175,6 +189,7 @@ export default function AnalyticsPage() {
                         <th>Msgs</th>
                         <th>Comments</th>
                         <th>Approvals</th>
+                        <th title="Estimated spend this month vs the agent's monthly budget">Spend (mo)</th>
                         <th>Last active</th>
                       </tr>
                     </thead>
@@ -290,7 +305,7 @@ function StatCard({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: number;
+  value: number | string;
   sub?: string;
   tone: "ok" | "warn" | "err" | "accent" | "muted";
 }) {
@@ -348,6 +363,29 @@ function AgentRowView({ a }: { a: AnalyticsAgent }) {
           </Link>
         ) : (
           0
+        )}
+      </td>
+      <td
+        className="ana-num"
+        title={
+          a.budgetUsdMonth != null
+            ? `$${a.costUsdMonth.toFixed(2)} of $${a.budgetUsdMonth.toFixed(2)} monthly budget (estimated)`
+            : "Estimated spend this month — no budget set"
+        }
+      >
+        {fmtUsd(a.costUsdMonth)}
+        {a.budgetUsdMonth != null && (
+          <span
+            className={
+              a.pauseReason === "budget" || a.costUsdMonth >= a.budgetUsdMonth
+                ? "text-[var(--color-err)]"
+                : a.costUsdMonth >= a.budgetUsdMonth * 0.8
+                  ? "text-[var(--color-warn)]"
+                  : "text-[var(--color-muted-2)]"
+            }
+          >
+            {" "}/ {fmtUsd(a.budgetUsdMonth)}
+          </span>
         )}
       </td>
       <td className="text-[11.5px] font-mono text-[var(--color-muted-2)]">{fmtAgo(a.lastActiveAt)}</td>

@@ -182,6 +182,15 @@ export default function AgentDetailPage() {
               onSaved={refresh}
             />
           </section>
+          <section>
+            <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Monthly budget</h2>
+            <BudgetControl
+              agentId={agent.id}
+              currentUsd={agent.budgetUsdMonth}
+              pausedForBudget={agent.status === "paused" && agent.pauseReason === "budget"}
+              onSaved={refresh}
+            />
+          </section>
         </div>
 
         <section className="mt-8">
@@ -313,6 +322,77 @@ const PRESETS: Array<{ label: string; sec: number }> = [
 // Matches the server cap (api/src/routes/agents.ts). Low-frequency beats are the
 // main cost lever for paid models, so we allow up to 24h.
 const MAX_HEARTBEAT_SEC = 86400;
+
+// Monthly spend cap in estimated USD. Empty = unlimited. When the cap is hit
+// the worker pauses the agent with pauseReason='budget'; raising the cap here
+// and hitting Resume puts it back to work.
+function BudgetControl({
+  agentId,
+  currentUsd,
+  pausedForBudget,
+  onSaved,
+}: {
+  agentId: string;
+  currentUsd: number | null;
+  pausedForBudget: boolean;
+  onSaved: () => void;
+}) {
+  const [value, setValue] = useState<string>(currentUsd != null ? String(currentUsd) : "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    const trimmed = value.trim();
+    const next = trimmed === "" ? null : Number(trimmed);
+    if (next != null && (!Number.isFinite(next) || next < 0)) {
+      setErr("Enter a dollar amount, or leave empty for unlimited.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.patch(`/agents/${agentId}`, { budgetUsdMonth: next });
+      onSaved();
+    } catch (e) {
+      setErr((e as Error).message ?? "save_failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const unchanged = (value.trim() === "" ? null : Number(value.trim())) === currentUsd;
+  return (
+    <div className="mt-1 space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] text-[var(--color-muted)]">$</span>
+        <input
+          type="number"
+          value={value}
+          min={0}
+          step="0.5"
+          placeholder="unlimited"
+          disabled={busy}
+          onChange={(e) => setValue(e.target.value)}
+          className="w-28 border border-[var(--color-hair-2)] rounded px-2 py-1 text-[13px] font-mono"
+        />
+        <span className="text-[12px] text-[var(--color-muted)]">/ month</span>
+        <button onClick={save} disabled={busy || unchanged} className="btn sm primary disabled:opacity-40">
+          {busy ? "…" : "Save"}
+        </button>
+      </div>
+      {pausedForBudget && (
+        <p className="text-[12px] text-amber-600">
+          Paused: monthly budget reached. Raise the budget and hit Resume.
+        </p>
+      )}
+      <p className="text-[12px] text-[var(--color-muted)]">
+        Estimated spend (the agent calls the gateway directly, so costs are derived from run sizes).
+        At the cap the agent pauses until you raise it or the month rolls over.
+      </p>
+      {err && <p className="text-[12px] text-red-600">{err}</p>}
+    </div>
+  );
+}
 
 function HeartbeatControl({
   agentId,
