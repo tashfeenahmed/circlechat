@@ -5,6 +5,7 @@ import { db } from "../db/index.js";
 import { goals, tasks, workspaces, goalLedgers, members } from "../db/schema.js";
 import { GOAL_QUEUE, type GoalPlanJob, enqueueGoalPlan } from "../lib/goal-queue.js";
 import { planGoal } from "../lib/planner.js";
+import { runMissionPlanning } from "../lib/mission-planner.js";
 import { bumpStall, assessProgress, writeProgressAssessment } from "../lib/ledger-core.js";
 import { notify } from "../lib/notifications.js";
 
@@ -288,6 +289,7 @@ export function startGoalPlanWorker(): Worker<GoalPlanJob> {
     GOAL_QUEUE,
     async (job) => {
       if (job.data.kind === "sweep") return handleSweep();
+      if (job.data.kind === "mission") return runMissionPlanning();
       if (job.data.kind === "plan" && job.data.goalId) return handlePlan(job.data.goalId);
     },
     { connection: redis, concurrency: 3 },

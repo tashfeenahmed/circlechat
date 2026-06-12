@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Trash2, ShieldCheck, UserMinus, Copy, Check, Sun, Moon } from "lucide-react";
+import { Trash2, ShieldCheck, UserMinus, Copy, Check, Sun, Moon, Monitor } from "lucide-react";
 import { useMe, useWorkspaceMembers, useInvites, useMembersDirectory } from "../lib/hooks";
 import { api } from "../api/client";
-import { useTheme, type Theme } from "../lib/theme";
+import { useTheme, type ThemeMode } from "../lib/theme";
 
 export default function SettingsPage() {
   const me = useMe();
@@ -46,19 +46,7 @@ export default function SettingsPage() {
           Profile, workspace, and notification preferences.
         </p>
 
-        <section className="border border-[var(--color-hair)] rounded p-4 mb-4">
-          <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono mb-2">Profile</h2>
-          {me.data && (
-            <dl className="grid grid-cols-[120px_1fr] gap-y-1 text-[13px]">
-              <dt className="text-[var(--color-muted)]">Name</dt>
-              <dd>{me.data.user.name}</dd>
-              <dt className="text-[var(--color-muted)]">Handle</dt>
-              <dd className="font-mono">@{me.data.user.handle}</dd>
-              <dt className="text-[var(--color-muted)]">Email</dt>
-              <dd>{me.data.user.email}</dd>
-            </dl>
-          )}
-        </section>
+        {me.data && <ProfileSection user={me.data.user} />}
 
         {ws && (
           <section className="border border-[var(--color-hair)] rounded p-4 mb-4">
@@ -124,24 +112,26 @@ export default function SettingsPage() {
   );
 }
 
-// Light/dark appearance picker. Applies + persists immediately via setTheme.
+// Appearance picker: Auto (follow the OS) / Light / Dark. Applies + persists
+// immediately via setThemeMode; "Auto" keeps tracking OS changes live.
 function ThemeToggle() {
-  const [theme, setTheme] = useTheme();
-  const options: Array<{ value: Theme; label: string; icon: typeof Sun }> = [
+  const [mode, setMode] = useTheme();
+  const options: Array<{ value: ThemeMode; label: string; icon: typeof Sun }> = [
+    { value: "system", label: "Auto", icon: Monitor },
     { value: "light", label: "Light", icon: Sun },
     { value: "dark", label: "Dark", icon: Moon },
   ];
   return (
     <div className="inline-flex rounded border border-[var(--color-hair-2)] overflow-hidden">
       {options.map((opt) => {
-        const active = theme === opt.value;
+        const active = mode === opt.value;
         const Icon = opt.icon;
         return (
           <button
             key={opt.value}
             type="button"
             aria-pressed={active}
-            onClick={() => setTheme(opt.value)}
+            onClick={() => setMode(opt.value)}
             className={`inline-flex items-center gap-2 px-3 py-1.5 text-[13px] ${
               active
                 ? "bg-[var(--color-ink)] text-[var(--color-paper)]"
@@ -153,6 +143,167 @@ function ThemeToggle() {
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// Editable account profile (name / handle / email) plus a change-password
+// form. Saves via PATCH /users/me and POST /auth/change-password.
+function ProfileSection({ user }: { user: { name: string; handle: string; email: string } }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(user.name);
+  const [handle, setHandle] = useState(user.handle);
+  const [email, setEmail] = useState(user.email);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Re-sync the form if the server copy changes (e.g. saved in another tab).
+  useEffect(() => {
+    setName(user.name);
+    setHandle(user.handle);
+    setEmail(user.email);
+  }, [user.name, user.handle, user.email]);
+
+  const dirty = name !== user.name || handle !== user.handle || email !== user.email;
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    setSaved(false);
+    try {
+      const patch: Record<string, string> = {};
+      if (name !== user.name) patch.name = name.trim();
+      if (handle !== user.handle) patch.handle = handle.trim().replace(/^@/, "");
+      if (email !== user.email) patch.email = email.trim();
+      await api.patch("/users/me", patch);
+      await qc.invalidateQueries({ queryKey: ["me"] });
+      setSaved(true);
+    } catch (e) {
+      setErr(humanize((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="border border-[var(--color-hair)] rounded p-4 mb-4">
+      <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono mb-2">Profile</h2>
+      <div className="grid grid-cols-[120px_1fr] gap-y-2 items-center text-[13px]">
+        <label className="text-[var(--color-muted)]" htmlFor="pf-name">Name</label>
+        <input
+          id="pf-name"
+          value={name}
+          disabled={busy}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={100}
+          className="border border-[var(--color-hair-2)] rounded px-2 py-1.5 text-[13px]"
+        />
+        <label className="text-[var(--color-muted)]" htmlFor="pf-handle">Handle</label>
+        <input
+          id="pf-handle"
+          value={handle}
+          disabled={busy}
+          onChange={(e) => setHandle(e.target.value)}
+          maxLength={40}
+          className="border border-[var(--color-hair-2)] rounded px-2 py-1.5 text-[13px] font-mono"
+        />
+        <label className="text-[var(--color-muted)]" htmlFor="pf-email">Email</label>
+        <input
+          id="pf-email"
+          type="email"
+          value={email}
+          disabled={busy}
+          onChange={(e) => setEmail(e.target.value)}
+          maxLength={255}
+          className="border border-[var(--color-hair-2)] rounded px-2 py-1.5 text-[13px]"
+        />
+      </div>
+      <div className="flex items-center justify-end gap-3 mt-3 text-[12px] text-[var(--color-muted)]">
+        {err && <span className="text-[var(--color-err)]">{err}</span>}
+        {saved && !dirty && <span className="text-green-700">Saved.</span>}
+        <button onClick={save} disabled={!dirty || busy} className="btn sm primary disabled:opacity-40">
+          {busy ? "Saving…" : "Save profile"}
+        </button>
+      </div>
+      <PasswordForm />
+    </section>
+  );
+}
+
+function PasswordForm() {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const ready = current.length > 0 && next.length >= 8 && next === confirm;
+
+  async function change() {
+    setBusy(true);
+    setErr(null);
+    setDone(false);
+    try {
+      await api.post("/auth/change-password", { currentPassword: current, newPassword: next });
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+      setDone(true);
+    } catch (e) {
+      setErr(humanize((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-[var(--color-hair)]">
+      <h3 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono mb-2">
+        Change password
+      </h3>
+      <div className="grid grid-cols-[120px_1fr] gap-y-2 items-center text-[13px]">
+        <label className="text-[var(--color-muted)]" htmlFor="pw-cur">Current</label>
+        <input
+          id="pw-cur"
+          type="password"
+          autoComplete="current-password"
+          value={current}
+          disabled={busy}
+          onChange={(e) => setCurrent(e.target.value)}
+          className="border border-[var(--color-hair-2)] rounded px-2 py-1.5 text-[13px]"
+        />
+        <label className="text-[var(--color-muted)]" htmlFor="pw-new">New</label>
+        <input
+          id="pw-new"
+          type="password"
+          autoComplete="new-password"
+          value={next}
+          disabled={busy}
+          onChange={(e) => setNext(e.target.value)}
+          placeholder="At least 8 characters"
+          className="border border-[var(--color-hair-2)] rounded px-2 py-1.5 text-[13px]"
+        />
+        <label className="text-[var(--color-muted)]" htmlFor="pw-conf">Confirm</label>
+        <input
+          id="pw-conf"
+          type="password"
+          autoComplete="new-password"
+          value={confirm}
+          disabled={busy}
+          onChange={(e) => setConfirm(e.target.value)}
+          className="border border-[var(--color-hair-2)] rounded px-2 py-1.5 text-[13px]"
+        />
+      </div>
+      <div className="flex items-center justify-end gap-3 mt-3 text-[12px] text-[var(--color-muted)]">
+        {next && confirm && next !== confirm && <span>Passwords don't match.</span>}
+        {err && <span className="text-[var(--color-err)]">{err}</span>}
+        {done && <span className="text-green-700">Password changed.</span>}
+        <button onClick={change} disabled={!ready || busy} className="btn sm disabled:opacity-40">
+          {busy ? "Changing…" : "Change password"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -342,6 +493,10 @@ function humanize(code: string): string {
     member_not_found: "That member isn't in this workspace.",
     already_accepted: "That invite was already accepted.",
     not_found: "Not found.",
+    email_in_use: "That email is already taken.",
+    handle_in_use: "That handle is already taken.",
+    invalid_handle: "Handles are 2–40 letters, numbers, dots, dashes.",
+    wrong_password: "Current password is incorrect.",
   };
   return map[code] ?? code;
 }

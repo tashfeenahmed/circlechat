@@ -47,6 +47,22 @@ const LoginBody = z.object({
 
 const InviteBody = z.object({ email: z.string().email() });
 
+const UpdateMeBody = z.object({
+  name: z.string().min(1).max(100).optional(),
+  handle: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(/^[a-z0-9][a-z0-9._-]*$/i)
+    .optional(),
+  email: z.string().email().max(255).optional(),
+});
+
+const ChangePasswordBody = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8),
+});
+
 const AcceptInviteBody = z.object({
   token: z.string().min(10),
   name: z.string().min(1).max(100),
@@ -207,6 +223,52 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       workspaceId,
       workspaces: wsRows,
     };
+  });
+
+  // ─────────── profile: edit the caller's own account ──────────
+  app.patch("/users/me", { preHandler: requireAuth }, async (req, reply) => {
+    const body = UpdateMeBody.parse(req.body);
+    const { user } = req.auth!;
+
+    // Uniqueness checks only when the value actually changes, so a no-op save
+    // can't 409 against the caller's own row.
+    if (body.email && body.email !== user.email) {
+      const [exists] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, body.email))
+        .limit(1);
+      if (exists) return reply.code(409).send({ error: "email_in_use" });
+    }
+    if (body.handle && body.handle !== user.handle) {
+      const [exists] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.handle, body.handle))
+        .limit(1);
+      if (exists) return reply.code(409).send({ error: "handle_in_use" });
+    }
+
+    const patch: Partial<typeof users.$inferInsert> = {};
+    if (body.name !== undefined) patch.name = body.name;
+    if (body.handle !== undefined) patch.handle = body.handle;
+    if (body.email !== undefined) patch.email = body.email;
+    if (Object.keys(patch).length) {
+      await db.update(users).set(patch).where(eq(users.id, user.id));
+    }
+    const [u] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    return { ok: true, user: publicUser(u) };
+  });
+
+  app.post("/auth/change-password", { preHandler: requireAuth }, async (req, reply) => {
+    const body = ChangePasswordBody.parse(req.body);
+    const { user } = req.auth!;
+    const [u] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    if (!u || !(await verifyPassword(body.currentPassword, u.passwordHash)))
+      return reply.code(401).send({ error: "wrong_password" });
+    const passwordHash = await hashPassword(body.newPassword);
+    await db.update(users).set({ passwordHash }).where(eq(users.id, user.id));
+    return { ok: true };
   });
 
   // ─────────── invites: always scoped to the caller's current workspace ──

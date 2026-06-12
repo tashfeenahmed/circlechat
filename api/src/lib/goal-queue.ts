@@ -1,13 +1,14 @@
 import { Queue } from "bullmq";
 import { redis } from "./redis.js";
 
-// Queue that drives automatic goal planning. Two job shapes:
+// Queue that drives automatic goal planning. Three job shapes:
 //   { kind: "plan", goalId, workspaceId } — decompose one goal (debounced on create)
 //   { kind: "sweep" }                      — periodic reconcile of all goals
+//   { kind: "mission" }                    — daily mission → new-goal proposals
 export const GOAL_QUEUE = "goal-plans";
 
 export interface GoalPlanJob {
-  kind: "plan" | "sweep";
+  kind: "plan" | "sweep" | "mission";
   goalId?: string;
   workspaceId?: string;
 }
@@ -51,5 +52,30 @@ export async function scheduleGoalSweep(): Promise<void> {
     SWEEP_KEY,
     { kind: "sweep" },
     { repeat: { every: SWEEP_EVERY_MS }, jobId: SWEEP_KEY },
+  );
+}
+
+const MISSION_KEY = "mission-sweep";
+const MISSION_EVERY_MS = Number(process.env.MISSION_SWEEP_EVERY_MS ?? 86_400_000); // daily
+
+// Install the repeatable mission planner (daily by default). Called once at
+// worker boot. Unlike the 3-min sweeper, a 24h repeat must NOT be removed and
+// re-added on every boot — that resets the countdown, and frequent deploys
+// would postpone the daily run forever. Keep an existing repeat that already
+// matches the interval; replace only when the interval changed. (BullMQ fires
+// the first repeat one full interval after install — set
+// MISSION_SWEEP_EVERY_MS low to exercise it sooner.)
+export async function scheduleMissionSweep(): Promise<void> {
+  let keep = false;
+  for (const r of await goalQueue.getRepeatableJobs()) {
+    if (r.name !== MISSION_KEY) continue;
+    if (Number(r.every) === MISSION_EVERY_MS) keep = true;
+    else await goalQueue.removeRepeatableByKey(r.key);
+  }
+  if (keep) return;
+  await goalQueue.add(
+    MISSION_KEY,
+    { kind: "mission" },
+    { repeat: { every: MISSION_EVERY_MS }, jobId: MISSION_KEY },
   );
 }

@@ -20,7 +20,7 @@ import { materialiseScheduledRun, cancelAgentHeartbeat } from "./agents/schedule
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 import { exportRunTrace } from "./lib/tracing.js";
 import { startGoalPlanWorker } from "./agents/goal-planner-worker.js";
-import { scheduleGoalSweep } from "./lib/goal-queue.js";
+import { scheduleGoalSweep, scheduleMissionSweep } from "./lib/goal-queue.js";
 
 const worker = new Worker<AgentJobPayload>(
   AGENT_QUEUE,
@@ -309,3 +309,6 @@ console.log(`[worker] circlechat agent-runs worker up, concurrency=10`);
 // plus a repeatable sweeper that reconciles unplanned/stuck goals.
 startGoalPlanWorker();
 scheduleGoalSweep().catch((e) => console.error("[goal-planner] sweep schedule failed", e));
+// Daily mission → goals pass: proposes the next goals from the workspace
+// mission and files them under projects (see lib/mission-planner.ts).
+scheduleMissionSweep().catch((e) => console.error("[mission-planner] schedule failed", e));
