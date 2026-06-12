@@ -88,6 +88,10 @@ export interface ContextPacket {
   trigger: string;
   triggerConversationId?: string | null;
   triggerMessageId?: string;
+  // Set when the agent's PREVIOUS run ended in failure (crash, gateway error,
+  // reaped after a worker death). Continuity: without this the agent has
+  // amnesia about its own dead run and silently drops whatever it was doing.
+  previousRunFailure?: { errorText: string; finishedAt: string | null } | null;
   members: Record<string, MemberInfo>; // member directory keyed by memberId
   thread: null | {
     conversationId: string;
@@ -221,6 +225,7 @@ export async function buildContext(opts: {
   messageId?: string;
   taskId?: string;
   approvalId?: string;
+  previousRunFailure?: { errorText: string; finishedAt: string | null } | null;
 }): Promise<ContextPacket> {
   const [a] = await db.select().from(agents).where(eq(agents.id, opts.agentId)).limit(1);
   if (!a) throw new Error("agent_not_found");
@@ -855,6 +860,7 @@ export async function buildContext(opts: {
     trigger: opts.trigger,
     triggerConversationId: opts.conversationId ?? null,
     triggerMessageId: opts.messageId,
+    previousRunFailure: opts.previousRunFailure ?? null,
     members: memberDirectory,
     thread,
     inbox,

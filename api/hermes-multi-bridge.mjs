@@ -960,6 +960,19 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
   // decision. Surfaced so the agent doesn't re-emit the gated action or
   // re-request approval every wake (the server also dedupes, but the agent
   // should KNOW it's waiting, not discover it via a rejection).
+  // Failure continuity: if the agent's previous run died (crash, gateway
+  // error, reaped after a worker death), say so — otherwise the agent has
+  // amnesia about its own dead run and silently drops in-flight work.
+  let prevFailBlock = "";
+  if (packet.previousRunFailure && packet.previousRunFailure.errorText) {
+    const pf = packet.previousRunFailure;
+    prevFailBlock = [
+      ``,
+      `⚠ YOUR PREVIOUS RUN FAILED (${String(pf.errorText).slice(0, 200)}${pf.finishedAt ? `, at ${pf.finishedAt}` : ""}).`,
+      `Anything you were doing that turn may not have completed — no actions were applied. Check the task you were working on (its comments/artifacts show what actually landed) and redo the lost step rather than assuming it happened.`,
+    ].join("\n");
+  }
+
   let approvalsBlock = "";
   const aps = Array.isArray(packet.openApprovals) ? packet.openApprovals : [];
   if (aps.length) {
@@ -1077,6 +1090,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         goalsBlock,
         approvalsBlock,
         memoryBlock,
+        prevFailBlock,
         ``,
         triggerLine,
         toolBlock,
@@ -1095,6 +1109,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         goalsBlock,
         approvalsBlock,
         memoryBlock,
+        prevFailBlock,
         ``,
         `Recent messages in this conversation (most recent last):`,
         history || "(no prior messages)",

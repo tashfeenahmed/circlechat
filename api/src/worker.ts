@@ -151,6 +151,13 @@ const worker = new Worker<AgentJobPayload>(
       messageId: payload.messageId,
       taskId: payload.taskId,
       approvalId: payload.approvalId,
+      previousRunFailure:
+        prevRuns[0]?.status === "failed" && prevRuns[0].errorText
+          ? {
+              errorText: prevRuns[0].errorText,
+              finishedAt: prevRuns[0].finishedAt?.toISOString() ?? null,
+            }
+          : null,
     });
     await db.update(agentRuns).set({ contextJson: packet as never }).where(eq(agentRuns.id, runId));
 

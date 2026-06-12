@@ -9,6 +9,7 @@ import { runMissionPlanning } from "../lib/mission-planner.js";
 import { bumpStall, assessProgress, writeProgressAssessment } from "../lib/ledger-core.js";
 import { notify } from "../lib/notifications.js";
 import { runProductivityReview } from "../lib/productivity.js";
+import { reapStuckRuns } from "../lib/run-reaper.js";
 
 // Give up after this many failed planning attempts (the sweeper is the retry
 // driver, so each attempt is one sweep tick apart — backoff for free).
@@ -117,6 +118,10 @@ async function handleSweep(): Promise<void> {
   // 5. Productivity review: flag agents burning real runs with zero applied
   //    actions (spend without output) to the workspace admins.
   await runProductivityReview().catch((e) => console.error("[goal-planner] productivity pass error", e));
+
+  // 6. Crash recovery: fail out runs stuck 'running' after a worker death and
+  //    put their agents back to idle (clears permanent thinking pills too).
+  await reapStuckRuns().catch((e) => console.error("[goal-planner] run-reaper error", e));
 }
 
 // Escalate tasks stuck in `review` past the SLA to a human, so finished work
