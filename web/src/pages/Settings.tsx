@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Trash2, ShieldCheck, UserMinus, Copy, Check, Sun, Moon, Monitor } from "lucide-react";
 import { useMe, useWorkspaceMembers, useInvites, useMembersDirectory } from "../lib/hooks";
 import { api } from "../api/client";
+import Segmented from "../components/Segmented";
 import { useTheme, type ThemeMode } from "../lib/theme";
 
 export default function SettingsPage() {
@@ -112,38 +113,23 @@ export default function SettingsPage() {
   );
 }
 
-// Appearance picker: Auto (follow the OS) / Light / Dark. Applies + persists
-// immediately via setThemeMode; "Auto" keeps tracking OS changes live.
+// Appearance picker: Auto (follow the OS) / Light / Dark, on the shared
+// Segmented control (Base UI ToggleGroup — tinted track + active ink pill).
+// Applies + persists immediately via setThemeMode; "Auto" keeps tracking OS
+// changes live.
 function ThemeToggle() {
   const [mode, setMode] = useTheme();
-  const options: Array<{ value: ThemeMode; label: string; icon: typeof Sun }> = [
-    { value: "system", label: "Auto", icon: Monitor },
-    { value: "light", label: "Light", icon: Sun },
-    { value: "dark", label: "Dark", icon: Moon },
-  ];
   return (
-    <div className="inline-flex rounded border border-[var(--color-hair-2)] overflow-hidden">
-      {options.map((opt) => {
-        const active = mode === opt.value;
-        const Icon = opt.icon;
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            aria-pressed={active}
-            onClick={() => setMode(opt.value)}
-            className={`inline-flex items-center gap-2 px-3 py-1.5 text-[13px] ${
-              active
-                ? "bg-[var(--color-ink)] text-[var(--color-paper)]"
-                : "text-[var(--color-muted)] hover:bg-[var(--color-hi)]"
-            }`}
-          >
-            <Icon size={14} />
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
+    <Segmented<ThemeMode>
+      ariaLabel="Theme"
+      value={mode}
+      onChange={setMode}
+      options={[
+        { value: "system", label: "Auto", icon: <Monitor size={14} /> },
+        { value: "light", label: "Light", icon: <Sun size={14} /> },
+        { value: "dark", label: "Dark", icon: <Moon size={14} /> },
+      ]}
+    />
   );
 }
 
