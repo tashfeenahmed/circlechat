@@ -726,7 +726,9 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
                     ? `A new comment landed on a task you're involved with. Read the recent comments in the TASK block. Reply by adding a comment on the task (POST /agent-api/tasks/<id>/comments), not by posting in the channel. If the comment is a question for you, answer concretely. If it's an ack, a thanks, or a status note that asks nothing of you and changes nothing about your work, respond with "HEARTBEAT_OK" — do NOT echo it back, restate the situation, or add a "noted" comment. Silence is the correct move on the task thread more often than not.`
                     : packet.trigger === "approval_response"
                       ? formatApprovalResponse(packet.approvalResponse)
-                      : `Trigger: ${packet.trigger}.`;
+                      : packet.trigger === "continuation"
+                        ? `[automated system message — not a human] You JUST advanced the board last turn (created/updated a task, decomposed a goal, or attached a deliverable), and you've been given an immediate follow-up turn to keep that work moving — don't wait for the next heartbeat. Look at YOUR OPEN TASKS and the goal/ledger state below and take the NEXT concrete step on the same thread of work (e.g. start the task you just created, do the work on the task you just moved to in_progress, comment the result you just produced). If the work you started is genuinely complete or now blocked on someone else, respond with exactly "HEARTBEAT_OK" and stop — do NOT invent busywork or re-do what you already did. Every reply must still end with an <actions> block or be exactly "HEARTBEAT_OK".`
+                        : `Trigger: ${packet.trigger}.`;
 
   const workspace = packet.workspace || {};
   const identity = [

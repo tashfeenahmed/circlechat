@@ -29,10 +29,17 @@ export interface AgentJobPayload {
     | "task_comment"
     | "approval_response"
     | "test"
-    | "ambient";
+    | "ambient"
+    // Immediate follow-up turn the worker grants itself after a run that made
+    // board progress, so multi-step work doesn't stall until the next
+    // heartbeat. Bounded by chainDepth + the per-run budget gate.
+    | "continuation";
   conversationId?: string | null;
   messageId?: string;
   approvalId?: string;
   taskId?: string;
   status?: string;
+  // How many continuations deep this run is (0 = a normal trigger). Capped in
+  // the worker so a chain can't run away.
+  chainDepth?: number;
 }

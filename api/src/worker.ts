@@ -20,6 +20,8 @@ import { materialiseScheduledRun, cancelAgentHeartbeat } from "./agents/schedule
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 import { exportRunTrace } from "./lib/tracing.js";
 import { enforceBudgets, estimateRunCost } from "./lib/budgets.js";
+import { enqueueAgentEvent } from "./agents/enqueue.js";
+import { continuationEnabled, shouldContinue } from "./agents/continuation.js";
 import { redactSecrets, redactLines } from "./lib/redaction.js";
 import { startGoalPlanWorker } from "./agents/goal-planner-worker.js";
 import { scheduleGoalSweep, scheduleMissionSweep } from "./lib/goal-queue.js";
@@ -163,7 +165,11 @@ const worker = new Worker<AgentJobPayload>(
     await db.update(agentRuns).set({ contextJson: packet as never }).where(eq(agentRuns.id, runId));
 
     const kind: "heartbeat" | "event" =
-      payload.trigger === "scheduled" || payload.trigger === "ambient" ? "heartbeat" : "event";
+      payload.trigger === "scheduled" ||
+      payload.trigger === "ambient" ||
+      payload.trigger === "continuation"
+        ? "heartbeat"
+        : "event";
 
     const promptChars = JSON.stringify(packet).length;
 
@@ -221,6 +227,21 @@ const worker = new Worker<AgentJobPayload>(
       agentHandle: agent.handle,
       errors: outcome.errors,
     });
+
+    // Grant an immediate follow-up turn if the agent just advanced the board
+    // and we're under the chain cap. Budget is re-checked at the top of the
+    // next run, so a continuation can't outrun a hard stop.
+    if (continuationEnabled() && response !== "HEARTBEAT_OK" && outcome.actionsApplied > 0) {
+      const chainDepth = payload.chainDepth ?? 0;
+      if (shouldContinue(actions, chainDepth)) {
+        await enqueueAgentEvent(agent.id, {
+          trigger: "continuation",
+          conversationId: payload.conversationId ?? null,
+          taskId: payload.taskId,
+          chainDepth: chainDepth + 1,
+        }).catch((e) => console.error("[worker] continuation enqueue failed", e));
+      }
+    }
   },
   { connection: redis, concurrency: 10, lockDuration: 240_000 },
 );

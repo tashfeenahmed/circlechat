@@ -245,8 +245,14 @@ export async function buildContext(opts: {
   // conversation that woke the agent so the context packet doesn't balloon
   // with every channel's history — that was blowing past OpenClaw's 16k
   // context window in channel mentions while DMs stayed small.
+  // Heartbeat-style triggers (scheduled, ambient, and the immediate
+  // continuation that follows a work action) get the BROAD proactive-work view
+  // — open tasks, goals — not a single narrowed conversation.
   const narrowToTrigger =
-    opts.trigger !== "scheduled" && opts.trigger !== "ambient" && !!opts.conversationId;
+    opts.trigger !== "scheduled" &&
+    opts.trigger !== "ambient" &&
+    opts.trigger !== "continuation" &&
+    !!opts.conversationId;
   const myConvsAll = await db
     .select({ conversation: conversations })
     .from(conversationMembers)
@@ -260,7 +266,7 @@ export async function buildContext(opts: {
 
   // For channel context — include the LAST N messages (not just since last beat) when
   // we've been woken by mention/dm so the agent knows what's already been said.
-  const includeHistory = opts.trigger !== "scheduled";
+  const includeHistory = opts.trigger !== "scheduled" && opts.trigger !== "continuation";
   const historyLimit = 20;
   const historyMsgs = convIds.length && includeHistory
     ? await db
