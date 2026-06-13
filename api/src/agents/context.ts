@@ -19,6 +19,7 @@ import {
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
 import { listGoals, getGoalAncestry } from "../lib/goals-core.js";
 import { loadLedgers } from "../lib/ledger-core.js";
+import { ensureAndLoadBlocks } from "../lib/memory-blocks.js";
 import { latestVerdictSummary } from "../lib/task-verifier.js";
 
 export interface MemberInfo {
@@ -150,6 +151,15 @@ export interface ContextPacket {
     byConversation: Record<string, Record<string, unknown>>;
     byTask: Record<string, Record<string, unknown>>;
   };
+  // Letta-style in-context memory blocks (always shown, self-edited). `team` is
+  // shared across the workspace; `notes` is private. See lib/memory-blocks.ts.
+  memoryBlocks: Array<{
+    label: string;
+    description: string;
+    value: string;
+    charLimit: number;
+    shared: boolean;
+  }>;
   reporting: ReportingBundle;
   // Active goals in the workspace (not done/archived) with their task tally, so
   // an agent — especially a manager — can see what the team is driving toward,
@@ -572,6 +582,16 @@ export async function buildContext(opts: {
 
   const reporting = await loadReportingFor(a.workspaceId, agentMemberId);
 
+  // In-context memory blocks (lazily seeded): the shared team whiteboard + the
+  // agent's private notes, compiled into the prompt and self-edited each run.
+  const memoryBlocks = (await ensureAndLoadBlocks(a.id, a.workspaceId).catch(() => [])).map((b) => ({
+    label: b.label,
+    description: b.description,
+    value: b.value,
+    charLimit: b.charLimit,
+    shared: b.shared,
+  }));
+
   // Pinned brief + live workspace file manifest (fail-safe, read fresh).
   const [workspaceBrief, workspaceFiles] = await Promise.all([
     readWorkspaceBrief(),
@@ -910,6 +930,7 @@ export async function buildContext(opts: {
         ...(taskCtx ? [taskCtx.id] : []),
       ]),
     },
+    memoryBlocks,
     reporting,
     goals: activeGoals,
     myTasks,

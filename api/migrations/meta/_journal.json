@@ -169,6 +169,13 @@
       "when": 1777800000000,
       "tag": "0023_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1777900000000,
+      "tag": "0024_memory_blocks",
+      "breakpoints": true
     }
   ]
 }

@@ -283,6 +283,43 @@ export const invites = pgTable(
   }),
 );
 
+// ───────────────── memory_blocks (Letta-style in-context memory) ─────────
+// Labeled prose blocks compiled into EVERY agent prompt and self-edited by the
+// agent. A `shared` block is attached to every agent in the workspace (the
+// team whiteboard); a private block belongs to one agent. char_limit is shown
+// to the model so it self-manages size. See lib/memory-blocks.ts.
+export const memoryBlocks = pgTable(
+  "memory_blocks",
+  {
+    id: varchar("id", { length: 40 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    description: text("description").notNull().default(""),
+    value: text("value").notNull().default(""),
+    charLimit: integer("char_limit").notNull().default(2000),
+    shared: boolean("shared").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedBy: varchar("updated_by", { length: 32 }),
+  },
+  (t) => ({
+    wsIdx: index("memory_blocks_ws_idx").on(t.workspaceId),
+  }),
+);
+
+// Join: which blocks an agent has, under what agent-local label. A shared block
+// has one row per attached agent, all pointing at the same block_id.
+export const agentMemoryBlocks = pgTable(
+  "agent_memory_blocks",
+  {
+    agentId: varchar("agent_id", { length: 32 }).notNull(),
+    label: varchar("label", { length: 40 }).notNull(),
+    blockId: varchar("block_id", { length: 40 }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.agentId, t.label] }),
+    blockIdx: index("agent_memory_blocks_block_idx").on(t.blockId),
+  }),
+);
+
 // ───────────────── memory_kv (per-agent scratch memory) ─────────────────
 // scope: 'global' | 'conversation' | 'task'. scopeId is the conversationId
 // or taskId for the latter two; '' (empty string, NOT null) for global so

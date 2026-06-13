@@ -30,6 +30,7 @@ import {
 import { createGoal } from "../lib/goals-core.js";
 import { planGoal } from "../lib/planner.js";
 import { latestVerificationRationale } from "../lib/task-verifier.js";
+import { editAgentBlock } from "../lib/memory-blocks.js";
 import { loadLedger, appendFact, appendProgressNote, appendDeadEnd } from "../lib/ledger-core.js";
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
@@ -61,6 +62,10 @@ export type AgentAction =
       scope?: "global" | "conversation" | "task";
       scope_id?: string;
     }
+  // In-context memory blocks (Letta-style): always-visible prose the agent
+  // self-maintains. `label` is "team" (shared whiteboard) or "notes" (private).
+  | { type: "memory_append"; label: string; text: string }
+  | { type: "memory_rethink"; label: string; value: string }
   | { type: "call_tool"; name: string; args?: unknown }
   // Task-board actions — let the agent runtime emit structured calls instead
   // of round-tripping curl through its terminal skill. Field names mirror the
@@ -353,6 +358,8 @@ const REQUIRED_STRING_FIELDS: Record<string, string[]> = {
   request_approval: ["scope", "action"],
   set_memory: ["key"],
   delete_memory: ["key"],
+  memory_append: ["label", "text"],
+  memory_rethink: ["label", "value"],
   call_tool: ["name"],
   create_task: ["title"],
   update_task: ["task_id"],
@@ -821,6 +828,22 @@ async function applyOne(
     case "call_tool": {
       // The platform doesn't execute tools — the agent runtime does. We just record it.
       out.trace.push(`tool ${a.name}`);
+      return;
+    }
+    case "memory_append":
+    case "memory_rethink": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      const edit =
+        a.type === "memory_append"
+          ? ({ op: "append", text: a.text } as const)
+          : ({ op: "rethink", value: a.value } as const);
+      const err = await editAgentBlock(agentId, ws, agentMemberId, a.label, edit);
+      if (err) {
+        out.errors.push(`${a.type}: ${err}`);
+        return;
+      }
+      out.trace.push(`${a.type} ${a.label}`);
       return;
     }
     case "create_task": {

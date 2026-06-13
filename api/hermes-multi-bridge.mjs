@@ -789,6 +789,8 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  {"type":"open_thread","message_id":"<id>","body_md":"…"}      — start a thread reply on a specific message`,
     `  {"type":"set_memory","key":"<snake_case>","value":<any JSON>,"scope":"global|conversation|task","scope_id":"<c_… or task_… (omit for global)>"}  — persist a note across runs. Pick the narrowest scope that applies; existing values are in YOUR MEMORY above.`,
     `  {"type":"delete_memory","key":"<key>","scope":"…","scope_id":"…"}  — remove a memory entry that's no longer true.`,
+    `  {"type":"memory_append","label":"team|notes","text":"<one line to add>"}  — append a line to a MEMORY BLOCK (see MEMORY BLOCKS above). Use "team" to record shared project state/decisions so every teammate sees it next run; "notes" for your own cross-run reminders. This is how the team stays in sync WITHOUT re-reading chat — when you learn or decide something durable, append it.`,
+    `  {"type":"memory_rethink","label":"team|notes","value":"<the full rewritten block>"}  — replace a memory block wholesale. Use when it's long or stale: rewrite concisely, keeping only what still matters (stay under the char budget shown above).`,
     `  {"type":"request_approval","scope":"<tag>","action":"<human sentence>","conversation_id":"<optional>","payload":{…}}  — pre-flight gate. Use BEFORE actions that leave the workspace (email, paid APIs, external tickets, public posts) or are one-way (delete, cancel). Emit, stop, wait for trigger:"approval_response". In-workspace chat/task/file actions DO NOT need approval. CHECK "YOUR PENDING APPROVALS" above first — if the same request is already listed there, it's awaiting a human and re-requesting is a no-op (the server drops duplicates).`,
     ``,
     `Use the Member IDs block above to fill assignees / mentions / member_id fields — those fields take memberIds (m_…), NOT handles.`,
@@ -1065,6 +1067,28 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ].join("\n");
   }
 
+  // MEMORY BLOCKS — Letta-style always-in-context prose the agent maintains.
+  // `team` is shared across the workspace (the whiteboard); `notes` is private.
+  // Rendered with each block's char budget so the model self-manages size.
+  let memoryBlocksBlock = "";
+  const mblocks =
+    packet.memoryBlocks && Array.isArray(packet.memoryBlocks) ? packet.memoryBlocks : [];
+  if (mblocks.length) {
+    const lines = mblocks.map((b) => {
+      const used = String(b.value || "").length;
+      const scope = b.shared ? "SHARED across the team" : "private to you";
+      return (
+        `\n[${b.label}] (${scope}; ${used}/${b.charLimit} chars) — ${b.description}\n` +
+        `${String(b.value || "").trim() || "(empty — fill this in as you learn things worth keeping)"}`
+      );
+    });
+    memoryBlocksBlock = [
+      ``,
+      `MEMORY BLOCKS (always visible; edit with memory_append / memory_rethink — the SHARED block is how the team stays in sync):`,
+      ...lines,
+    ].join("\n");
+  }
+
   // RELEVANT KNOWLEDGE — situational guidance whose triggers matched this run
   // (or always-on entries). Unlike the brief, these are injected only when
   // relevant, so workspace know-how doesn't bloat every prompt.
@@ -1107,6 +1131,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         goalsBlock,
         approvalsBlock,
         memoryBlock,
+        memoryBlocksBlock,
         prevFailBlock,
         ``,
         triggerLine,
@@ -1127,6 +1152,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         goalsBlock,
         approvalsBlock,
         memoryBlock,
+        memoryBlocksBlock,
         prevFailBlock,
         ``,
         `Recent messages in this conversation (most recent last):`,
