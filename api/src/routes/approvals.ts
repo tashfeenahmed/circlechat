@@ -5,6 +5,7 @@ import { db } from "../db/index.js";
 import { approvals, agents } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
+import { applyApprovedActionPayload } from "../agents/executor.js";
 import { publishToConversation } from "../lib/events.js";
 import {
   deliverAgentSecrets,
@@ -73,10 +74,28 @@ export default async function approvalRoutes(app: FastifyInstance): Promise<void
       }
     }
 
+    // Durable replay (#8): on approval, execute the original action server-side
+    // from its stored payload instead of waiting for the agent to re-emit it —
+    // so an approval can't be wasted by an agent that woke without re-deriving
+    // what it asked for. Only fires for executor-performable actions; a
+    // request_approval for external work isn't auto-replayable and still relies
+    // on the agent acting with the delivered secrets. On success the approval
+    // goes straight to "applied" so the agent's re-emit (if any) can't double it.
+    let autoApplied = false;
+    if (status === "approved") {
+      const replay = await applyApprovedActionPayload(a.agentId, a.payloadJson).catch(() => ({
+        applied: false,
+        errors: [],
+        trace: [],
+      }));
+      autoApplied = replay.applied;
+    }
+    const finalStatus = autoApplied ? "applied" : status;
+
     await db
       .update(approvals)
       .set({
-        status,
+        status: finalStatus,
         decidedAt: new Date(),
         decidedBy: memberId,
         decisionNote: note,

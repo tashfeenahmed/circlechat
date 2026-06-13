@@ -142,6 +142,78 @@ export interface ExecOutcome {
   trace: string[];
 }
 
+// Executor-performed actions that are safe to AUTO-REPLAY when their gated
+// approval is approved (#8). Excludes request_approval (its payload is the
+// agent's freeform external-work request, not an executor action) and call_tool
+// (a no-op record). The human approved exactly this action, so on approval we
+// run it server-side from the stored payload instead of depending on the agent
+// to re-emit it next turn.
+const AUTO_REPLAYABLE = new Set([
+  "post_message",
+  "react",
+  "open_thread",
+  "create_task",
+  "update_task",
+  "assign_task",
+  "create_goal",
+  "decompose_goal",
+  "ledger_update",
+  "task_comment",
+  "share_files",
+  "share_to_task",
+  "set_memory",
+  "delete_memory",
+  "memory_append",
+  "memory_rethink",
+]);
+
+export interface ApprovedReplayResult {
+  applied: boolean;
+  errors: string[];
+  trace: string[];
+}
+
+// Pure: is this stored approval payload an executor action we can auto-replay?
+export function isAutoReplayable(payload: unknown): boolean {
+  const type = payload && typeof (payload as { type?: unknown }).type === "string"
+    ? (payload as { type: string }).type
+    : null;
+  return !!type && AUTO_REPLAYABLE.has(type);
+}
+
+// Auto-apply an approved gated action from its stored payload, bypassing the
+// scope/risk gate (the human already authorized exactly this). Returns
+// applied:false (not an error) when the payload isn't an auto-replayable
+// executor action — e.g. a request_approval for external work the agent must
+// do itself. Validation + the reply guard still run.
+export async function applyApprovedActionPayload(
+  agentId: string,
+  payload: Record<string, unknown> | null | undefined,
+): Promise<ApprovedReplayResult> {
+  if (!isAutoReplayable(payload)) return { applied: false, errors: [], trace: [] };
+
+  const [agentMember] = await db
+    .select()
+    .from(members)
+    .where(and(eq(members.kind, "agent"), eq(members.refId, agentId)))
+    .limit(1);
+  if (!agentMember) return { applied: false, errors: ["agent_member_missing"], trace: [] };
+
+  const action = payload as unknown as AgentAction;
+  const shapeError = validateActionShape(action);
+  if (shapeError) return { applied: false, errors: [shapeError], trace: [] };
+
+  const out: ExecOutcome = { actionsApplied: 0, errors: [], trace: [] };
+  try {
+    await applyOne(agentId, "approval-replay", agentMember.id, action, out);
+  } catch (e) {
+    return { applied: false, errors: [(e as Error).message], trace: out.trace };
+  }
+  // applyOne pushes the action's own error (e.g. guard rejection) into out.errors
+  // without throwing; treat "no errors" as applied.
+  return { applied: out.errors.length === 0, errors: out.errors, trace: out.trace };
+}
+
 // ───────────────── scope enforcement ─────────────────
 // Each action type maps to the scope an agent must hold to perform it without
 // approval. The vocabulary matches the docs + install defaults

@@ -577,6 +577,10 @@ function formatApprovalResponse(ar) {
   const secretsLine = secretNames.length
     ? `\nCREDENTIALS DELIVERED: the human attached ${secretNames.length === 1 ? "a secret" : "secrets"} to this approval, already installed in your environment as env var${secretNames.length === 1 ? "" : "s"}: ${secretNames.join(", ")}. Read ${secretNames.length === 1 ? "it" : "them"} from your shell (e.g. $${secretNames[0]}) and use ${secretNames.length === 1 ? "it" : "them"} for the approved work NOW. NEVER print, echo, or paste the value anywhere — not in chat, not on task cards, not in files under /workspace.`
     : "";
+  if (ar.status === "applied") {
+    return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was APPROVED by ${who} and the action has ALREADY BEEN EXECUTED for you.${noteLine}${secretsLine}
+Do NOT re-emit it — that would do it twice. It is done. Move on: take the NEXT step that depended on it, or report the concrete outcome where the work lives (task card if there is one). If nothing remains, reply with exactly "HEARTBEAT_OK".`;
+  }
   if (ar.status === "approved") {
     return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was APPROVED by ${who}.${noteLine}${secretsLine}
 You may now perform the approved action. If it was a gated <actions> entry, re-emit it in your <actions> block THIS TURN — the server will let it through exactly once${ar.note ? ", adjusted per the note above if it narrows the ask" : ""}. If it was a pre-flight request_approval for outside work, do that work now. Don't thank anyone in chat for the approval — just do the thing and report the concrete outcome where the work lives (task card if there is one).`;
