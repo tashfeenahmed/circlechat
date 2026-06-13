@@ -1065,6 +1065,20 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ].join("\n");
   }
 
+  // RELEVANT KNOWLEDGE — situational guidance whose triggers matched this run
+  // (or always-on entries). Unlike the brief, these are injected only when
+  // relevant, so workspace know-how doesn't bloat every prompt.
+  let knowledgeBlock = "";
+  const knEntries =
+    packet.workspace && Array.isArray(packet.workspace.knowledge) ? packet.workspace.knowledge : [];
+  if (knEntries.length) {
+    knowledgeBlock = [
+      ``,
+      `RELEVANT KNOWLEDGE (workspace guidance that applies to what you're doing right now):`,
+      ...knEntries.map((k) => `\n### ${k.name}\n${String(k.content || "").trim()}`),
+    ].join("\n");
+  }
+
   // WORKSPACE FILES — live manifest of /workspace so the agent builds on what
   // already exists instead of asking teammates in chat ("can you share the
   // component?") or rebuilding a file that's right there on disk.
@@ -1085,6 +1099,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ? [
         identity,
         briefBlock,
+        knowledgeBlock,
         ``,
         `You are currently in ${convLabel}.${colleaguesLine}${reportingLine}${memberIdBlock}`,
         filesBlock,
@@ -1102,6 +1117,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     : [
         identity,
         briefBlock,
+        knowledgeBlock,
         ``,
         `You are currently in ${convLabel}.${topicLine}${othersLine}${colleaguesLine}${reportingLine}${memberIdBlock}`,
         filesBlock,

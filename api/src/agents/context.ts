@@ -84,6 +84,11 @@ export interface ContextPacket {
     // what already exists on disk instead of asking teammates in chat or
     // re-deriving files that are right there. Capped; null when unreadable.
     files: Array<{ path: string; size: number }> | null;
+    // Trigger-gated knowledge: markdown files under <mount>/knowledge/ whose
+    // `triggers:` keywords matched this run's text (always-on files have no
+    // triggers). Keeps situational guidance OUT of every prompt — it appears
+    // only when relevant — unlike the always-injected brief. Empty when none match.
+    knowledge: Array<{ name: string; content: string }>;
   };
   trigger: string;
   triggerConversationId?: string | null;
@@ -845,6 +850,19 @@ export async function buildContext(opts: {
     };
   });
 
+  // Trigger text for knowledge matching: what this run is "about" — the thread
+  // it's replying in, recent inbox chatter, and the agent's open work. Keyword
+  // matches against this decide which gated knowledge files get injected.
+  const triggerText = [
+    ...(thread?.messages ?? []).map((m) => m.bodyMd),
+    ...inbox.slice(0, 2).flatMap((c) => (c.messages ?? []).slice(-4).map((m) => m.bodyMd)),
+    ...myTasks.map((t) => t.title),
+    ...activeGoals.map((g) => g.title),
+  ]
+    .join("\n")
+    .slice(0, 8000);
+  const workspaceKnowledge = await readWorkspaceKnowledge(triggerText);
+
   return {
     agent: {
       id: a.id,
@@ -862,6 +880,7 @@ export async function buildContext(opts: {
       mission: ws.mission,
       brief: workspaceBrief,
       files: workspaceFiles,
+      knowledge: workspaceKnowledge,
     },
     trigger: opts.trigger,
     triggerConversationId: opts.conversationId ?? null,
@@ -916,6 +935,102 @@ async function readWorkspaceBrief(): Promise<string> {
     return buf.length > BRIEF_MAX_CHARS ? buf.slice(0, BRIEF_MAX_CHARS) + "\n…(brief truncated)" : buf;
   } catch {
     return "";
+  }
+}
+
+const KNOWLEDGE_MAX_FILES = 5;
+const KNOWLEDGE_MAX_CHARS_PER_FILE = 2000;
+const KNOWLEDGE_MAX_TOTAL_CHARS = 5000;
+
+// Parse a knowledge file's optional YAML-ish frontmatter. Supports a flow list
+// (`triggers: [a, b]`), a block list (`triggers:\n  - a\n  - b`), and
+// `always: true`. Hand-rolled (no yaml dep on this hot path); anything it can't
+// parse just yields no triggers, so a malformed file is dormant, never fatal.
+export function parseKnowledgeFrontmatter(raw: string): {
+  triggers: string[];
+  always: boolean;
+  body: string;
+} {
+  const m = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(raw);
+  if (!m) return { triggers: [], always: false, body: raw.trim() };
+  const [, fm, body] = m;
+  let always = false;
+  const triggers: string[] = [];
+  const lines = fm.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*always\s*:\s*true\s*$/i.test(line)) always = true;
+    const flow = /^\s*triggers\s*:\s*\[(.*)\]\s*$/i.exec(line);
+    if (flow) {
+      for (const t of flow[1].split(",")) {
+        const v = t.trim().replace(/^["']|["']$/g, "");
+        if (v) triggers.push(v.toLowerCase());
+      }
+      continue;
+    }
+    // Block list: `triggers:` then indented `- item` lines.
+    if (/^\s*triggers\s*:\s*$/i.test(line)) {
+      for (let j = i + 1; j < lines.length; j++) {
+        const item = /^\s*-\s*(.+?)\s*$/.exec(lines[j]);
+        if (!item) break;
+        const v = item[1].trim().replace(/^["']|["']$/g, "");
+        if (v) triggers.push(v.toLowerCase());
+      }
+    }
+  }
+  return { triggers, always, body: body.trim() };
+}
+
+// Decide which knowledge entries to inject for this run. Always-on entries
+// (no triggers, or `always: true`) are always included; gated entries match if
+// any of their lowercased trigger keywords is a substring of the run's trigger
+// text. Pure + exported for tests.
+export function selectKnowledge(
+  entries: Array<{ name: string; triggers: string[]; always: boolean; body: string }>,
+  triggerText: string,
+): Array<{ name: string; content: string }> {
+  const hay = triggerText.toLowerCase();
+  const out: Array<{ name: string; content: string }> = [];
+  let total = 0;
+  for (const e of entries) {
+    const matched = e.always || e.triggers.length === 0 || e.triggers.some((t) => hay.includes(t));
+    if (!matched) continue;
+    const content = e.body.slice(0, KNOWLEDGE_MAX_CHARS_PER_FILE);
+    if (total + content.length > KNOWLEDGE_MAX_TOTAL_CHARS) break;
+    total += content.length;
+    out.push({ name: e.name, content });
+    if (out.length >= KNOWLEDGE_MAX_FILES) break;
+  }
+  return out;
+}
+
+// Read <mount>/knowledge/*.md, parse frontmatter, and return the entries that
+// apply to this run (always-on + keyword-matched). Fail-safe: a missing dir or
+// unreadable file just yields fewer entries. Fresh every call so a human
+// dropping a knowledge file steers the team on the next wake with no redeploy.
+async function readWorkspaceKnowledge(
+  triggerText: string,
+): Promise<Array<{ name: string; content: string }>> {
+  try {
+    const { promises: fsp } = await import("node:fs");
+    const { join } = await import("node:path");
+    const dir = join(WORKSPACE_MOUNT, "knowledge");
+    const ents = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const files = ents
+      .filter((e) => e.isFile() && /\.(md|txt)$/i.test(e.name))
+      .map((e) => e.name)
+      .sort()
+      .slice(0, 30);
+    const parsed: Array<{ name: string; triggers: string[]; always: boolean; body: string }> = [];
+    for (const name of files) {
+      const raw = await fsp.readFile(join(dir, name), "utf8").catch(() => "");
+      if (!raw.trim()) continue;
+      const { triggers, always, body } = parseKnowledgeFrontmatter(raw);
+      if (body) parsed.push({ name, triggers, always, body });
+    }
+    return selectKnowledge(parsed, triggerText);
+  } catch {
+    return [];
   }
 }
 
