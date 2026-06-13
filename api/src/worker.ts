@@ -41,6 +41,17 @@ async function consumeStuckBreak(agentId: string): Promise<string | null> {
   }
 }
 
+// Read + clear the one-shot run_code output left by a prior run (sandbox runs
+// after the LLM turn, so its result is surfaced on the next turn).
+async function consumeCodeResult(agentId: string): Promise<string | null> {
+  try {
+    const v = await redis.getdel(`cc:codeexec:${agentId}`);
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+
 // After a run, fingerprint the agent's recent runs and flag a behavioral loop
 // (repeat / A-B-A-B alternation) so the NEXT run is told to break it. Returns
 // true when stuck so the caller also suppresses the continuation chain. Reads
@@ -199,6 +210,7 @@ const worker = new Worker<AgentJobPayload>(
     // a behavioral loop, it left a flag; consume it so this run gets told to
     // break the pattern (and the flag clears so it's a nudge, not a wall).
     const stuckBreak = await consumeStuckBreak(agent.id);
+    const lastCodeResult = await consumeCodeResult(agent.id);
 
     const packet = await buildContext({
       agentId: agent.id,
@@ -217,6 +229,7 @@ const worker = new Worker<AgentJobPayload>(
             }
           : null,
       stuckBreak,
+      lastCodeResult,
     });
     await db.update(agentRuns).set({ contextJson: packet as never }).where(eq(agentRuns.id, runId));
 
@@ -295,11 +308,13 @@ const worker = new Worker<AgentJobPayload>(
     const stuck = await detectAndFlagStuck(agent.id);
 
     // Grant an immediate follow-up turn if the agent just advanced the board
-    // and we're under the chain cap. Budget is re-checked at the top of the
-    // next run, so a continuation can't outrun a hard stop.
-    if (!stuck && continuationEnabled() && response !== "HEARTBEAT_OK" && outcome.actionsApplied > 0) {
+    // (or ran code whose result it needs to see) and we're under the chain cap.
+    // Budget is re-checked at the top of the next run, so a continuation can't
+    // outrun a hard stop.
+    const ranCode = actions.some((x) => x.type === "run_code");
+    if (!stuck && continuationEnabled() && response !== "HEARTBEAT_OK") {
       const chainDepth = payload.chainDepth ?? 0;
-      if (shouldContinue(actions, chainDepth)) {
+      if ((outcome.actionsApplied > 0 && shouldContinue(actions, chainDepth)) || (ranCode && chainDepth < 2)) {
         await enqueueAgentEvent(agent.id, {
           trigger: "continuation",
           conversationId: payload.conversationId ?? null,

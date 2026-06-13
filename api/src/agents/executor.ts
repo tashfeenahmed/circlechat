@@ -34,6 +34,8 @@ import { latestVerificationRationale } from "../lib/task-verifier.js";
 import { editAgentBlock } from "../lib/memory-blocks.js";
 import { repairAction, type RepairCtx } from "./action-repair.js";
 import { formatDelegationBrief } from "../lib/delegation.js";
+import { runCodeEnabled, runCodeSandboxed, formatCodeResult } from "../lib/code-sandbox.js";
+import { redis } from "../lib/redis.js";
 import { loadLedger, appendFact, appendProgressNote, appendDeadEnd } from "../lib/ledger-core.js";
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
@@ -149,7 +151,11 @@ export type AgentAction =
       done_when?: string;
       task_id?: string;
       goal_id?: string;
-    };
+    }
+  // Run code in a hardened, throwaway sandbox container (no network, read-only,
+  // dropped caps, hard timeout). The result is fed back on the agent's next
+  // turn. Opt-in (CC_RUN_CODE=on).
+  | { type: "run_code"; language: "python" | "bash"; code: string };
 
 export interface ExecOutcome {
   actionsApplied: number;
@@ -451,6 +457,7 @@ const REQUIRED_STRING_FIELDS: Record<string, string[]> = {
   memory_append: ["label", "text"],
   memory_rethink: ["label", "value"],
   delegate_to: ["to", "objective"],
+  run_code: ["language", "code"],
   call_tool: ["name"],
   create_task: ["title"],
   update_task: ["task_id"],
@@ -939,6 +946,25 @@ async function applyOne(
     case "call_tool": {
       // The platform doesn't execute tools — the agent runtime does. We just record it.
       out.trace.push(`tool ${a.name}`);
+      return;
+    }
+    case "run_code": {
+      if (!runCodeEnabled()) {
+        out.errors.push("run_code is disabled in this workspace. Do the work another way (no sandbox is available).");
+        return;
+      }
+      const lang = a.language === "bash" ? "bash" : "python";
+      const result = await runCodeSandboxed(lang, String(a.code ?? ""));
+      const rendered = formatCodeResult(lang, result);
+      // Feed the result back on the agent's NEXT turn (one-shot, via redis),
+      // since actions are applied after the LLM turn and can't return inline.
+      try {
+        await redis.set(`cc:codeexec:${agentId}`, rendered, "PX", 60 * 60 * 1000);
+      } catch {
+        /* best-effort */
+      }
+      out.trace.push(`run_code ${lang} ${result.timedOut ? "timeout" : `exit=${result.exitCode}`}`);
+      if (result.error) out.errors.push(`run_code: ${result.error}`);
       return;
     }
     case "memory_append":

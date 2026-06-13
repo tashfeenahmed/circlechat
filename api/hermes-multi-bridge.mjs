@@ -791,6 +791,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  {"type":"task_comment","task_id":"task_…","body_md":"…","mentions":["m_…"],"attachments":[<optional, hand-rolled descriptors from /uploads>]}`,
     `  {"type":"share_to_task","task_id":"task_…","body_md":"progress note","files":[{"url":"https://…","name":"snapshot.png"},{"path":"/workspace/report.pdf","name":"Q3.pdf"}]}`,
     `                                                                — mirror of share_files but attaches to a task card. Use this to drop progress updates + artifacts (screenshots, PDFs, data files) on tasks you're working on during heartbeats. Files show up on the task AND are saved as DURABLE, VERSIONED deliverables on that task. To see what's already been delivered for a task (so you build on it instead of redoing it), call GET /agent-api/tasks/<id>/artifacts. You can also submit a deliverable directly with POST /agent-api/tasks/<id>/artifacts (multipart file, {"url":"https://…"}, or {"name":"notes.md","contentText":"…"}).`,
+    `  {"type":"run_code","language":"python|bash","code":"<program>"}  — run code in a locked-down throwaway sandbox (no network, no filesystem beyond a scratch /tmp, hard timeout). Its stdout/stderr comes back to you NEXT turn under "RESULT of the code you ran". Use it to compute, parse, or verify something concretely instead of guessing — never to fake output. (Only if enabled for this workspace; if you get "run_code is disabled", do it another way.)`,
     `  {"type":"open_thread","message_id":"<id>","body_md":"…"}      — start a thread reply on a specific message`,
     `  {"type":"set_memory","key":"<snake_case>","value":<any JSON>,"scope":"global|conversation|task","scope_id":"<c_… or task_… (omit for global)>"}  — persist a note across runs. Pick the narrowest scope that applies; existing values are in YOUR MEMORY above.`,
     `  {"type":"delete_memory","key":"<key>","scope":"…","scope_id":"…"}  — remove a memory entry that's no longer true.`,
@@ -994,6 +995,13 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     stuckBreakBlock = `\n${packet.stuckBreak.trim()}`;
   }
 
+  // One-shot result of a run_code action the agent issued last turn (the
+  // sandbox runs after the turn ends, so its output arrives here next turn).
+  let codeResultBlock = "";
+  if (packet.lastCodeResult && typeof packet.lastCodeResult === "string") {
+    codeResultBlock = `\nRESULT of the code you ran last turn:\n${packet.lastCodeResult.trim()}\nUse this output to take the next step — don't re-run the same code.`;
+  }
+
   let approvalsBlock = "";
   const aps = Array.isArray(packet.openApprovals) ? packet.openApprovals : [];
   if (aps.length) {
@@ -1151,6 +1159,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         memoryBlocksBlock,
         prevFailBlock,
         stuckBreakBlock,
+        codeResultBlock,
         ``,
         triggerLine,
         toolBlock,
@@ -1173,6 +1182,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         memoryBlocksBlock,
         prevFailBlock,
         stuckBreakBlock,
+        codeResultBlock,
         ``,
         `Recent messages in this conversation (most recent last):`,
         history || "(no prior messages)",

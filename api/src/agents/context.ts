@@ -102,6 +102,9 @@ export interface ContextPacket {
   // One-shot directive set when the agent was detected in a run-level loop
   // (see lib/stuck-detector.ts), telling it to break the pattern this turn.
   stuckBreak?: string | null;
+  // One-shot output from a run_code action the agent issued last turn (the
+  // sandbox runs after the LLM turn, so its result is fed back here next turn).
+  lastCodeResult?: string | null;
   members: Record<string, MemberInfo>; // member directory keyed by memberId
   thread: null | {
     conversationId: string;
@@ -250,6 +253,7 @@ export async function buildContext(opts: {
   approvalId?: string;
   previousRunFailure?: { errorText: string; finishedAt: string | null } | null;
   stuckBreak?: string | null;
+  lastCodeResult?: string | null;
 }): Promise<ContextPacket> {
   const [a] = await db.select().from(agents).where(eq(agents.id, opts.agentId)).limit(1);
   if (!a) throw new Error("agent_not_found");
@@ -926,6 +930,7 @@ export async function buildContext(opts: {
     triggerMessageId: opts.messageId,
     previousRunFailure: opts.previousRunFailure ?? null,
     stuckBreak: opts.stuckBreak ?? null,
+    lastCodeResult: opts.lastCodeResult ?? null,
     members: memberDirectory,
     thread,
     inbox,
