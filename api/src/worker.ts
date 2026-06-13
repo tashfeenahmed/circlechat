@@ -258,7 +258,12 @@ const worker = new Worker<AgentJobPayload>(
       trace = response.trace ?? [];
     }
 
-    const outcome = await applyActions({ agentId: agent.id, runId, actions });
+    const outcome = await applyActions({
+      agentId: agent.id,
+      runId,
+      actions,
+      triggerConversationId: payload.conversationId ?? null,
+    });
 
     const completionChars =
       response === "HEARTBEAT_OK"

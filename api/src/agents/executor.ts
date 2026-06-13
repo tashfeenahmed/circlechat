@@ -9,6 +9,7 @@ import {
   conversationMembers,
   memoryKv,
   tasks,
+  taskAssignees,
   agents,
 } from "../db/schema.js";
 import { id } from "../lib/ids.js";
@@ -31,6 +32,7 @@ import { createGoal } from "../lib/goals-core.js";
 import { planGoal } from "../lib/planner.js";
 import { latestVerificationRationale } from "../lib/task-verifier.js";
 import { editAgentBlock } from "../lib/memory-blocks.js";
+import { repairAction, type RepairCtx } from "./action-repair.js";
 import { loadLedger, appendFact, appendProgressNote, appendDeadEnd } from "../lib/ledger-core.js";
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
@@ -406,6 +408,7 @@ export async function applyActions(params: {
   agentId: string;
   runId: string;
   actions: AgentAction[];
+  triggerConversationId?: string | null;
 }): Promise<ExecOutcome> {
   const { agentId, runId } = params;
   const out: ExecOutcome = { actionsApplied: 0, errors: [], trace: [] };
@@ -419,6 +422,13 @@ export async function applyActions(params: {
     out.errors.push("agent_member_missing");
     return out;
   }
+
+  // Pre-dispatch auto-repair context: the agent's sole open task (the only
+  // unambiguous fix for a placeholder task_id) and the trigger conversation.
+  const repairCtx: RepairCtx = {
+    soleOpenTaskId: await soleOpenTaskId(agentMember.id),
+    triggerConversationId: params.triggerConversationId ?? null,
+  };
 
   // Load the agent's scopes once for the run when either gate is active.
   const enforce = scopeEnforcementOn();
@@ -442,6 +452,18 @@ export async function applyActions(params: {
     if (a && typeof (a as { type?: unknown }).type === "string") {
       (a as { type: string }).type =
         ACTION_ALIASES[(a as { type: string }).type] ?? (a as { type: string }).type;
+    }
+    // Pre-dispatch auto-repair: rewrite unambiguous mistakes (placeholder ids
+    // copied from the prompt template, relative file paths) BEFORE validation,
+    // so they become a silent fix + trace note instead of a wasted turn. Only
+    // touches values that can't be real; anything ambiguous falls through to
+    // validateActionShape's teaching error unchanged.
+    {
+      const { action: repaired, repairs } = repairAction(a as AgentAction, repairCtx);
+      if (repairs.length) {
+        Object.assign(a as object, repaired);
+        out.trace.push(`auto-repair: ${repairs.join("; ")}`);
+      }
     }
     // Structured validation: the action path is text-scraped, so a malformed
     // action (missing task_id, empty body, no files) used to silently no-op or
@@ -1252,6 +1274,25 @@ async function loadAgentWorkspace(agentMemberId: string): Promise<string | null>
     .where(eq(members.id, agentMemberId))
     .limit(1);
   return row?.workspaceId ?? null;
+}
+
+// The agent's single open assigned task id, or null if it has zero or several.
+// Used by auto-repair: a placeholder task_id only has an unambiguous fix when
+// there's exactly one task it could mean.
+async function soleOpenTaskId(agentMemberId: string): Promise<string | null> {
+  const rows = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .innerJoin(taskAssignees, eq(taskAssignees.taskId, tasks.id))
+    .where(
+      and(
+        eq(taskAssignees.memberId, agentMemberId),
+        eq(tasks.archived, false),
+        sql`${tasks.status} not in ('done','cancelled')`,
+      ),
+    )
+    .limit(2);
+  return rows.length === 1 ? rows[0].id : null;
 }
 
 async function isDmConversation(conversationId: string): Promise<boolean> {
