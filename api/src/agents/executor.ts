@@ -33,6 +33,7 @@ import { planGoal } from "../lib/planner.js";
 import { latestVerificationRationale } from "../lib/task-verifier.js";
 import { editAgentBlock } from "../lib/memory-blocks.js";
 import { repairAction, type RepairCtx } from "./action-repair.js";
+import { formatDelegationBrief } from "../lib/delegation.js";
 import { loadLedger, appendFact, appendProgressNote, appendDeadEnd } from "../lib/ledger-core.js";
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
@@ -134,6 +135,20 @@ export type AgentAction =
       task_id: string;
       body_md?: string;
       files: Array<{ url?: string; path?: string; name?: string }>;
+    }
+  // Hand a piece of work to a specific teammate with a STRUCTURED briefing
+  // (objective + constraints + done-criteria) that becomes the task's content,
+  // so the delegatee starts from the briefing instead of the delegator's
+  // channel history. `to` is a handle or member id; attaches to an existing
+  // task (task_id) or creates one.
+  | {
+      type: "delegate_to";
+      to: string;
+      objective: string;
+      constraints?: string;
+      done_when?: string;
+      task_id?: string;
+      goal_id?: string;
     };
 
 export interface ExecOutcome {
@@ -233,6 +248,7 @@ const ACTION_SCOPE: Partial<Record<AgentAction["type"], string>> = {
   share_to_task: "tasks.write",
   create_goal: "tasks.write",
   decompose_goal: "tasks.write",
+  delegate_to: "tasks.write",
   ledger_update: "tasks.write",
 };
 
@@ -434,6 +450,7 @@ const REQUIRED_STRING_FIELDS: Record<string, string[]> = {
   delete_memory: ["key"],
   memory_append: ["label", "text"],
   memory_rethink: ["label", "value"],
+  delegate_to: ["to", "objective"],
   call_tool: ["name"],
   create_task: ["title"],
   update_task: ["task_id"],
@@ -1039,6 +1056,62 @@ async function applyOne(
         return;
       }
       out.trace.push(`assign_task ${a.task_id}→${a.member_id}`);
+      return;
+    }
+    case "delegate_to": {
+      const ws = await loadAgentWorkspace(agentMemberId);
+      if (!ws) throw new Error("agent_workspace_missing");
+      // Resolve the target to a workspace member (accept a member id or a handle).
+      let targetMemberId: string | null = /^m_/.test(a.to) ? a.to : null;
+      if (!targetMemberId) {
+        const [resolved] = await resolveHandlesToMemberIds([a.to.replace(/^@/, "")], ws);
+        targetMemberId = resolved ?? null;
+      }
+      if (!targetMemberId) {
+        out.errors.push(`delegate_to: no teammate "${a.to}" in this workspace — use an @handle or member id from the directory.`);
+        return;
+      }
+      if (targetMemberId === agentMemberId) {
+        out.errors.push(`delegate_to: you can't delegate to yourself — just do it, or pick a different teammate.`);
+        return;
+      }
+      const [self] = await db.select({ handle: agents.handle }).from(agents).where(eq(agents.id, agentId)).limit(1);
+      const brief = formatDelegationBrief({
+        fromHandle: self?.handle ?? "a teammate",
+        objective: a.objective,
+        constraints: a.constraints,
+        doneWhen: a.done_when,
+      });
+      if (a.task_id) {
+        const asg = await addAssignee(a.task_id, targetMemberId, agentMemberId, ws);
+        if ("error" in asg) {
+          out.errors.push(`delegate_to: ${asg.error}`);
+          return;
+        }
+        const cm = await addComment(a.task_id, brief, [targetMemberId], agentMemberId, ws);
+        if ("error" in cm) {
+          out.errors.push(`delegate_to: ${cm.error}`);
+          return;
+        }
+        out.trace.push(`delegate_to ${targetMemberId} on ${a.task_id}`);
+      } else {
+        const r = await createTask(
+          {
+            title: a.objective.slice(0, 140),
+            bodyMd: brief,
+            status: "in_progress",
+            goalId: a.goal_id,
+            assignees: [targetMemberId],
+          },
+          agentMemberId,
+          ws,
+        );
+        if ("error" in r) {
+          out.errors.push(`delegate_to: ${r.error}`);
+          return;
+        }
+        out.trace.push(`delegate_to ${targetMemberId} → new task ${r.task.id}`);
+      }
       return;
     }
     case "create_goal": {
