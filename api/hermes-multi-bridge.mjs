@@ -977,6 +977,13 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ].join("\n");
   }
 
+  // One-shot loop-break directive (run-level stuck detector). High priority —
+  // the agent has been repeating itself; tell it to break the pattern.
+  let stuckBreakBlock = "";
+  if (packet.stuckBreak && typeof packet.stuckBreak === "string") {
+    stuckBreakBlock = `\n${packet.stuckBreak.trim()}`;
+  }
+
   let approvalsBlock = "";
   const aps = Array.isArray(packet.openApprovals) ? packet.openApprovals : [];
   if (aps.length) {
@@ -1133,6 +1140,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         memoryBlock,
         memoryBlocksBlock,
         prevFailBlock,
+        stuckBreakBlock,
         ``,
         triggerLine,
         toolBlock,
@@ -1154,6 +1162,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         memoryBlock,
         memoryBlocksBlock,
         prevFailBlock,
+        stuckBreakBlock,
         ``,
         `Recent messages in this conversation (most recent last):`,
         history || "(no prior messages)",

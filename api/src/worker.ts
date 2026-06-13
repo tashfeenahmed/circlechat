@@ -22,6 +22,56 @@ import { exportRunTrace } from "./lib/tracing.js";
 import { enforceBudgets, estimateRunCost } from "./lib/budgets.js";
 import { enqueueAgentEvent } from "./agents/enqueue.js";
 import { continuationEnabled, shouldContinue } from "./agents/continuation.js";
+import {
+  detectStuck,
+  normalizeRunSignature,
+  stuckBreakDirective,
+} from "./lib/stuck-detector.js";
+
+const STUCK_BREAK_TTL_MS = 2 * 60 * 60 * 1000;
+const stuckKey = (agentId: string) => `cc:stuckbreak:${agentId}`;
+
+// Read + clear the one-shot loop-break directive left by a prior run.
+async function consumeStuckBreak(agentId: string): Promise<string | null> {
+  try {
+    const v = await redis.getdel(stuckKey(agentId));
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+
+// After a run, fingerprint the agent's recent runs and flag a behavioral loop
+// (repeat / A-B-A-B alternation) so the NEXT run is told to break it. Returns
+// true when stuck so the caller also suppresses the continuation chain. Reads
+// the runs newest-first then reverses to oldest→newest for the detector.
+async function detectAndFlagStuck(agentId: string): Promise<boolean> {
+  try {
+    const recent = await db
+      .select({ resultJson: agentRuns.resultJson, traceJson: agentRuns.traceJson })
+      .from(agentRuns)
+      .where(and(eq(agentRuns.agentId, agentId), eq(agentRuns.status, "ok")))
+      .orderBy(desc(agentRuns.startedAt))
+      .limit(4);
+    const signatures = recent
+      .reverse()
+      .filter((r) => !(r.resultJson as { skipped?: unknown })?.skipped)
+      .map((r) =>
+        normalizeRunSignature(
+          (r.traceJson as string[]) ?? [],
+          ((r.resultJson as { errors?: string[] })?.errors as string[]) ?? [],
+        ),
+      );
+    const verdict = detectStuck(signatures);
+    if (!verdict.stuck) return false;
+    await redis.set(stuckKey(agentId), stuckBreakDirective(verdict.pattern), "PX", STUCK_BREAK_TTL_MS);
+    console.log(`[worker] stuck (${verdict.pattern}) agent=${agentId} :: ${verdict.signature.slice(0, 120)}`);
+    return true;
+  } catch (e) {
+    console.error("[worker] stuck detection failed", (e as Error).message);
+    return false;
+  }
+}
 import { redactSecrets, redactLines } from "./lib/redaction.js";
 import { startGoalPlanWorker } from "./agents/goal-planner-worker.js";
 import { scheduleGoalSweep, scheduleMissionSweep } from "./lib/goal-queue.js";
@@ -145,6 +195,11 @@ const worker = new Worker<AgentJobPayload>(
       return;
     }
 
+    // One-shot loop-break directive: if the previous run detected this agent in
+    // a behavioral loop, it left a flag; consume it so this run gets told to
+    // break the pattern (and the flag clears so it's a nudge, not a wall).
+    const stuckBreak = await consumeStuckBreak(agent.id);
+
     const packet = await buildContext({
       agentId: agent.id,
       trigger: payload.trigger,
@@ -161,6 +216,7 @@ const worker = new Worker<AgentJobPayload>(
               finishedAt: prevRuns[0].finishedAt?.toISOString() ?? null,
             }
           : null,
+      stuckBreak,
     });
     await db.update(agentRuns).set({ contextJson: packet as never }).where(eq(agentRuns.id, runId));
 
@@ -228,10 +284,15 @@ const worker = new Worker<AgentJobPayload>(
       errors: outcome.errors,
     });
 
+    // Loop guard: detect a run-level behavioral loop and, if found, leave a
+    // one-shot break directive for the next run AND suppress the continuation
+    // chain (continuing a loop just spends more on the same dead end).
+    const stuck = await detectAndFlagStuck(agent.id);
+
     // Grant an immediate follow-up turn if the agent just advanced the board
     // and we're under the chain cap. Budget is re-checked at the top of the
     // next run, so a continuation can't outrun a hard stop.
-    if (continuationEnabled() && response !== "HEARTBEAT_OK" && outcome.actionsApplied > 0) {
+    if (!stuck && continuationEnabled() && response !== "HEARTBEAT_OK" && outcome.actionsApplied > 0) {
       const chainDepth = payload.chainDepth ?? 0;
       if (shouldContinue(actions, chainDepth)) {
         await enqueueAgentEvent(agent.id, {

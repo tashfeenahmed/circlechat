@@ -98,6 +98,9 @@ export interface ContextPacket {
   // reaped after a worker death). Continuity: without this the agent has
   // amnesia about its own dead run and silently drops whatever it was doing.
   previousRunFailure?: { errorText: string; finishedAt: string | null } | null;
+  // One-shot directive set when the agent was detected in a run-level loop
+  // (see lib/stuck-detector.ts), telling it to break the pattern this turn.
+  stuckBreak?: string | null;
   members: Record<string, MemberInfo>; // member directory keyed by memberId
   thread: null | {
     conversationId: string;
@@ -241,6 +244,7 @@ export async function buildContext(opts: {
   taskId?: string;
   approvalId?: string;
   previousRunFailure?: { errorText: string; finishedAt: string | null } | null;
+  stuckBreak?: string | null;
 }): Promise<ContextPacket> {
   const [a] = await db.select().from(agents).where(eq(agents.id, opts.agentId)).limit(1);
   if (!a) throw new Error("agent_not_found");
@@ -906,6 +910,7 @@ export async function buildContext(opts: {
     triggerConversationId: opts.conversationId ?? null,
     triggerMessageId: opts.messageId,
     previousRunFailure: opts.previousRunFailure ?? null,
+    stuckBreak: opts.stuckBreak ?? null,
     members: memberDirectory,
     thread,
     inbox,
