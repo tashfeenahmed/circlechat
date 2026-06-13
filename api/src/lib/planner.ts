@@ -209,6 +209,31 @@ function resolveAssignee(
   return { entry: null, reason: "left unassigned (no clear match)" };
 }
 
+// Re-plan corrective note in the smolagents "facts survey" style: before
+// re-decomposing a stalled goal, force the planner to separate what is VERIFIED
+// from what is merely ASSUMED, treat dead-ends as closed, and not re-propose
+// what failed. Separating known facts from assumptions is the exact antidote to
+// the "assume the deploy happened / assume the credential exists" failure class.
+// Pure + exported for tests.
+export function buildReplanNote(
+  facts: string[],
+  deadEnds: string[],
+  replanCount: number,
+  maxReplans: number,
+): string {
+  const attempt = replanCount + 1;
+  return [
+    "NOTE: this goal STALLED under the previous plan. Before decomposing, do a FACTS SURVEY, then produce a DIFFERENT decomposition that gets it moving.",
+    "",
+    "FACTS SURVEY — separate what is KNOWN from what is ASSUMED:",
+    `• VERIFIED (established — build on these, don't redo them): ${facts.length ? facts.join("; ") : "none recorded yet"}`,
+    `• DEAD-ENDS (proven not to work — do NOT propose these again): ${deadEnds.length ? deadEnds.join("; ") : "none recorded"}`,
+    "• UNVERIFIED: treat everything NOT in VERIFIED as an open question. Do NOT assume a prior step succeeded, a deploy happened, or a credential/access exists unless a VERIFIED fact says so — instead plan a concrete task to establish it.",
+    "",
+    `This is re-plan attempt ${attempt} of ${maxReplans}. Prefer tasks that PRODUCE evidence (a file, a checked result, a posted artifact) over tasks that assume it; keep each task concrete and independently checkable.`,
+  ].join("\n");
+}
+
 function buildMessages(
   goalTitle: string,
   goalBody: string,
@@ -317,13 +342,13 @@ export async function planGoal(params: {
   let replanNote = "";
   if (isReplan) {
     const led = await loadLedger(goalId).catch(() => null);
-    const parts: string[] = [
-      "NOTE: this goal STALLED under the previous plan — produce a DIFFERENT decomposition that gets it moving.",
-    ];
-    if (led?.facts.length) parts.push(`ESTABLISHED FACTS (build on these): ${led.facts.join("; ")}`);
-    if (led?.triedDeadEnds.length)
-      parts.push(`DEAD-ENDS (do NOT propose these again): ${led.triedDeadEnds.join("; ")}`);
-    replanNote = parts.join("\n");
+    const maxReplans = Number(process.env.GOAL_MAX_REPLANS ?? 2);
+    replanNote = buildReplanNote(
+      led?.facts ?? [],
+      led?.triedDeadEnds ?? [],
+      led?.replanCount ?? 0,
+      maxReplans,
+    );
   }
 
   await db.update(goals).set({ status: "planning", updatedAt: new Date() }).where(eq(goals.id, goalId));
