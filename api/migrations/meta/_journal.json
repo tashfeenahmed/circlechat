@@ -176,6 +176,13 @@
       "when": 1777900000000,
       "tag": "0024_memory_blocks",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1778000000000,
+      "tag": "0025_task_summaries",
+      "breakpoints": true
     }
   ]
 }

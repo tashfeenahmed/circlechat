@@ -20,6 +20,7 @@ import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
 import { listGoals, getGoalAncestry } from "../lib/goals-core.js";
 import { loadLedgers } from "../lib/ledger-core.js";
 import { ensureAndLoadBlocks } from "../lib/memory-blocks.js";
+import { loadTaskSummary, maybeSummarizeTaskThread } from "../lib/task-condenser.js";
 import { latestVerdictSummary } from "../lib/task-verifier.js";
 
 export interface MemberInfo {
@@ -223,6 +224,10 @@ export interface ContextPacket {
     createdBy: string;
     subtasks: Array<{ id: string; title: string; status: string; assignees: string[] }>;
     recentComments: Array<{ id: string; memberId: string; memberHandle: string; bodyMd: string; ts: string }>;
+    // Rolling summary of the OLDER comments (beyond the recent window) on a long
+    // thread, so the agent sees what was decided/tried without every comment.
+    // Null when the thread is short or the condenser is off. See task-condenser.
+    historySummary?: string | null;
     // The goal chain this task serves, top-first (root project → … → direct
     // goal), so the agent sees the "why", not just a title. Empty when the
     // task isn't attached to a goal.
@@ -707,6 +712,15 @@ export async function buildContext(opts: {
         .where(and(eq(taskComments.taskId, opts.taskId)))
         .orderBy(desc(taskComments.ts))
         .limit(10);
+      // Long thread? Surface a rolling summary of the older comments (and
+      // refresh it in the background) so the agent sees the head, not just the
+      // last 10. No-op/null unless the condenser is enabled and the thread is
+      // long. Counting only when the window is full avoids a query on short threads.
+      let historySummary: string | null = null;
+      if (recentComments.length >= 10) {
+        historySummary = await loadTaskSummary(opts.taskId).catch(() => null);
+        void maybeSummarizeTaskThread(opts.taskId);
+      }
       // Full "why" chain: the goal this task serves, up through its parent
       // goals/project. Top-first so the prompt reads mission ▸ project ▸ goal.
       const goalAncestry = t.goalId
@@ -750,6 +764,7 @@ export async function buildContext(opts: {
             bodyMd: c.bodyMd,
             ts: c.ts.toISOString(),
           })),
+        historySummary,
         goalAncestry,
         latestVerdict,
       };

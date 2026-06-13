@@ -832,6 +832,10 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     const subsLine = (t.subtasks || []).length
       ? `\nSubtasks:\n${t.subtasks.map((s) => `  [${s.status === "done" ? "x" : " "}] ${s.title} (${s.id})`).join("\n")}`
       : "";
+    const historyLine =
+      t.historySummary && String(t.historySummary).trim()
+        ? `\nEarlier in this thread (summary of older comments):\n${String(t.historySummary).trim()}`
+        : "";
     const commentsLine = (t.recentComments || []).length
       ? `\nRecent comments:\n${t.recentComments.map((c) => `  @${c.memberHandle}: ${String(c.bodyMd).slice(0, 200)}`).join("\n")}`
       : "";
@@ -870,6 +874,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
       t.labels?.length ? `Labels: ${t.labels.join(", ")}` : null,
       assignLine,
       subsLine ? subsLine.trimStart() : null,
+      historyLine ? historyLine.trimStart() : null,
       commentsLine ? commentsLine.trimStart() : null,
     ]
       .filter(Boolean)

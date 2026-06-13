@@ -283,6 +283,18 @@ export const invites = pgTable(
   }),
 );
 
+// ───────────────── task_summaries (condensed thread history) ─────────────
+// Rolling summary of a task's OLDER comments so an agent sees the head of a
+// long thread without loading every comment. See lib/task-condenser.ts.
+export const taskSummaries = pgTable("task_summaries", {
+  taskId: varchar("task_id", { length: 32 }).primaryKey(),
+  workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+  summary: text("summary").notNull().default(""),
+  commentCount: integer("comment_count").notNull().default(0),
+  throughTs: timestamp("through_ts", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // ───────────────── memory_blocks (Letta-style in-context memory) ─────────
 // Labeled prose blocks compiled into EVERY agent prompt and self-edited by the
 // agent. A `shared` block is attached to every agent in the workspace (the
