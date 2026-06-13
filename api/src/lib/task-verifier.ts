@@ -43,9 +43,13 @@ function passThreshold(): number {
 }
 // The execution check (headless render) is separately opt-in: it spawns a
 // Chromium subprocess, so it must never surprise a deployment that didn't ask
-// for it or lacks the binary. Requires the rubric gate to be on too.
-function execEnabled(): boolean {
-  return process.env.VERIFY_EXEC === "on" && verifierEnabled();
+// for it or lacks the binary. DECOUPLED from the LLM judge: with VERIFY_EXEC=on
+// the render runs as a deterministic, fail-CLOSED gate (a web deliverable that
+// demonstrably fails to load blocks the done-flip even when the judge is
+// dormant or unreachable), and its observation also enriches the judge when
+// VERIFY_GATE is on. A page that didn't load is not a matter of opinion.
+function execGateEnabled(): boolean {
+  return process.env.VERIFY_EXEC === "on";
 }
 
 function inferType(name: string, ct: string): "code" | "research" | "design" | "general" {
@@ -60,16 +64,77 @@ function inferType(name: string, ct: string): "code" | "research" | "design" | "
 
 const MAX_DELIVERABLE_CHARS = 16_000;
 
-// Returns null = pass/allow (let the done flip proceed); a string = block with
-// that error code. Only meant to be called once a candidate substantive
-// artifact has been found by the heuristic gate.
-export async function verifyTaskForDone(opts: {
+// Tier 1 — DETERMINISTIC, fail-CLOSED. Renders a web deliverable in headless
+// Chromium and BLOCKS the done-flip on an unambiguous load failure (the page
+// rendered blank, or threw resource/JS errors), independent of whether the LLM
+// judge is configured. Ambiguous outcomes never block: a missing chromium
+// binary, a non-web deliverable, a render timeout, or any error all return
+// "not blocked" + a (possibly null) observation the caller threads into the
+// judge so chromium runs at most once per flip. Returns the observation so the
+// fail-open judge tier can reuse it without re-rendering.
+export async function deterministicGateForDone(opts: {
   taskId: string;
   workspaceId: string;
   title: string;
   bodyMd: string;
   decidedBy: string | null;
-}): Promise<"verification_failed" | null> {
+}): Promise<{ blocked: boolean; obs: RenderObservation | null }> {
+  if (!execGateEnabled()) return { blocked: false, obs: null };
+
+  // Only attempt a render when the latest textual deliverable is web markup.
+  const rows = await liveArtifactRows(opts.taskId).catch(() => []);
+  rows.sort((a, b) => (b.createdAt?.getTime?.() ?? 0) - (a.createdAt?.getTime?.() ?? 0));
+  const htmlEntry = rows.find((r) => /\.html?$/i.test(r.name || ""));
+  if (!htmlEntry) return { blocked: false, obs: null };
+
+  const obs = await renderWebDeliverable({ taskId: opts.taskId, entryName: htmlEntry.name }).catch(() => null);
+  // Null = couldn't render (chromium absent / not web / error): ambiguous, never block.
+  if (!obs) return { blocked: false, obs: null };
+
+  const decision = classifyRenderForGate(obs);
+  if (!decision.block) return { blocked: false, obs };
+  await record(opts, "code", htmlEntry.id, "fail", 0, { render: obs }, decision.reason, "render");
+  return { blocked: true, obs };
+}
+
+// Pure decision: should a render observation HARD-block the done-flip? Blocks
+// only on unambiguous breakage — the page loaded but rendered blank, or threw
+// resource/JS errors. A successful load (obs.ok) or a render TIMEOUT (a slow
+// page is not proof of a broken deliverable) never blocks. Extracted for tests.
+export function classifyRenderForGate(
+  obs: RenderObservation,
+): { block: false } | { block: true; reason: string } {
+  if (obs.ok) return { block: false };
+  if (/timed out/i.test(obs.note)) return { block: false };
+  if (obs.consoleErrors.length > 0) {
+    return {
+      block: true,
+      reason: `Deliverable failed to load: ${obs.consoleErrors.length} load/JS error(s) — ${obs.consoleErrors
+        .slice(0, 3)
+        .join(" | ")}`,
+    };
+  }
+  return {
+    block: true,
+    reason: `Deliverable rendered blank in a real browser (${obs.renderedTextLen} visible chars). It is broken or empty, not done.`,
+  };
+}
+
+// Tier 2 — LLM-as-judge, fail-OPEN. Returns null = pass/allow (let the done
+// flip proceed); a string = block with that error code. Only meant to be
+// called once a candidate substantive artifact has been found by the heuristic
+// gate and the deterministic tier has not already blocked. `preRendered` is the
+// observation from the deterministic tier, reused so chromium runs only once.
+export async function verifyTaskForDone(
+  opts: {
+    taskId: string;
+    workspaceId: string;
+    title: string;
+    bodyMd: string;
+    decidedBy: string | null;
+  },
+  preRendered?: RenderObservation | null,
+): Promise<"verification_failed" | null> {
   if (!verifierEnabled()) return null; // dormant → heuristic gate stands alone
 
   // Pick the latest readable, substantive deliverable to judge.
@@ -94,22 +159,19 @@ export async function verifyTaskForDone(opts: {
 
   const taskType = inferType(chosen.name, chosen.contentType);
 
-  // EXECUTION CHECK (opt-in, VERIFY_EXEC=on): for a web deliverable, render it
-  // in headless Chromium and feed what ACTUALLY loaded to the judge, so it
-  // scores an observed final state — not source that merely looks complete.
-  // Strictly additive + fail-open: a null observation (chromium absent, error,
-  // not web) just means the judge runs text-only, exactly as before.
-  let obs: RenderObservation | null = null;
+  // EXECUTION CHECK: feed what ACTUALLY loaded to the judge so it scores an
+  // observed final state, not source that merely looks complete. The render
+  // already happened in the deterministic tier (deterministicGateForDone) and
+  // is passed in as `preRendered` — we never re-render here. A null observation
+  // (chromium absent, error, not web) just means the judge runs text-only.
+  const obs: RenderObservation | null = preRendered ?? null;
   let renderBlock = "";
-  if (execEnabled() && taskType === "code" && /\.html?$/i.test(chosen.name)) {
-    obs = await renderWebDeliverable({ taskId: opts.taskId, entryName: chosen.name }).catch(() => null);
-    if (obs) {
-      renderBlock =
-        `\n\nRENDER OBSERVATION (headless Chromium actually loaded this deliverable):\n` +
-        `- loaded_ok: ${obs.ok}\n` +
-        `- rendered_visible_text_chars: ${obs.renderedTextLen}\n` +
-        `- console_errors: ${obs.consoleErrors.length ? obs.consoleErrors.slice(0, 5).join(" | ") : "none"}\n`;
-    }
+  if (obs) {
+    renderBlock =
+      `\n\nRENDER OBSERVATION (headless Chromium actually loaded this deliverable):\n` +
+      `- loaded_ok: ${obs.ok}\n` +
+      `- rendered_visible_text_chars: ${obs.renderedTextLen}\n` +
+      `- console_errors: ${obs.consoleErrors.length ? obs.consoleErrors.slice(0, 5).join(" | ") : "none"}\n`;
   }
 
   const raw = await chatJson<unknown>(

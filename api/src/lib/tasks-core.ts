@@ -16,7 +16,7 @@ import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { notify } from "./notifications.js";
 import { liveArtifactRows, isSubstantiveArtifact, purgeArtifactsForTasks } from "./task-artifacts.js";
 import { forgetTaskKnowledge } from "./knowledge.js";
-import { verifyTaskForDone } from "./task-verifier.js";
+import { verifyTaskForDone, deterministicGateForDone } from "./task-verifier.js";
 import { recordProgress } from "./ledger-core.js";
 
 export const STATUSES = ["backlog", "in_progress", "blocked", "review", "done"] as const;
@@ -992,15 +992,23 @@ async function assertDoneEvidence(
   for (const a of artifacts) {
     if (!eligible.has(a.createdBy)) continue;
     if (await isSubstantiveArtifact(a, taskTitle)) {
-      const verdict = await verifyTaskForDone({
+      const gateOpts = {
         taskId,
         workspaceId,
         title: taskTitle,
         bodyMd: taskBodyMd,
         decidedBy: actorMemberId,
-      }).catch(() => null);
+      };
+      // Tier 1 — deterministic, fail-CLOSED: a web deliverable that demonstrably
+      // fails to load blocks the flip even when the judge is dormant. Returns the
+      // render observation so the judge below reuses it (chromium runs once).
+      const det = await deterministicGateForDone(gateOpts).catch(() => ({ blocked: false, obs: null }));
+      if (det.blocked) return "verification_failed";
+      // Tier 2 — LLM judge, fail-OPEN: proves the deliverable meets the criteria
+      // and isn't fabricated; a gateway outage never freezes the board.
+      const verdict = await verifyTaskForDone(gateOpts, det.obs).catch(() => null);
       if (verdict) return verdict; // judge said fail → block (reviewer gets the rationale)
-      return null; // judge passed (or dormant/failed-open) → allow
+      return null; // both tiers passed (or judge dormant/failed-open) → allow
     }
   }
 
