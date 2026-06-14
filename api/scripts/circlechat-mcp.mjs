@@ -49,6 +49,15 @@ async function apiReq(method, path, body) {
   if (!r.ok) throw new Error(`${method} ${path} → ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return r.json();
 }
+// Route a structured action through the GATED executor endpoint so native tool
+// calls inherit the SAME scope/risk/approval/budget/reply-guard/dedupe gating
+// as the bridge's <actions> path (instead of bypassing it via the raw
+// endpoints). Returns {ok, applied, errors, trace}; gating errors surface to
+// the model as the tool result so it can self-correct mid-turn.
+async function apiAct(action) {
+  return apiPost("/agent-api/act", { action });
+}
+
 async function apiUploadFile(filePath) {
   // Use native FormData + a Blob stream to stay dep-free.
   const buf = await readFile(filePath);
@@ -168,7 +177,14 @@ const TOOLS = [
       required: ["conversationId", "bodyMd"],
       additionalProperties: false,
     },
-    run: (a) => apiPost("/agent-api/post_message", a),
+    run: ({ conversationId, bodyMd, replyTo, attachments }) =>
+      apiAct({
+        type: "post_message",
+        conversation_id: conversationId,
+        body_md: bodyMd,
+        ...(replyTo ? { reply_to: replyTo } : {}),
+        ...(attachments ? { attachments } : {}),
+      }),
   },
   {
     name: "react",
@@ -182,7 +198,7 @@ const TOOLS = [
       required: ["messageId", "emoji"],
       additionalProperties: false,
     },
-    run: (a) => apiPost("/agent-api/react", a),
+    run: ({ messageId, emoji }) => apiAct({ type: "react", message_id: messageId, emoji }),
   },
   {
     name: "start_dm",
@@ -247,7 +263,18 @@ const TOOLS = [
       required: ["title"],
       additionalProperties: false,
     },
-    run: (a) => apiPost("/agent-api/tasks", a),
+    run: ({ title, bodyMd, status, parentId, conversationId, assignees, labels, dueAt }) =>
+      apiAct({
+        type: "create_task",
+        title,
+        body_md: bodyMd,
+        status,
+        parent_id: parentId,
+        conversation_id: conversationId,
+        assignees,
+        labels,
+        due_at: dueAt,
+      }),
   },
   {
     name: "update_task",
@@ -267,8 +294,17 @@ const TOOLS = [
       required: ["taskId"],
       additionalProperties: false,
     },
-    run: ({ taskId, ...patch }) =>
-      apiReq("PATCH", `/agent-api/tasks/${encodeURIComponent(taskId)}`, patch),
+    run: ({ taskId, title, bodyMd, status, progress, dueAt, archived }) =>
+      apiAct({
+        type: "update_task",
+        task_id: taskId,
+        title,
+        body_md: bodyMd,
+        status,
+        progress,
+        due_at: dueAt,
+        archived,
+      }),
   },
   {
     name: "assign_task",
@@ -281,7 +317,7 @@ const TOOLS = [
       additionalProperties: false,
     },
     run: ({ taskId, memberId }) =>
-      apiPost(`/agent-api/tasks/${encodeURIComponent(taskId)}/assignees`, { memberId }),
+      apiAct({ type: "assign_task", task_id: taskId, member_id: memberId }),
   },
   {
     name: "unassign_task",
@@ -354,10 +390,7 @@ const TOOLS = [
       additionalProperties: false,
     },
     run: ({ taskId, bodyMd, mentions }) =>
-      apiPost(`/agent-api/tasks/${encodeURIComponent(taskId)}/comments`, {
-        bodyMd,
-        mentions: mentions ?? [],
-      }),
+      apiAct({ type: "task_comment", task_id: taskId, body_md: bodyMd, mentions: mentions ?? [] }),
   },
   {
     name: "set_memory",
@@ -375,7 +408,7 @@ const TOOLS = [
       additionalProperties: false,
     },
     run: ({ key, value, scope, scopeId }) =>
-      apiPost(`/agent-api/memory`, { key, value, ...(scope ? { scope } : {}), ...(scopeId ? { scopeId } : {}) }),
+      apiAct({ type: "set_memory", key, value, scope, scope_id: scopeId }),
   },
   {
     name: "get_memory",
@@ -413,7 +446,65 @@ const TOOLS = [
       additionalProperties: false,
     },
     run: ({ key, scope, scopeId }) =>
-      apiReq("DELETE", `/agent-api/memory`, { key, ...(scope ? { scope } : {}), ...(scopeId ? { scopeId } : {}) }),
+      apiAct({ type: "delete_memory", key, scope, scope_id: scopeId }),
+  },
+  {
+    name: "memory_append",
+    description:
+      "Append a line to one of your in-context MEMORY BLOCKS. label 'team' = the SHARED team whiteboard every agent reads (record durable project state/decisions here so teammates stay in sync without re-reading chat); label 'notes' = your private cross-run notes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        label: { type: "string", enum: ["team", "notes"] },
+        text: { type: "string", minLength: 1 },
+      },
+      required: ["label", "text"],
+      additionalProperties: false,
+    },
+    run: ({ label, text }) => apiAct({ type: "memory_append", label, text }),
+  },
+  {
+    name: "memory_rethink",
+    description:
+      "Replace a MEMORY BLOCK wholesale (label 'team' or 'notes'). Use when it's long or stale: rewrite concisely, keeping only what still matters.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        label: { type: "string", enum: ["team", "notes"] },
+        value: { type: "string" },
+      },
+      required: ["label", "value"],
+      additionalProperties: false,
+    },
+    run: ({ label, value }) => apiAct({ type: "memory_rethink", label, value }),
+  },
+  {
+    name: "delegate_to",
+    description:
+      "Hand a piece of work to a teammate with a self-contained briefing (objective + constraints + done-criteria) that becomes their task context — they don't need your chat history. `to` is a member id. Creates a task (or attaches to taskId) and wakes them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "member id of the teammate" },
+        objective: { type: "string", minLength: 1 },
+        constraints: { type: "string" },
+        doneWhen: { type: "string" },
+        taskId: { type: "string", description: "optional existing task to hand off" },
+        goalId: { type: "string", description: "optional goal it serves" },
+      },
+      required: ["to", "objective"],
+      additionalProperties: false,
+    },
+    run: ({ to, objective, constraints, doneWhen, taskId, goalId }) =>
+      apiAct({
+        type: "delegate_to",
+        to,
+        objective,
+        constraints,
+        done_when: doneWhen,
+        task_id: taskId,
+        goal_id: goalId,
+      }),
   },
   {
     name: "add_task_artifact",

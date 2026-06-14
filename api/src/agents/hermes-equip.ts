@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as pathResolve, basename } from "node:path";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   HERMES_RUNTIME,
   HERMES_IMAGE,
@@ -136,20 +137,48 @@ export async function installCircleChatTooling(params: {
     mcpScriptForRegistration = mcpScriptPathForRegistration(hermesHome, MCP_SCRIPT);
   }
 
-  // CircleChat agents act through the bridge's `<actions>` channel, NOT MCP
-  // tools. The bridge prompt is the authoritative action spec and explicitly
-  // warns against tools named post_message/share_files/etc. (a runtime that
-  // auto-routes those names to a tool misfires). On top of that the image's
-  // `hermes mcp` CLI is broken ("Error: typer is required" from the s6
-  // entrypoint) and `hermes mcp add` clobbers the hand-tuned config.yaml with
-  // full defaults. So we deliberately do NOT register an MCP server —
-  // registering one would give the model a second, conflicting action path
-  // that bypasses the server-side reply-guard. `mcpRegistered` stays false by
-  // design. (The stdio script is still staged above; harmless if unused.)
-  const mcpRegistered = false;
-  void mcpScriptForRegistration;
-  void botToken;
-  void CC_API_BASE;
+  // Native MCP tool path — OPT-IN via CC_MCP_TOOLS=on, OFF by default.
+  //
+  // The default `<actions>` channel exists for two real reasons: (1) free-tier
+  // models often emit tool calls as TEXT and hermes has no text-parse fallback
+  // (issue #741), silently dropping them; (2) a raw MCP→/agent-api path used to
+  // BYPASS the executor's scope/risk/approval/budget/reply-guard gating. Reason
+  // (2) is now fixed — the MCP server routes every write through the gated
+  // /agent-api/act endpoint — so MCP is safe to register. Reason (1) means
+  // enabling this is only safe for an agent whose model reliably returns
+  // structured tool_calls, so it stays opt-in.
+  //
+  // We register by writing the `mcp_servers:` block straight into config.yaml
+  // (the image's `hermes mcp add` CLI is broken — "typer is required" — and
+  // clobbers the hand-tuned config). NOTE: when enabled, the bridge prompt's
+  // <actions> instructions and auto-post-prose behavior still apply, so the
+  // bridge prompt needs tuning before relying on native tools in production.
+  let mcpRegistered = false;
+  if (process.env.CC_MCP_TOOLS === "on") {
+    try {
+      const configPath = join(hermesHome, "config.yaml");
+      const raw = await fs.readFile(configPath, "utf8");
+      const cfg = (parseYaml(raw) as Record<string, unknown>) ?? {};
+      cfg.mcp_servers = {
+        ...((cfg.mcp_servers as Record<string, unknown>) ?? {}),
+        circlechat: {
+          command: "node",
+          args: [mcpScriptForRegistration, botToken, CC_API_BASE],
+          enabled: true,
+          timeout: 120,
+        },
+      };
+      await fs.writeFile(configPath, stringifyYaml(cfg));
+      mcpRegistered = true;
+      notes.push("registered circlechat MCP server (CC_MCP_TOOLS=on) — gated via /agent-api/act");
+    } catch (e) {
+      notes.push(`mcp registration failed: ${(e as Error).message.slice(0, 200)}`);
+    }
+  } else {
+    void mcpScriptForRegistration;
+    void botToken;
+    void CC_API_BASE;
+  }
 
   return { skillInstalled, mcpRegistered, notes };
 }

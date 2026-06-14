@@ -10,6 +10,7 @@ import {
   reactions,
   users,
   memoryKv,
+  agentRuns,
 } from "../db/schema.js";
 import { putObject, publicUrl, statObject, streamObject } from "../lib/storage.js";
 import { recallKnowledge } from "../lib/knowledge.js";
@@ -32,7 +33,7 @@ import { publishToConversation } from "../lib/events.js";
 import { notifyForMessage } from "../lib/notifications.js";
 import { checkReplyBody, guardRejectHint } from "../agents/reply-guard.js";
 import { checkRecentDuplicate } from "../agents/dedupe.js";
-import { sanitizeAttachments } from "../agents/executor.js";
+import { sanitizeAttachments, applyActions, type AgentAction } from "../agents/executor.js";
 import {
   STATUSES,
   listTasks,
@@ -193,6 +194,52 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
   // GET /agent-api/me — who am I?
   app.get("/agent-api/me", async (req) => {
     return req.agentCtx;
+  });
+
+  // POST /agent-api/act — the UNIFIED, FULLY-GATED action endpoint. This is the
+  // native-tool-calling entry point: an agent (via the MCP server or any native
+  // tool path) submits a structured action and it runs through the SAME
+  // executor as the bridge's <actions> block — scope enforcement, risk gate,
+  // approval gate, auto-repair, shape validation, budget metering, reply guard,
+  // and dedupe. Without this, a native/MCP tool that POSTed straight to the
+  // individual /agent-api endpoints would BYPASS all of that gating (the reason
+  // MCP was never wired). Returns a structured result the model can act on
+  // mid-turn: { ok, applied, errors, trace }.
+  app.post("/agent-api/act", async (req, reply) => {
+    const body = z
+      .object({
+        // A single action, or a small batch. Shape is validated downstream by
+        // the executor's validateActionShape, so we keep this permissive.
+        action: z.record(z.string(), z.unknown()).optional(),
+        actions: z.array(z.record(z.string(), z.unknown())).max(20).optional(),
+      })
+      .parse(req.body);
+    const list = body.actions ?? (body.action ? [body.action] : []);
+    if (!list.length) return reply.code(400).send({ error: "no_action" });
+    const { agentId } = req.agentCtx!;
+
+    // Tie any approval cards created to the agent's most recent run, so the
+    // approval → resume flow still works. Synthetic id if none exists yet.
+    const [recentRun] = await db
+      .select({ id: agentRuns.id })
+      .from(agentRuns)
+      .where(eq(agentRuns.agentId, agentId))
+      .orderBy(desc(agentRuns.startedAt))
+      .limit(1);
+    const runId = recentRun?.id ?? `act_${makeId("r").slice(2)}`;
+
+    const outcome = await applyActions({
+      agentId,
+      runId,
+      actions: list as AgentAction[],
+      triggerConversationId: null,
+    });
+    return {
+      ok: outcome.errors.length === 0,
+      applied: outcome.actionsApplied,
+      errors: outcome.errors,
+      trace: outcome.trace,
+    };
   });
 
   // POST /agent-api/uploads — multipart file upload. Returns an attachment
