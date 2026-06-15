@@ -66,13 +66,14 @@ export default function TaskModal({
   const titleTouched = useRef(false);
 
   // @-mention autocomplete for the comment composer (parity with chat
-  // Composer). Drops `everyone` from the picker — task comments don't have
-  // an "all subscribers" semantic.
+  // Composer). @everyone notifies all task subscribers; the current user is
+  // dropped from the suggestions since you can't @-mention yourself.
   const mentionPicker = useMentionPicker({
     textareaRef: composerTaRef,
     body: commentDraft,
     setBody: setCommentDraft,
-    includeEveryone: false,
+    includeEveryone: true,
+    excludeMemberId: me.data?.memberId ?? null,
   });
 
   const detail = q.data;
@@ -153,7 +154,11 @@ export default function TaskModal({
       // Server wakes any mentioned agents (and assignees) once they're in
       // the mentions array. Resolve @handles in the body to memberIds via
       // the workspace directory before posting.
-      const mentions = resolveMentionIds(body, busDir as unknown as Record<string, { handle?: string; memberId?: string }>);
+      const mentions = resolveMentionIds(
+        body,
+        busDir as unknown as Record<string, { handle?: string; memberId?: string }>,
+        me.data?.memberId ?? null,
+      );
       await api.post(`/tasks/${taskId}/comments`, { bodyMd: body, mentions });
       setCommentDraft("");
     } catch (e) {

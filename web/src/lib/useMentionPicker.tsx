@@ -24,9 +24,18 @@ interface Opts {
   // Some surfaces (task comments) shouldn't surface @everyone — there's no
   // "all subscribers" semantic on a task. Default true for chat parity.
   includeEveryone?: boolean;
+  // Drop a member (typically the current user) from the suggestions — you
+  // can't meaningfully @-mention yourself.
+  excludeMemberId?: string | null;
 }
 
-export function useMentionPicker({ textareaRef, body, setBody, includeEveryone = true }: Opts) {
+export function useMentionPicker({
+  textareaRef,
+  body,
+  setBody,
+  includeEveryone = true,
+  excludeMemberId = null,
+}: Opts) {
   const dir = useBus((s) => s.directory);
   const [open, setOpen] = useState<{ q: string; at: number } | null>(null);
   const [idx, setIdx] = useState(0);
@@ -40,6 +49,7 @@ export function useMentionPicker({ textareaRef, body, setBody, includeEveryone =
 
   const matches: Member[] = open
     ? [...(includeEveryone ? [EVERYONE] : []), ...(Object.values(dir) as unknown as Member[])]
+        .filter((m) => m.memberId !== excludeMemberId)
         .filter((m) => m.handle?.toLowerCase().startsWith(open.q))
         .slice(0, 9)
     : [];
@@ -92,26 +102,39 @@ export function useMentionPicker({ textareaRef, body, setBody, includeEveryone =
 // Resolve @handles found in a body to memberIds, scoped to the workspace
 // directory. Used by surfaces (task comments) where the API expects a
 // mentions array of memberIds rather than parsing the body server-side.
+// `@everyone` expands to every member in the directory. `excludeMemberId`
+// (the current user) is never included — you can't mention yourself.
 export function resolveMentionIds(
   body: string,
   dir: Record<string, { handle?: string; memberId?: string }>,
+  excludeMemberId: string | null = null,
 ): string[] {
   const handles = Array.from(body.matchAll(/(?:^|\s)@([a-z0-9][a-z0-9._-]{1,39})/gi)).map((m) =>
     m[1].toLowerCase(),
   );
   if (!handles.length) return [];
   const byHandle = new Map<string, string>();
+  const allIds: string[] = [];
   for (const m of Object.values(dir)) {
-    if (m?.handle && m?.memberId) byHandle.set(m.handle.toLowerCase(), m.memberId);
+    if (m?.handle && m?.memberId) {
+      byHandle.set(m.handle.toLowerCase(), m.memberId);
+      allIds.push(m.memberId);
+    }
   }
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const h of handles) {
-    const id = byHandle.get(h);
-    if (id && !seen.has(id)) {
+  const add = (id: string | undefined) => {
+    if (id && id !== excludeMemberId && !seen.has(id)) {
       seen.add(id);
       out.push(id);
     }
+  };
+  for (const h of handles) {
+    if (h === "everyone") {
+      for (const id of allIds) add(id);
+      continue;
+    }
+    add(byHandle.get(h));
   }
   return out;
 }
