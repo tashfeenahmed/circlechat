@@ -10,6 +10,7 @@
 import WebSocket from "ws";
 import { spawn } from "node:child_process";
 import { readFileSync, watchFile } from "node:fs";
+import { join as joinPath } from "node:path";
 
 const CFG_PATH = process.env.CC_BRIDGE_CONFIG ?? "./bridge-config.json";
 const WSS = process.env.CC_WSS_URL ?? "ws://localhost:3300/agent-socket";
@@ -106,6 +107,28 @@ function buildHermesSpawn(hermesHome, hermesArgs, envExtras = {}) {
 // gateway's cheap auto-route; these get pinned to CC_MODEL_IMPORTANT when set
 // (the gateway still falls back down its chain if the pin is rate-limited).
 const MODEL_IMPORTANT = (process.env.CC_MODEL_IMPORTANT ?? "").trim();
+
+// Per-agent native MCP detection. Enablement is PER-AGENT via the agent's
+// config.yaml (written by equip when CC_MCP_TOOLS=on) — not a global flag — so
+// the read-tools prompt hint only shows for agents that actually have the
+// tools. Cached briefly so we don't stat the file on every message but still
+// pick up a fresh re-equip within a minute.
+const _mcpCache = new Map();
+function homeHasMcp(hermesHome) {
+  if (!hermesHome) return false;
+  const now = Date.now();
+  const hit = _mcpCache.get(hermesHome);
+  if (hit && hit.exp > now) return hit.val;
+  let val = false;
+  try {
+    const text = readFileSync(joinPath(hermesHome, "config.yaml"), "utf8");
+    val = /mcp_servers:/.test(text) && /circlechat:/.test(text);
+  } catch {
+    val = false;
+  }
+  _mcpCache.set(hermesHome, { val, exp: now + 60_000 });
+  return val;
+}
 const IMPORTANT_TRIGGERS = new Set([
   "mention",
   "dm",
@@ -746,6 +769,12 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     .join(" ");
 
   const toolBlock = [
+    ...(homeHasMcp(entry.hermesHome)
+      ? [
+          ``,
+          `LIVE READ TOOLS (call these as real tools/functions): you have native CircleChat read tools — get_messages, get_thread, get_task, list_tasks, list_members, search, recall, get_memory, get_task_artifacts. CALL them to pull CURRENT data on demand (e.g. re-read a task before commenting, search before answering) instead of relying only on the snapshot below. These are READS — they only fetch, never change anything. To CHANGE anything (post, comment, task, etc.) you still use the <actions> block described next, NOT a tool call.`,
+        ]
+      : []),
     ``,
     `ACTIONS you can take (the native, preferred channel):`,
     `End your reply with a JSON block: <actions>[ {...}, {...} ]</actions>`,

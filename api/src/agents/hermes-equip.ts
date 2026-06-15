@@ -139,20 +139,22 @@ export async function installCircleChatTooling(params: {
 
   // Native MCP tool path — OPT-IN via CC_MCP_TOOLS=on, OFF by default.
   //
-  // The default `<actions>` channel exists for two real reasons: (1) free-tier
-  // models often emit tool calls as TEXT and hermes has no text-parse fallback
-  // (issue #741), silently dropping them; (2) a raw MCP→/agent-api path used to
-  // BYPASS the executor's scope/risk/approval/budget/reply-guard gating. Reason
-  // (2) is now fixed — the MCP server routes every write through the gated
-  // /agent-api/act endpoint — so MCP is safe to register. Reason (1) means
-  // enabling this is only safe for an agent whose model reliably returns
-  // structured tool_calls, so it stays opt-in.
+  // HYBRID by design: we expose only READ tools natively (get_messages,
+  // get_task, search, recall, …) so the agent can pull live data mid-turn —
+  // the one thing the prose-context model genuinely can't do. WRITES stay in
+  // the `<actions>` block so they keep flowing through the worker's run
+  // accounting (stuck detector, continuation, budget metering, productivity
+  // review all read that). Native writes are proven to work via /agent-api/act
+  // (the MCP write tools route through it), but enabling them would bypass that
+  // accounting, so they're left OFF the include-list for now.
   //
-  // We register by writing the `mcp_servers:` block straight into config.yaml
-  // (the image's `hermes mcp add` CLI is broken — "typer is required" — and
-  // clobbers the hand-tuned config). NOTE: when enabled, the bridge prompt's
-  // <actions> instructions and auto-post-prose behavior still apply, so the
-  // bridge prompt needs tuning before relying on native tools in production.
+  // Verified empirically (2026-06-15): the free gateway returns structured
+  // tool_calls reliably (tools-aware routing → tool-capable models), and hermes
+  // fires MCP tools end-to-end against it — so issue #741 (text-emitted tool
+  // calls dropped) does not bite here. We register by writing `mcp_servers:`
+  // straight into config.yaml (the image's `hermes mcp add` CLI is broken) and
+  // adding the auto-generated `mcp-circlechat` toolset to the cli platform so
+  // `hermes chat` exposes it without a -t flag.
   let mcpRegistered = false;
   if (process.env.CC_MCP_TOOLS === "on") {
     try {
@@ -166,11 +168,19 @@ export async function installCircleChatTooling(params: {
           args: [mcpScriptForRegistration, botToken, CC_API_BASE],
           enabled: true,
           timeout: 120,
+          // Read-only whitelist — keep writes on the <actions> path (accounting).
+          tools: { include: MCP_READ_TOOLS },
         },
       };
+      // Add the MCP toolset to the cli platform so `hermes chat` surfaces it.
+      const pt = (cfg.platform_toolsets as Record<string, string[]>) ?? {};
+      const cli = Array.isArray(pt.cli) ? pt.cli : ["hermes-cli"];
+      if (!cli.includes("mcp-circlechat")) cli.push("mcp-circlechat");
+      pt.cli = cli;
+      cfg.platform_toolsets = pt;
       await fs.writeFile(configPath, stringifyYaml(cfg));
       mcpRegistered = true;
-      notes.push("registered circlechat MCP server (CC_MCP_TOOLS=on) — gated via /agent-api/act");
+      notes.push("registered circlechat MCP read-tools (CC_MCP_TOOLS=on); writes stay on <actions>");
     } catch (e) {
       notes.push(`mcp registration failed: ${(e as Error).message.slice(0, 200)}`);
     }
@@ -182,6 +192,22 @@ export async function installCircleChatTooling(params: {
 
   return { skillInstalled, mcpRegistered, notes };
 }
+
+// Native read-only tools exposed to the model via MCP (writes stay on the
+// <actions> path so they keep flowing through the worker's run accounting).
+const MCP_READ_TOOLS = [
+  "me",
+  "list_conversations",
+  "list_members",
+  "get_messages",
+  "get_thread",
+  "search",
+  "list_tasks",
+  "get_task",
+  "get_task_artifacts",
+  "get_memory",
+  "recall",
+];
 
 const MANIFEST_NAME = ".circlechat-managed.json";
 
