@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type Me,
@@ -131,18 +131,56 @@ export function useConversation(id: string | undefined) {
   });
 }
 
+// --- Infinite message-list cache helpers ---------------------------------
+// useMessages is a useInfiniteQuery now: its cache is { pages: MsgPage[] } where
+// pages[0] is the OLDEST loaded page (scroll-up prepends older pages to the
+// front) and the last page is the NEWEST. WS + optimistic updates flow through
+// these helpers so they don't have to know the page layout.
+type MsgPage = { messages: Message[]; hasMore: boolean };
+type MsgCache = { pages: MsgPage[]; pageParams: unknown[] };
+
+function msgExists(cache: MsgCache, id: string): boolean {
+  return cache.pages.some((p) => p.messages.some((m) => m.id === id));
+}
+// Append a live/optimistic message to the newest (last) page; dedupe by id.
+function appendMsg(old: MsgCache | undefined, m: Message): MsgCache | undefined {
+  if (!old || old.pages.length === 0)
+    return { pages: [{ messages: [m], hasMore: false }], pageParams: [undefined] };
+  if (msgExists(old, m.id)) return old;
+  const pages = old.pages.slice();
+  const i = pages.length - 1;
+  pages[i] = { ...pages[i], messages: [...pages[i].messages, m] };
+  return { ...old, pages };
+}
+function mapMsgs(old: MsgCache | undefined, fn: (m: Message) => Message): MsgCache | undefined {
+  if (!old) return old;
+  return { ...old, pages: old.pages.map((p) => ({ ...p, messages: p.messages.map(fn) })) };
+}
+function filterMsgs(old: MsgCache | undefined, keep: (m: Message) => boolean): MsgCache | undefined {
+  if (!old) return old;
+  return { ...old, pages: old.pages.map((p) => ({ ...p, messages: p.messages.filter(keep) })) };
+}
+
 export function useMessages(convId: string | undefined, parentId?: string | null) {
   const qc = useQueryClient();
   const key = ["messages", convId, parentId ?? "root"] as const;
-  const q = useQuery({
+  const q = useInfiniteQuery({
     queryKey: key,
-    queryFn: async () => {
+    queryFn: async ({ pageParam }) => {
       const qs = new URLSearchParams();
       if (parentId) qs.set("parent_id", parentId);
-      qs.set("limit", "200");
-      return api.get<{ messages: Message[] }>(`/conversations/${convId}/messages?${qs}`);
+      qs.set("limit", "50");
+      if (pageParam) qs.set("before", String(pageParam));
+      return api.get<MsgPage>(`/conversations/${convId}/messages?${qs}`);
     },
     enabled: !!convId,
+    initialPageParam: undefined as string | undefined,
+    // We page BACKWARD (older history) via fetchPreviousPage; the cursor is the
+    // ts of the oldest message we currently hold. Forward paging is unused — new
+    // messages arrive over the websocket and append to the newest page.
+    getPreviousPageParam: (firstPage) =>
+      firstPage.hasMore ? firstPage.messages[0]?.ts ?? undefined : undefined,
+    getNextPageParam: () => undefined,
   });
 
   // Conversations created AFTER the websocket connected (e.g. a fresh DM
@@ -166,62 +204,53 @@ export function useMessages(convId: string | undefined, parentId?: string | null
           // For our pane: no append. But bump replyCount on the parent if we're
           // the root pane and the new message is a thread reply.
           if (!parentId && m.parentId) {
-            qc.setQueryData<{ messages: Message[] }>(["messages", convId, "root"], (old) => {
-              if (!old) return old;
-              return {
-                messages: old.messages.map((x) =>
-                  x.id === m.parentId ? { ...x, replyCount: (x.replyCount ?? 0) + 1 } : x,
-                ),
-              };
-            });
+            qc.setQueryData<MsgCache>(["messages", convId, "root"], (old) =>
+              mapMsgs(old, (x) =>
+                x.id === m.parentId ? { ...x, replyCount: (x.replyCount ?? 0) + 1 } : x,
+              ),
+            );
           }
           return;
         }
         // Append, but dedupe by id (optimistic/echo collisions).
-        qc.setQueryData<{ messages: Message[] }>(key, (old) => {
-          if (!old) return { messages: [m] };
-          if (old.messages.some((x) => x.id === m.id)) return old;
-          return { messages: [...old.messages, m] };
-        });
+        qc.setQueryData<MsgCache>(key, (old) => appendMsg(old, m));
       }
       if (ev.type === "message.edited" && ev.conversationId === convId) {
-        qc.setQueryData<{ messages: Message[] }>(key, (old) =>
-          old
-            ? {
-                messages: old.messages.map((m) =>
-                  m.id === ev.messageId
-                    ? { ...m, bodyMd: ev.bodyMd as string, editedAt: ev.editedAt as string }
-                    : m,
-                ),
-              }
-            : old,
+        qc.setQueryData<MsgCache>(key, (old) =>
+          mapMsgs(old, (m) =>
+            m.id === ev.messageId
+              ? { ...m, bodyMd: ev.bodyMd as string, editedAt: ev.editedAt as string }
+              : m,
+          ),
         );
       }
       if (ev.type === "message.deleted" && ev.conversationId === convId) {
-        qc.setQueryData<{ messages: Message[] }>(key, (old) =>
-          old ? { messages: old.messages.filter((m) => m.id !== ev.messageId) } : old,
-        );
+        qc.setQueryData<MsgCache>(key, (old) => filterMsgs(old, (m) => m.id !== ev.messageId));
       }
       if (ev.type === "reaction.toggled" && ev.conversationId === convId) {
-        qc.setQueryData<{ messages: Message[] }>(key, (old) => {
-          if (!old) return old;
-          return {
-            messages: old.messages.map((m) => {
-              if (m.id !== ev.messageId) return m;
-              const base = (m.reactions ?? []).filter(
-                (r) => !(r.emoji === ev.emoji && r.memberId === ev.memberId),
-              );
-              return ev.added
-                ? { ...m, reactions: [...base, { emoji: ev.emoji as string, memberId: ev.memberId as string }] }
-                : { ...m, reactions: base };
-            }),
-          };
-        });
+        qc.setQueryData<MsgCache>(key, (old) =>
+          mapMsgs(old, (m) => {
+            if (m.id !== ev.messageId) return m;
+            const base = (m.reactions ?? []).filter(
+              (r) => !(r.emoji === ev.emoji && r.memberId === ev.memberId),
+            );
+            return ev.added
+              ? { ...m, reactions: [...base, { emoji: ev.emoji as string, memberId: ev.memberId as string }] }
+              : { ...m, reactions: base };
+          }),
+        );
       }
     });
   }, [convId, parentId, qc, key]);
 
-  return q;
+  const messages = (q.data?.pages ?? []).flatMap((p) => p.messages);
+  return {
+    ...q,
+    messages,
+    loadOlder: q.fetchPreviousPage,
+    hasOlder: q.hasPreviousPage,
+    isLoadingOlder: q.isFetchingPreviousPage,
+  };
 }
 
 export function usePostMessage(convId: string | undefined, parentId?: string | null) {
@@ -248,10 +277,8 @@ export function usePostMessage(convId: string | undefined, parentId?: string | n
         replyCount: 0,
       };
       await qc.cancelQueries({ queryKey: key });
-      const prev = qc.getQueryData<{ messages: Message[] }>(key);
-      qc.setQueryData<{ messages: Message[] }>(key, (old) =>
-        old ? { messages: [...old.messages, optimistic] } : { messages: [optimistic] },
-      );
+      const prev = qc.getQueryData<MsgCache>(key);
+      qc.setQueryData<MsgCache>(key, (old) => appendMsg(old, optimistic));
       return { optimistic, prev };
     },
     onError: (_e, _v, ctx) => {
@@ -261,14 +288,11 @@ export function usePostMessage(convId: string | undefined, parentId?: string | n
       }
     },
     onSuccess: (res, _v, ctx) => {
-      qc.setQueryData<{ messages: Message[] }>(key, (old) => {
-        if (!old) return { messages: [res.message] };
+      qc.setQueryData<MsgCache>(key, (old) => {
         // Strip the optimistic row; skip append if WS already delivered the real one.
-        const withoutTmp = old.messages.filter((m) => m.id !== ctx?.optimistic.id);
-        if (withoutTmp.some((m) => m.id === res.message.id)) {
-          return { messages: withoutTmp };
-        }
-        return { messages: [...withoutTmp, res.message] };
+        const stripped = filterMsgs(old, (m) => m.id !== ctx?.optimistic.id);
+        if (stripped && msgExists(stripped, res.message.id)) return stripped;
+        return appendMsg(stripped, res.message);
       });
     },
   });

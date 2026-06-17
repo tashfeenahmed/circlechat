@@ -62,7 +62,7 @@ export default function DMPage() {
   const msgs = useMessages(convId ?? undefined);
   const post = usePostMessage(convId ?? undefined);
   const markRead = useMarkRead(convId ?? undefined);
-  useEffect(() => { if (convId) markRead(); }, [convId, msgs.data?.messages.length, markRead]);
+  useEffect(() => { if (convId) markRead(); }, [convId, msgs.messages.length, markRead]);
 
   const other = otherMemberId ? dir[otherMemberId] : undefined;
   const otherName = other?.name ?? "unknown";
@@ -76,9 +76,9 @@ export default function DMPage() {
   const threadMsg = useMemo(
     () =>
       threadConvId && threadConvId === convId && threadRootId
-        ? msgs.data?.messages.find((m) => m.id === threadRootId) ?? null
+        ? msgs.messages.find((m) => m.id === threadRootId) ?? null
         : null,
-    [threadConvId, threadRootId, convId, msgs.data?.messages],
+    [threadConvId, threadRootId, convId, msgs.messages],
   );
 
   const dmMuted = !!(convId
@@ -126,9 +126,12 @@ export default function DMPage() {
           <>
             <MessageList
               key={convId}
-              messages={msgs.data?.messages ?? []}
+              messages={msgs.messages}
               meMemberId={me.data?.memberId ?? undefined}
               onOpenThread={(mid) => openThread(convId!, mid)}
+              onLoadOlder={msgs.loadOlder}
+              hasOlder={msgs.hasOlder}
+              isLoadingOlder={msgs.isLoadingOlder}
             />
             <AgentActivity conversationId={convId} />
             <Composer

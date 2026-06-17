@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { and, eq, asc, lt, isNull, inArray, or, sql as dsql } from "drizzle-orm";
+import { and, eq, asc, desc, lt, isNull, inArray, or, sql as dsql } from "drizzle-orm";
+void asc;
 void or;
 import { db } from "../db/index.js";
 import {
@@ -61,14 +62,22 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
     const where = [eq(messages.conversationId, convId)];
     if (q.parent_id) where.push(eq(messages.parentId, q.parent_id));
     else where.push(isNull(messages.parentId));
+    // `before` is a keyset cursor (the ts of the oldest message the client
+    // already holds). Without it we want the NEWEST page, not the oldest — so
+    // we always fetch in descending order and reverse for display. The old
+    // `asc + limit` returned the first 200 messages ever sent, which meant a
+    // busy channel never showed recent activity.
     if (q.before) where.push(lt(messages.ts, new Date(q.before)));
 
     const rows = await db
       .select()
       .from(messages)
       .where(and(...where))
-      .orderBy(asc(messages.ts))
+      .orderBy(desc(messages.ts))
       .limit(limit);
+    // A full page back implies there may be older messages still to load.
+    const hasMore = rows.length === limit;
+    rows.reverse(); // oldest → newest for rendering
 
     const ids = rows.map((r) => r.id);
     const rx = ids.length
@@ -100,6 +109,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
         reactions: rxMap.get(m.id) ?? [],
         replyCount: tcMap.get(m.id) ?? 0,
       })),
+      hasMore,
     };
   });
 

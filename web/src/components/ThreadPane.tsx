@@ -20,7 +20,7 @@ export default function ThreadPane({ conversationId, rootMessage, onClose }: Pro
   const setWidth = useBus((s) => s.setThreadWidth);
   const startResize = usePaneResize(width, setWidth);
 
-  const all = [rootMessage, ...(replies.data?.messages ?? [])];
+  const all = [rootMessage, ...replies.messages];
 
   return (
     <aside className="thread-pane" style={{ width }}>
@@ -35,8 +35,8 @@ export default function ThreadPane({ conversationId, rootMessage, onClose }: Pro
         <div>
           <div className="th-title">Thread</div>
           <div className="th-sub">
-            {(replies.data?.messages ?? []).length} repl
-            {(replies.data?.messages ?? []).length === 1 ? "y" : "ies"}
+            {replies.messages.length} repl
+            {replies.messages.length === 1 ? "y" : "ies"}
           </div>
         </div>
         <button onClick={onClose} className="th-close" title="Close thread">

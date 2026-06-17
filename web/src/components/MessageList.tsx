@@ -9,9 +9,22 @@ interface Props {
   meMemberId: string | undefined;
   onOpenThread?: (id: string) => void;
   inThread?: boolean;
+  // Older-history pagination. When the user scrolls near the top we ask the
+  // parent to fetch the next older page; it gets prepended to `messages`.
+  onLoadOlder?: () => void;
+  hasOlder?: boolean;
+  isLoadingOlder?: boolean;
 }
 
-export default function MessageList({ messages, meMemberId, onOpenThread, inThread }: Props) {
+export default function MessageList({
+  messages,
+  meMemberId,
+  onOpenThread,
+  inThread,
+  onLoadOlder,
+  hasOlder,
+  isLoadingOlder,
+}: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
   const visible = messages.filter((m) => !m.deletedAt);
 
@@ -23,6 +36,7 @@ export default function MessageList({ messages, meMemberId, onOpenThread, inThre
   });
 
   const prevCount = useRef(0);
+  const prevFirstId = useRef<string | null>(null);
   const didInitialScroll = useRef(false);
 
   // Pin to bottom on first paint after messages arrive. The virtualizer
@@ -36,6 +50,7 @@ export default function MessageList({ messages, meMemberId, onOpenThread, inThre
     if (didInitialScroll.current || visible.length === 0 || !parentRef.current) return;
     didInitialScroll.current = true;
     prevCount.current = visible.length;
+    prevFirstId.current = visible[0]?.id ?? null;
     parentRef.current.scrollTop = parentRef.current.scrollHeight;
     let frame = 0;
     let raf = 0;
@@ -51,21 +66,40 @@ export default function MessageList({ messages, meMemberId, onOpenThread, inThre
   useEffect(() => {
     if (!parentRef.current || !didInitialScroll.current) return;
     const el = parentRef.current;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     const grew = visible.length > prevCount.current;
-    const latest = visible[visible.length - 1];
-    // usePostMessage inserts optimistic rows with the literal placeholder
-    // memberId "me" before the server echo replaces it — both spellings are
-    // "I just sent this".
-    const latestIsMine =
-      !!latest && (latest.memberId === "me" || (!!meMemberId && latest.memberId === meMemberId));
-    // Always jump when the newest message is mine (I just sent it) —
-    // otherwise only follow along if I was already near the bottom.
-    if (grew && (atBottom || latestIsMine)) {
-      virtualizer.scrollToIndex(visible.length - 1, { align: "end" });
+    const firstId = visible[0]?.id ?? null;
+    // A grew-AND-first-row-changed means older history was prepended at the top
+    // (scroll-up load). Anchor the viewport on the row that used to be first so
+    // the page doesn't jump while the user is reading.
+    const prepended = grew && prevFirstId.current !== null && firstId !== prevFirstId.current;
+    if (prepended) {
+      const added = visible.length - prevCount.current;
+      virtualizer.scrollToIndex(added, { align: "start" });
+    } else if (grew) {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+      const latest = visible[visible.length - 1];
+      // usePostMessage inserts optimistic rows with the literal placeholder
+      // memberId "me" before the server echo replaces it — both spellings are
+      // "I just sent this".
+      const latestIsMine =
+        !!latest && (latest.memberId === "me" || (!!meMemberId && latest.memberId === meMemberId));
+      // Always jump when the newest message is mine (I just sent it) —
+      // otherwise only follow along if I was already near the bottom.
+      if (atBottom || latestIsMine) {
+        virtualizer.scrollToIndex(visible.length - 1, { align: "end" });
+      }
     }
     prevCount.current = visible.length;
+    prevFirstId.current = firstId;
   }, [visible.length, virtualizer, meMemberId, visible]);
+
+  // Load older history when the user scrolls near the top. fetchPreviousPage is
+  // a no-op while a fetch is in flight, so firing on every scroll tick is safe.
+  function onScroll() {
+    const el = parentRef.current;
+    if (!el || !onLoadOlder || !hasOlder || isLoadingOlder) return;
+    if (el.scrollTop < 240) onLoadOlder();
+  }
 
   async function react(msgId: string, emoji: string) {
     try {
@@ -76,7 +110,10 @@ export default function MessageList({ messages, meMemberId, onOpenThread, inThre
   }
 
   return (
-    <div ref={parentRef} className="messages">
+    <div ref={parentRef} className="messages" onScroll={onScroll}>
+      {isLoadingOlder && (
+        <div className="ml-loading-older">Loading earlier messages…</div>
+      )}
       <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
         {virtualizer.getVirtualItems().map((v) => {
           const m = visible[v.index];

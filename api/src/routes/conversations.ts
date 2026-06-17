@@ -87,13 +87,22 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
     const lastTsMap = new Map(lastTs.map((r) => [r.conversationId, r.ts]));
 
     // Per-conversation unread counts: messages newer than lastReadAt and not
-    // authored by the caller. Mention count is a subset (caller's memberId is
-    // in `mentions`).
+    // authored by the caller.
+    //
+    // `total` counts only TOP-LEVEL messages (parentId is null) because those
+    // are the only ones the channel timeline renders — thread replies live in
+    // the thread pane. Counting replies here produced a "phantom" badge: the
+    // sidebar said unread, but opening the channel showed nothing new (the new
+    // message was a reply tucked inside a thread). `mentioned` still counts ANY
+    // message that @-mentions the caller, replies included, so a thread mention
+    // still surfaces (and is deep-linked from the notification bell).
     const unreadRows = convIds.length
       ? await db
           .select({
             conversationId: messages.conversationId,
-            total: dsql<number>`count(*)::int`.as("total"),
+            total: dsql<number>`sum(case when ${messages.parentId} is null then 1 else 0 end)::int`.as(
+              "total",
+            ),
             mentioned: dsql<number>`sum(case when ${messages.mentions} ? ${memberId} then 1 else 0 end)::int`.as(
               "mentioned",
             ),

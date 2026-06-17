@@ -33,7 +33,7 @@ export default function ChannelPage() {
   useEffect(() => {
     if (!id) return;
     markRead();
-  }, [id, msgs.data?.messages.length, markRead]);
+  }, [id, msgs.messages.length, markRead]);
 
   // Opening a conversation clears its inbox notifications (mentions + DMs) so
   // the user doesn't have to click each one in the bell. Fires once per open.
@@ -46,9 +46,9 @@ export default function ChannelPage() {
   const threadMsg = useMemo(
     () =>
       threadConvId === id && threadRootId
-        ? msgs.data?.messages.find((m) => m.id === threadRootId) ?? null
+        ? msgs.messages.find((m) => m.id === threadRootId) ?? null
         : null,
-    [threadConvId, threadRootId, id, msgs.data?.messages],
+    [threadConvId, threadRootId, id, msgs.messages],
   );
 
   const typingMembers = useMemo(() => {
@@ -212,9 +212,12 @@ export default function ChannelPage() {
 
         <MessageList
           key={id}
-          messages={msgs.data?.messages ?? []}
+          messages={msgs.messages}
           meMemberId={me.data?.memberId ?? undefined}
           onOpenThread={(mid) => openThread(id, mid)}
+          onLoadOlder={msgs.loadOlder}
+          hasOlder={msgs.hasOlder}
+          isLoadingOlder={msgs.isLoadingOlder}
         />
 
         <AgentActivity conversationId={id} />
