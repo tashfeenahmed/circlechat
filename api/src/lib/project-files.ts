@@ -1,4 +1,5 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { embed, cosine, embeddingsEnabled } from "./embeddings.js";
 
 // ─────────────────────────── Shared project memory ───────────────────────────
 // A file-based "blackboard" the agents form and manage themselves: multiple
@@ -56,6 +57,9 @@ export interface ProjectFileInfo extends ProjectFileMeta {
   path: string; // absolute path on the shared mount
   size: number;
   mtimeMs: number;
+  // Body lead (provenance headers stripped), captured during the index read so
+  // the semantic matcher has a representative text to embed without re-reading.
+  snippet?: string;
 }
 
 export interface ProjectInfo {
@@ -305,8 +309,9 @@ export async function loadProjectIndex(): Promise<ProjectInfo[]> {
         const st = await fsp.stat(path).catch(() => null);
         if (!st) continue;
         const raw = await fsp.readFile(path, "utf8").catch(() => "");
-        const { meta } = parseProjectFile(raw);
-        files.push({ ...meta, name, path, size: st.size, mtimeMs: st.mtimeMs });
+        const { meta, body } = parseProjectFile(raw);
+        const snippet = bodyLead(body);
+        files.push({ ...meta, name, path, size: st.size, mtimeMs: st.mtimeMs, snippet });
       }
       if (!files.length) continue;
       files.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -373,6 +378,132 @@ export function matchProjectFiles(projects: ProjectInfo[], triggerText: string):
   return matched;
 }
 
+// ─────────────────────────── semantic retrieval ───────────────────────────
+// The keyword matcher above is precise and free but blind to paraphrase: a run
+// about "outreach emails to dev-tool sites" won't surface a decisions.md whose
+// summary is "guest-post & partnership targets". When an embeddings backend is
+// configured (EMBEDDINGS_BASE_URL), we additionally rank the *un-keyword-matched*
+// files by cosine similarity of their representative text to the run, and fold
+// the best few in. It is purely additive (keyword matches keep budget priority)
+// and a complete no-op when embeddings are off — so existing behaviour is intact.
+
+// Floor + caps. The floor is read per-call so it's tunable via env without a
+// restart. Calibrated 2026-06-19 against the live gemini-embedding-001 backend
+// over the real project tree: relevant query/file pairs land 0.58–0.67, while
+// cross-project / unrelated pairs top out at ~0.556 (an off-topic query maxed at
+// 0.521). 0.6 clears that false-positive ceiling with margin and still catches
+// the paraphrase wins keyword matching misses; a borderline miss stays visible
+// in the always-injected index. Raise PROJECT_SEM_FLOOR for stricter, lower for
+// more recall.
+function semFloor(): number {
+  const v = Number(process.env.PROJECT_SEM_FLOOR);
+  return Number.isFinite(v) && process.env.PROJECT_SEM_FLOOR ? v : 0.6;
+}
+const SEM_TOP_N = 3; // most semantic additions per turn (budget still caps reads)
+const SEM_MAX_CANDIDATES = 30; // bound embedding cost on a large tree
+const SEM_QUERY_MAX = 2000; // chars of triggerText to embed
+const SEM_REP_MAX = 500; // chars of a file's representative text to embed
+const SEM_MIN_QUERY = 12; // skip tiny/empty queries — no useful signal
+
+// Strip `## <date> · @handle` provenance headers, then take the lead of the body
+// as the embed-able snippet (the curated `summary` is preferred when present).
+function bodyLead(body: string): string {
+  return (body || "")
+    .replace(/^##\s.*$/gm, "")
+    .replace(/\n{2,}/g, "\n")
+    .trim()
+    .slice(0, SEM_REP_MAX);
+}
+
+// What we embed for a file: its project + name + summary-or-snippet.
+function representativeText(slug: string, f: ProjectFileInfo): string {
+  const base = f.name.replace(/\.(md|txt)$/i, "");
+  const gist = (f.summary || f.snippet || "").trim();
+  return `${slug} / ${base}: ${gist}`.slice(0, SEM_REP_MAX);
+}
+
+// Process-local cache of file embeddings, keyed by path+mtime so a write (which
+// bumps mtime) invalidates the entry. Steady state: only the query embeds.
+const semEmbedCache = new Map<string, number[]>();
+const SEM_CACHE_MAX = 500;
+function cacheGet(key: string): number[] | undefined {
+  return semEmbedCache.get(key);
+}
+function cacheSet(key: string, vec: number[]): void {
+  if (semEmbedCache.size >= SEM_CACHE_MAX) semEmbedCache.clear();
+  semEmbedCache.set(key, vec);
+}
+// Test-only: reset the cache between cases.
+export function _clearSemCache(): void {
+  semEmbedCache.clear();
+}
+
+// Pure: given the query vector and candidates (each with its vector, possibly
+// null when embedding failed), return the files scoring ≥ floor, best-first,
+// capped to topN. No fs / no network — unit-testable.
+export function rankBySimilarity(
+  queryVec: number[],
+  candidates: Array<{ file: ProjectFileInfo; vec: number[] | null }>,
+  floor: number,
+  topN: number,
+): ProjectFileInfo[] {
+  return candidates
+    .map((c) => ({ file: c.file, score: c.vec ? cosine(queryVec, c.vec) : -1 }))
+    .filter((s) => s.score >= floor)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, topN))
+    .map((s) => s.file);
+}
+
+// Embedding-backed match over the files NOT already chosen by the keyword pass.
+// One embed() call per turn: [query, ...uncached representative texts]. Fail-safe
+// → [] (embeddings off, tiny query, no candidates, or any backend error).
+export async function semanticMatchProjectFiles(
+  projects: ProjectInfo[],
+  triggerText: string,
+  exclude: Set<string>,
+): Promise<ProjectFileInfo[]> {
+  if (!embeddingsEnabled()) return [];
+  const q = (triggerText || "").trim().slice(0, SEM_QUERY_MAX);
+  if (q.length < SEM_MIN_QUERY) return [];
+
+  const cands: Array<{ slug: string; file: ProjectFileInfo }> = [];
+  for (const p of projects) {
+    for (const f of p.files) {
+      if (exclude.has(f.path)) continue;
+      cands.push({ slug: p.slug, file: f });
+    }
+  }
+  if (!cands.length) return [];
+  const capped = cands.slice(0, SEM_MAX_CANDIDATES);
+
+  // Resolve each candidate's vector from cache; batch-embed the misses + query.
+  const keyFor = (f: ProjectFileInfo) => `${f.path}|${f.mtimeMs}`;
+  const vecs: Array<number[] | null> = capped.map((c) => cacheGet(keyFor(c.file)) ?? null);
+  const misses = capped
+    .map((c, i) => ({ i, c }))
+    .filter((m) => vecs[m.i] == null);
+
+  const batch = [q, ...misses.map((m) => representativeText(m.c.slug, m.c.file))];
+  const embedded = await embed(batch);
+  if (!embedded || !embedded[0]) return [];
+  const queryVec = embedded[0];
+  misses.forEach((m, j) => {
+    const v = embedded[j + 1];
+    if (v && v.length) {
+      cacheSet(keyFor(m.c.file), v);
+      vecs[m.i] = v;
+    }
+  });
+
+  return rankBySimilarity(
+    queryVec,
+    capped.map((c, i) => ({ file: c.file, vec: vecs[i] })),
+    semFloor(),
+    SEM_TOP_N,
+  );
+}
+
 // Read the bodies of the matched files within the injection budget.
 async function readProjectFileBodies(
   matched: ProjectFileInfo[],
@@ -404,7 +535,13 @@ export async function buildProjectContext(
     const projects = await loadProjectIndex();
     if (!projects.length) return { index: "", files: [] };
     const index = renderProjectIndex(projects);
-    const files = await readProjectFileBodies(matchProjectFiles(projects, triggerText));
+    // Keyword matches first (precise, free, keep budget priority); then fold in
+    // semantically-relevant files the keyword pass missed (no-op if embeddings
+    // are off or the call fails). Dedupe by path, keyword order preserved.
+    const keyword = matchProjectFiles(projects, triggerText);
+    const chosen = new Set(keyword.map((f) => f.path));
+    const semantic = await semanticMatchProjectFiles(projects, triggerText, chosen).catch(() => []);
+    const files = await readProjectFileBodies([...keyword, ...semantic]);
     return { index, files };
   } catch {
     return { index: "", files: [] };

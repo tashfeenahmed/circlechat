@@ -13,8 +13,10 @@ import {
   writeProjectFile,
   loadProjectIndex,
   buildProjectContext,
+  rankBySimilarity,
   PROJECT_FILE_MAX_CHARS,
   type ProjectInfo,
+  type ProjectFileInfo,
 } from "../lib/project-files.js";
 
 describe("slugifyProject", () => {
@@ -238,6 +240,53 @@ describe("matchProjectFiles", () => {
   it("orders freshest first", () => {
     const out = matchProjectFiles(projects, "neu-website");
     expect(out[0].name).toBe("status.md"); // mtime 3
+  });
+});
+
+describe("rankBySimilarity (pure semantic ranker)", () => {
+  const mk = (name: string): ProjectFileInfo => ({
+    name,
+    path: `/x/${name}`,
+    summary: "",
+    owner: "r",
+    updatedBy: "r",
+    triggers: [],
+    always: false,
+    size: 1,
+    mtimeMs: 1,
+  });
+
+  it("keeps files above the floor, best-first, capped to topN", () => {
+    const q = [1, 0];
+    const out = rankBySimilarity(
+      q,
+      [
+        { file: mk("exact.md"), vec: [1, 0] }, // cosine 1.0
+        { file: mk("near.md"), vec: [0.8, 0.6] }, // cosine 0.8
+        { file: mk("ortho.md"), vec: [0, 1] }, // cosine 0
+      ],
+      0.5,
+      2,
+    );
+    expect(out.map((f) => f.name)).toEqual(["exact.md", "near.md"]);
+  });
+
+  it("drops candidates whose embedding failed (null vec)", () => {
+    const out = rankBySimilarity(
+      [1, 0],
+      [
+        { file: mk("good.md"), vec: [1, 0] },
+        { file: mk("failed.md"), vec: null },
+      ],
+      0.5,
+      5,
+    );
+    expect(out.map((f) => f.name)).toEqual(["good.md"]);
+  });
+
+  it("returns nothing when all candidates fall below the floor", () => {
+    const out = rankBySimilarity([1, 0], [{ file: mk("a.md"), vec: [0.1, 0.99] }], 0.6, 5);
+    expect(out).toEqual([]);
   });
 });
 
