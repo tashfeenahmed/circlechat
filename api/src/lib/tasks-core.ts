@@ -344,7 +344,7 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
     t!.status !== "done" &&
     !input.archived
   ) {
-    const denial = await assertDoneEvidence(taskId, actorMemberId, t!.title, t!.bodyMd, workspaceId);
+    const denial = await assertDoneEvidence(taskId, actorMemberId, t!.title, t!.bodyMd, workspaceId, t!.status);
     if (denial) return { error: denial };
   }
   const patch: Partial<typeof tasks.$inferInsert> = { updatedAt: new Date() };
@@ -961,6 +961,7 @@ async function assertDoneEvidence(
   taskTitle: string,
   taskBodyMd: string,
   workspaceId: string,
+  taskStatus: string,
 ): Promise<"done_requires_evidence" | "done_requires_review" | "verification_failed" | null> {
   const [actor] = await db
     .select({ kind: members.kind })
@@ -974,11 +975,21 @@ async function assertDoneEvidence(
     .from(taskAssignees)
     .where(eq(taskAssignees.taskId, taskId));
 
-  // Rule 0: the maker can't sign off their own work. An agent that is an
-  // assignee on the task moves it to "review"; a NON-assignee (their manager,
-  // or any human) flips review → done after checking the evidence. This is
-  // what stops "I'll flip it to done" self-certification of unverified work.
-  if (assigneeRows.some((r) => r.memberId === actorMemberId)) {
+  // Rule 0: the maker can't sign off their own work BY FIAT. An agent that is an
+  // assignee moves the task to "review"; a NON-assignee (their manager or a
+  // human) — or the automated verification gate below — flips review → done.
+  //
+  // EXCEPTION (deadlock break): when the task is ALREADY in "review", we do NOT
+  // hard-block the assignee. If the assignee is also the only available reviewer
+  // (e.g. the GM owns the task), a hard block strands it forever — observed in
+  // practice as 147 failed self-done retries on one task across 9 days, with 17
+  // tasks piled up in review. Instead we fall through to the verification gate
+  // (substantive artifact + deterministic render check + LLM judge), which is an
+  // INDEPENDENT reviewer: the maker still can't self-certify on say-so, but a
+  // genuinely-verified deliverable can complete. Before review, still block —
+  // you must submit for review first (no in_progress → done jump).
+  const isAssignee = assigneeRows.some((r) => r.memberId === actorMemberId);
+  if (isAssignee && taskStatus !== "review") {
     return "done_requires_review";
   }
 

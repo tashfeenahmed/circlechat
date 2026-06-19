@@ -91,3 +91,42 @@ describe("guardRejectHint", () => {
     expect(guardRejectHint("empty_body")).toBe("");
   });
 });
+
+describe("checkReplyBody — leak classes observed in production", () => {
+  const reject: Array<{ name: string; body: string; reason: string }> = [
+    // HEARTBEAT_OK must be caught ANYWHERE, not just at the start.
+    { name: "heartbeat bolded mid-reply", body: "**HEARTBEAT_OK** — I've scoped the lists.", reason: "heartbeat_leaked" },
+    { name: "heartbeat trailing a warning", body: "Warning: Unknown toolsets: mcp-circlechat\nHEARTBEAT_OK", reason: "heartbeat_leaked" },
+    // Runtime "no reply / empty content" diagnostics leaking as a message.
+    { name: "empty-reply notice", body: "⚠️ No reply: the model returned empty content after retries and any fallback providers. Try `continue`, switch model/provider.", reason: "empty_reply_notice" },
+    // New CoT/planning forms.
+    { name: "cot: we need to answer", body: "We need to answer the latest user message after summary.", reason: "cot_leak" },
+    { name: "cot: looking at my tasks and the board", body: "Looking at my tasks and the board, I can see that task_x is open.", reason: "cot_leak" },
+    { name: "cot: context compaction marker", body: "[CONTEXT COMPACTION — REF] the latest user message is…", reason: "cot_leak" },
+    // Degenerate multi-script garbage.
+    { name: "garbled multi-script soup", body: "Report exactery ジ Comm Blvd 街道 Zahy సి BHP Streets 农业农村部 done now ok thanks", reason: "garbled_output" },
+  ];
+  for (const c of reject) {
+    it(`rejects ${c.name}`, () => {
+      const r = checkReplyBody(c.body);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toBe(c.reason);
+    });
+  }
+
+  const pass: Array<{ name: string; body: string }> = [
+    { name: "normal reply", body: "Thanks — I'll review the scroll animations and report back." },
+    { name: "one foreign name is not garbage", body: "Met with 王 about the Q3 deal; all good." },
+    { name: "legit mention of heartbeat-like word", body: "The heartbeat monitor is green and the deploy looks healthy." },
+  ];
+  for (const c of pass) {
+    it(`allows ${c.name}`, () => {
+      expect(checkReplyBody(c.body).ok).toBe(true);
+    });
+  }
+
+  it("hints exist for the new reasons", () => {
+    expect(guardRejectHint("garbled_output")).toContain("garbled");
+    expect(guardRejectHint("empty_reply_notice")).toContain("HEARTBEAT_OK");
+  });
+});

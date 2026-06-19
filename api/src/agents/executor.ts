@@ -33,6 +33,8 @@ import { planGoal } from "../lib/planner.js";
 import { latestVerificationRationale } from "../lib/task-verifier.js";
 import { editAgentBlock } from "../lib/memory-blocks.js";
 import { repairAction, type RepairCtx } from "./action-repair.js";
+import { CONTAINER_HERMES_HOME } from "./hermes-runtime.js";
+import { resolveHermesHome } from "./hermes-equip.js";
 import { formatDelegationBrief } from "../lib/delegation.js";
 import { runCodeEnabled, runCodeSandboxed, formatCodeResult } from "../lib/code-sandbox.js";
 import { redis } from "../lib/redis.js";
@@ -1321,7 +1323,7 @@ async function applyOne(
       const guard = checkReplyBody(rawBody || "(attachments)");
       const bodyMd = guard.ok ? guard.bodyMd : rawBody;
       const files = Array.isArray(a.files) ? a.files : [];
-      const { attachments: fetched, skips } = await fetchAgentAttachments(files, out.trace, "share_to_task");
+      const { attachments: fetched, skips } = await fetchAgentAttachments(files, out.trace, "share_to_task", agentId);
       if (fetched.length === 0) {
         const why = skips.length ? ` (${skips.join("; ")})` : "";
         out.errors.push(
@@ -1398,7 +1400,7 @@ async function applyOne(
       if (!mm) throw new Error("agent_not_in_conversation");
 
       const files = Array.isArray(a.files) ? a.files : [];
-      const { attachments: fetched, skips } = await fetchAgentAttachments(files, out.trace, "share_files");
+      const { attachments: fetched, skips } = await fetchAgentAttachments(files, out.trace, "share_files", agentId);
 
       if (fetched.length === 0) {
         const why = skips.length ? ` (${skips.join("; ")})` : "";
@@ -1534,11 +1536,31 @@ async function isDmConversation(conversationId: string): Promise<boolean> {
 // Limits: 10 files per call, 20 MB per file, 15s per URL fetch. Anything
 // that misses those just logs a trace line and is skipped — one bad source
 // doesn't kill the whole action.
+// Resolve (and cache) an agent's HOST home dir from its id, so the path
+// translation below can map a container-local /opt/data/… path back to a file
+// this api container can actually read.
+const agentHomeCache = new Map<string, string>();
+async function resolveAgentHomeDir(agentId: string): Promise<string> {
+  if (!agentId) return "";
+  const cached = agentHomeCache.get(agentId);
+  if (cached !== undefined) return cached;
+  const [row] = await db
+    .select({ handle: agents.handle })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+  const home = await resolveHermesHome(agentId, row?.handle ?? "").catch(() => "");
+  agentHomeCache.set(agentId, home);
+  return home;
+}
+
 async function fetchAgentAttachments(
   files: Array<{ url?: string; path?: string; name?: string }>,
   trace: string[],
   actionLabel: "share_files" | "share_to_task",
+  agentId = "",
 ): Promise<{ attachments: AgentAttachment[]; skips: string[] }> {
+  const agentHome = await resolveAgentHomeDir(agentId);
   const MAX_FILES = 10;
   const MAX_BYTES = 20 * 1024 * 1024;
   const FETCH_TIMEOUT_MS = 15_000;
@@ -1581,16 +1603,24 @@ async function fetchAgentAttachments(
         contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim() || contentType;
         try { nameHint = new URL(rawUrl).pathname.split("/").pop() ?? ""; } catch { nameHint = ""; }
       } else {
-        // Local path: restrict to /tmp/ or the shared /workspace/ to prevent
-        // arbitrary reads. /workspace is the cross-agent shared mount (files
-        // there persist + are visible to every agent and to this API container,
-        // which mounts the same host dir at /workspace); /tmp covers browser
-        // pdf/screenshot outputs and agent-terminal scratch.
+        // Local path. The agent runs INSIDE a hermes container whose HERMES_HOME
+        // is mounted at /opt/data, so it reports paths like
+        // /opt/data/cache/screenshots/x.png — which don't exist in THIS (api)
+        // container. Translate that prefix back to the agent's host home
+        // (/opt/hermes-homes/.hermes-<agent>/…), which this container DOES mount,
+        // so browser screenshots/pdfs actually attach instead of silently
+        // failing (the #1 cause of "see attached" with no file). Then restrict to
+        // /tmp/, the shared /workspace/, or the agent's own home — no arbitrary
+        // reads, and no reading another agent's home.
         const { resolve: pResolve } = await import("node:path");
         const { promises: fsp } = await import("node:fs");
-        const abs = pResolve(rawPath);
-        if (!abs.startsWith("/tmp/") && !abs.startsWith("/workspace/")) {
-          trace.push(`${actionLabel} skip: path must be under /tmp/ or /workspace/ (got ${abs})`);
+        let abs = pResolve(rawPath);
+        if (agentHome && (abs === CONTAINER_HERMES_HOME || abs.startsWith(CONTAINER_HERMES_HOME + "/"))) {
+          abs = pResolve(agentHome + abs.slice(CONTAINER_HERMES_HOME.length));
+        }
+        const underHome = !!agentHome && (abs === agentHome || abs.startsWith(agentHome + "/"));
+        if (!abs.startsWith("/tmp/") && !abs.startsWith("/workspace/") && !underHome) {
+          trace.push(`${actionLabel} skip: path must be under /tmp/, /workspace/, or your home (got ${rawPath})`);
           continue;
         }
         const stat = await fsp.stat(abs).catch(() => null);

@@ -307,6 +307,11 @@ function isEntrypointNoise(line) {
   // to a registered tool (e.g. our `share_files` action → `search_files`).
   if (/^🔧\s*Auto-repaired tool name/i.test(t)) return true;
   if (/^⚠️?\s*Unknown tool/i.test(t)) return true;
+  // "Warning: Unknown toolsets: mcp-circlechat" — the runtime prints this every
+  // turn when a configured toolset isn't registered. Pure config noise; it was
+  // landing in channels (sometimes as the entire message). Strip both the
+  // "Warning:" form and a bare "Unknown toolsets:" line.
+  if (/^(?:Warning:\s*)?Unknown toolsets?\b/i.test(t)) return true;
   if (/^✓\s*(Enabled toolset|Loaded \d+ tools?)/i.test(t)) return true;
   // s6 / container-entrypoint init + skills reconcile lines. The hermes-agent
   // image runs its full s6 boot on every `docker run --rm`, printing these to
@@ -353,6 +358,14 @@ function looksLikeGatewayError(text) {
   return /^\s*API call failed after \d+ retries|^\s*Provider error \([^)]+\):\s*[A-Za-z]+ API error \d{3}/m.test(text);
 }
 
+// The runtime's "model produced nothing" notice, e.g. "⚠️ No reply: the model
+// returned empty content after retries and any fallback providers. Try
+// `continue`, switch model/provider…". The agent didn't reply — it's operator
+// diagnostics, so stay silent rather than post it into a channel.
+function looksLikeEmptyReplyNotice(text) {
+  return /No reply:\s*the model returned empty content|returned empty content after retries|switch model\/provider/i.test(text);
+}
+
 // Hermes' built-in "clarify" feature emits this placeholder to stdout when
 // its internal clarification prompt times out. It's scaffolding text, not
 // something the agent decided to say — strip it.
@@ -366,6 +379,7 @@ function extractReply(raw) {
   const stripAnsi = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
   if (looksLikeTraceback(stripAnsi)) return "";
   if (looksLikeGatewayError(stripAnsi)) return "";
+  if (looksLikeEmptyReplyNotice(stripAnsi)) return "";
   const lines = stripAnsi.split("\n");
   const out = [];
   let inside = false;

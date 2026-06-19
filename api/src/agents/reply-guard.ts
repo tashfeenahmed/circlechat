@@ -16,11 +16,20 @@ export type GuardResult =
   | { ok: true; bodyMd: string }
   | { ok: false; reason: string };
 
-// startsWith rather than exact match: a valid <actions> block gets stripped
-// before this check runs, so anything still starting with HEARTBEAT_OK is
-// either a bare silence sentinel or a malformed actions block that the
-// bridge couldn't parse — either way, not a real chat message.
-const HEARTBEAT_RE = /^\s*HEARTBEAT_OK\b/;
+// HEARTBEAT_OK is the internal "silence" sentinel — it must NEVER reach a
+// channel. Match it ANYWHERE, not just at the start: observed leaks put it after
+// a runtime warning ("Warning: Unknown toolsets: … /// HEARTBEAT_OK"), bolded
+// mid-reply ("**HEARTBEAT_OK** — I've scoped…"), and trailing a chain-of-thought
+// dump. The token never legitimately appears in organic chat, so an anywhere
+// match has no real false-positive surface.
+const HEARTBEAT_RE = /\bHEARTBEAT_OK\b/;
+// Upstream "the model produced nothing" notices that the hermes runtime streams
+// to stdout (not from our code) and the bridge can pick up as a reply, e.g.
+// "⚠️ No reply: the model returned empty content after retries and any fallback
+// providers. Try `continue`, switch model/provider…". It's operator diagnostics,
+// never a message — reject so it can't post into a user channel.
+const EMPTY_REPLY_NOTICE_RE =
+  /\bNo reply:\s*the model returned empty content\b|returned empty content after retries|\bswitch model\/provider\b/i;
 // A Python traceback in a reply body means Hermes itself crashed and the
 // bridge's stderr-as-reply fallback picked up the crash dump. Reject
 // rather than post it to the channel.
@@ -164,7 +173,22 @@ const VISIBLE_ACTIONS_RE = /<\/?actions>/i;
 // asked or announcing which persona it's playing. Anchored to the start and
 // narrow so genuine replies aren't caught.
 const COT_LEAK_RE =
-  /^\s*(?:The user (?:wants|is asking|is providing|has provided|just|now)\b|I (?:am|'m) (?:acting as|currently|now acting)\b|I am [A-Z][a-z]+ \(@[a-z0-9_]+\)|Looking at the (?:conversation|recent|message|context|thread)|Recent [Mm]essages?\s+[Aa]nalysis|(?:The|Recent) (?:messages?|conversation|context)(?: in (?:the|this) channel)? (?:show|shows|indicate)\b|Current (?:Goal|Task|Context)\s*[:`])/;
+  /^\s*(?:The user (?:wants|is asking|is providing|has provided|just|now)\b|We (?:need|have|should|must) to (?:answer|respond|reply|address|handle|figure)\b|The latest (?:user )?message\b|(?:after|since) (?:the )?(?:big )?context compaction\b|\[CONTEXT COMPACTION|I (?:am|'m) (?:acting as|currently|now acting)\b|I am [A-Z][a-z]+ \(@[a-z0-9_]+\)|Looking at (?:the|my) (?:conversation|recent|message|context|thread|tasks?|board|the board)|Recent [Mm]essages?\s+[Aa]nalysis|(?:The|Recent) (?:messages?|conversation|context)(?: in (?:the|this) channel)? (?:show|shows|indicate)\b|Current (?:Goal|Task|Context)\s*[:`])/;
+// Degenerate "language soup": small models occasionally collapse into output
+// that sprinkles characters from several non-Latin scripts through otherwise
+// Latin text (observed: "…exactery387392ジ Comm Blvd街道1791 Zahy సి 8 …农业农村部
+// report"). A genuine non-English message is mostly ONE script; degeneration is
+// majority-Latin with isolated exotic chars from MULTIPLE scripts. Reject only
+// when there are several exotic chars AND Latin still dominates — so a real
+// Chinese/Japanese/etc. message (majority-exotic) is never caught.
+function looksLikeGarbledOutput(s: string): boolean {
+  const exotic = (s.match(
+    /[一-鿿぀-ゟ゠-ヿ가-힯ఀ-౿฀-๿ऀ-ॿ؀-ۿЀ-ӿ]/g,
+  ) || []).length;
+  if (exotic < 6) return false;
+  const latin = (s.match(/[a-zA-Z]/g) || []).length;
+  return latin >= exotic * 2;
+}
 // Raw API-call script leaked as a reply — the agent printed the Python it wrote
 // to hit /agent-api instead of replying. CC_API_BASE / CC_BOT_TOKEN / urllib
 // never appear in an organic chat message.
@@ -218,7 +242,11 @@ export function guardRejectHint(reason: string): string {
     case "action_json_leaked":
       return " An action's JSON ended up in your visible reply. Wrap actions in an <actions>[ … ]</actions> block — they are executed from there and stripped from the message, never posted as text.";
     case "cot_leak":
-      return " Your reply leaked planning/persona narration (\"The user wants…\", \"I am acting as…\"). Reply directly in your own voice — don't describe the conversation or announce your role.";
+      return " Your reply leaked planning/persona narration (\"The user wants…\", \"We need to answer…\", \"Looking at my tasks…\"). Reply directly in your own voice — don't describe the conversation, the compaction, or announce your role.";
+    case "garbled_output":
+      return " Your reply was garbled (random characters from multiple scripts). That's a model glitch, not a message. Re-read the last message and reply in plain English, or emit only an <actions> block / HEARTBEAT_OK.";
+    case "empty_reply_notice":
+      return " A runtime 'no reply / empty content' notice leaked into your body. Don't post diagnostics. Either take a concrete board action in an <actions> block or stay silent with exactly HEARTBEAT_OK.";
     case "credential_beg":
       return " You asked a human to hand over a secret in chat — never do that. The ONLY way to receive a credential is a request_approval action: describe what you need; if the human approves they attach the secret and it arrives as an env var. If a similar request was already denied, that's final — mark the dependent task \"blocked\" or take an approach that needs no credential.";
     case "capability_failure":
@@ -244,6 +272,7 @@ export function checkReplyBody(
   const trimmed = scrubbed.trim();
   if (!trimmed) return { ok: false, reason: "empty_body" };
   if (HEARTBEAT_RE.test(trimmed)) return { ok: false, reason: "heartbeat_leaked" };
+  if (EMPTY_REPLY_NOTICE_RE.test(trimmed)) return { ok: false, reason: "empty_reply_notice" };
   if (TRACEBACK_RE.test(trimmed)) return { ok: false, reason: "python_traceback" };
   if (TOOL_USE_RE.test(trimmed)) return { ok: false, reason: "tool_use_markup" };
   if (TOOL_CALL_JSON_RE.test(trimmed)) return { ok: false, reason: "tool_call_json" };
@@ -263,6 +292,7 @@ export function checkReplyBody(
     return { ok: false, reason: "deploy_claim_no_url" };
   }
   if (COT_LEAK_RE.test(trimmed)) return { ok: false, reason: "cot_leak" };
+  if (looksLikeGarbledOutput(trimmed)) return { ok: false, reason: "garbled_output" };
   if (API_SCRIPT_RE.test(trimmed)) return { ok: false, reason: "api_script_leak" };
   if (looksLikeCodeDiffDump(trimmed)) return { ok: false, reason: "code_diff_leak" };
   if (hasRunawayRepetition(trimmed)) return { ok: false, reason: "runaway_repetition" };
