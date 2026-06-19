@@ -22,6 +22,7 @@ import { loadLedgers } from "../lib/ledger-core.js";
 import { ensureAndLoadBlocks } from "../lib/memory-blocks.js";
 import { loadTaskSummary, maybeSummarizeTaskThread } from "../lib/task-condenser.js";
 import { latestVerdictSummary } from "../lib/task-verifier.js";
+import { buildProjectContext } from "../lib/project-files.js";
 
 export interface MemberInfo {
   memberId: string;
@@ -91,6 +92,14 @@ export interface ContextPacket {
     // triggers). Keeps situational guidance OUT of every prompt — it appears
     // only when relevant — unlike the always-injected brief. Empty when none match.
     knowledge: Array<{ name: string; content: string }>;
+    // Shared, multi-file PROJECT memory under <mount>/projects/<slug>/*.md —
+    // the file-based "blackboard" agents form and manage themselves (see
+    // lib/project-files.ts). `projectIndex` is a per-turn DERIVED map of every
+    // tracked project + its files (always injected, never drifts). `projectFiles`
+    // are the file BODIES whose triggers/slug matched this run, fetched on demand
+    // within a token budget so the layer scales without bloating every prompt.
+    projectIndex: string;
+    projectFiles: Array<{ project: string; name: string; content: string }>;
   };
   trigger: string;
   triggerConversationId?: string | null;
@@ -905,6 +914,10 @@ export async function buildContext(opts: {
     .join("\n")
     .slice(0, 8000);
   const workspaceKnowledge = await readWorkspaceKnowledge(triggerText);
+  // Shared multi-file project memory: always-injected index + trigger-matched
+  // file bodies (both budget-bounded, fail-safe → empty). Same triggerText the
+  // knowledge layer uses, so a run "about" a project pulls that project's files.
+  const projectCtx = await buildProjectContext(triggerText);
 
   return {
     agent: {
@@ -924,6 +937,8 @@ export async function buildContext(opts: {
       brief: workspaceBrief,
       files: workspaceFiles,
       knowledge: workspaceKnowledge,
+      projectIndex: projectCtx.index,
+      projectFiles: projectCtx.files,
     },
     trigger: opts.trigger,
     triggerConversationId: opts.conversationId ?? null,

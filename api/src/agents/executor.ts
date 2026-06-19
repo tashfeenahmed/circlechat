@@ -40,6 +40,7 @@ import { loadLedger, appendFact, appendProgressNote, appendDeadEnd } from "../li
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
 import { notifyForMessage } from "../lib/notifications.js";
+import { writeProjectFile } from "../lib/project-files.js";
 
 export interface AgentAttachment {
   key: string;
@@ -155,7 +156,22 @@ export type AgentAction =
   // Run code in a hardened, throwaway sandbox container (no network, read-only,
   // dropped caps, hard timeout). The result is fed back on the agent's next
   // turn. Opt-in (CC_RUN_CODE=on).
-  | { type: "run_code"; language: "python" | "bash"; code: string };
+  | { type: "run_code"; language: "python" | "bash"; code: string }
+  // Record durable project state into the shared, multi-file markdown project
+  // layer under /workspace/projects/<project>/<file>. The team's file-based
+  // "blackboard" — every agent reads the always-injected index and writes here
+  // so project state lives in versionable files, not chat scrollback. `mode`
+  // "append" (default) is concurrency-safe + attributed; "replace" overwrites
+  // the file and is owner-gated. See lib/project-files.ts.
+  | {
+      type: "project_note";
+      project: string;
+      file?: string;
+      note: string;
+      mode?: "append" | "replace";
+      summary?: string;
+      triggers?: string[];
+    };
 
 export interface ExecOutcome {
   actionsApplied: number;
@@ -186,6 +202,7 @@ const AUTO_REPLAYABLE = new Set([
   "delete_memory",
   "memory_append",
   "memory_rethink",
+  "project_note",
 ]);
 
 export interface ApprovedReplayResult {
@@ -256,6 +273,7 @@ const ACTION_SCOPE: Partial<Record<AgentAction["type"], string>> = {
   decompose_goal: "tasks.write",
   delegate_to: "tasks.write",
   ledger_update: "tasks.write",
+  project_note: "tasks.write",
 };
 
 // Risk level per action, used by the opt-in risk gate (APPROVE_RISK_AT). The
@@ -335,6 +353,8 @@ function describeForApproval(a: AgentAction): { action: string; conversationId: 
     case "task_comment":
     case "share_to_task":
       return { action: `${a.type} on ${a.task_id}`, conversationId: null, payload: { ...a } };
+    case "project_note":
+      return { action: `project_note ${a.project}/${a.file ?? "log.md"}`, conversationId: null, payload: { ...a } };
     default:
       return { action: a.type, conversationId: null, payload: {} };
   }
@@ -440,6 +460,11 @@ const ACTION_ALIASES: Record<string, string> = {
   comment: "task_comment",
   set_goal: "create_goal",
   plan_goal: "decompose_goal",
+  project_update: "project_note",
+  update_project: "project_note",
+  track_project: "project_note",
+  project_file: "project_note",
+  project_write: "project_note",
 };
 
 // Required-field shape check per action type. Deliberately PRESENCE-only (it
@@ -468,6 +493,7 @@ const REQUIRED_STRING_FIELDS: Record<string, string[]> = {
   task_comment: ["task_id", "body_md"],
   share_files: ["conversation_id"],
   share_to_task: ["task_id"],
+  project_note: ["project", "note"],
 };
 
 export function validateActionShape(a: AgentAction): string | null {
@@ -981,6 +1007,31 @@ async function applyOne(
         return;
       }
       out.trace.push(`${a.type} ${a.label}`);
+      return;
+    }
+    case "project_note": {
+      // Shared multi-file project memory on /workspace/projects. Append is the
+      // safe default (concurrency-safe + attributed); replace is owner-gated.
+      // Attribute the write to the agent's handle for per-entry provenance.
+      const [self] = await db
+        .select({ handle: agents.handle })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      const r = await writeProjectFile({
+        project: a.project,
+        file: a.file,
+        mode: a.mode,
+        note: a.note,
+        summary: a.summary,
+        triggers: a.triggers,
+        actorHandle: self?.handle ?? "agent",
+      });
+      if ("error" in r) {
+        out.errors.push(r.error);
+        return;
+      }
+      out.trace.push(`project_note ${r.mode} ${r.path}${r.created ? " (new)" : ""}`);
       return;
     }
     case "create_task": {

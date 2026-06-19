@@ -476,6 +476,7 @@ const ALLOWED_ACTION_TYPES = new Set([
   "task_comment",
   "share_files",
   "share_to_task",
+  "project_note",
 ]);
 // Agents paraphrase action names. The skill describes capabilities in a
 // friendly vocabulary ("comment on the task") and reasoning models emit the
@@ -491,6 +492,11 @@ const ACTION_ALIASES = {
   comment: "task_comment",
   set_goal: "create_goal",
   plan_goal: "decompose_goal",
+  project_update: "project_note",
+  update_project: "project_note",
+  track_project: "project_note",
+  project_file: "project_note",
+  project_write: "project_note",
 };
 function canonicalActionType(type) {
   return ACTION_ALIASES[type] ?? type;
@@ -787,6 +793,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `WORKSPACE & REAL WORK (read carefully — this is how you avoid losing work):`,
     `  • Your shell's filesystem is WIPED after every turn, EXCEPT the shared directory /workspace. Anything you write to /tmp, your home, or the current dir is GONE next turn and is invisible to teammates. Write every file you want to keep or share to /workspace (e.g. /workspace/backlink-report.md).`,
     `  • /workspace is SHARED across all agents and persists. To build on a colleague's file, read it from /workspace — don't recreate it. Before you start a task, ls /workspace and read what's already there instead of starting from scratch.`,
+    `  • PROJECT MEMORY: durable project state (scope, decisions, current status, what shipped) lives in the shared multi-file tracker under /workspace/projects/<project>/ — see the PROJECT TRACKER block. READ the relevant project's files before acting so you don't contradict or redo what the team decided, and when you make or learn something durable at the PROJECT level, record it with a project_note action. This is distinct from a task_comment (which tracks one task): the tracker is the cross-task, cross-agent source of truth for a project. Don't fabricate entries — only record what's real.`,
     `  • To attach a file you wrote, use share_files / share_to_task with {"path":"/workspace/<file>"}. A bare filesystem path mentioned in prose does NOT share anything and the file won't survive — only an explicit share action with a /workspace path actually ships it.`,
     `  • NEVER fabricate. Do not paste command output, logs, test results, or "Here's the output: …" blocks unless you actually ran the command THIS turn and are quoting its real output. Inventing results, or claiming a script "ran successfully" when you didn't run it, is a lie — worse than saying "not done yet". If you can't verify something, say so and do the next real step.`,
     `  • EXTERNAL-CLAIM RULE (server-enforced): never claim you deployed, uploaded, or published something to an external service (Netlify, Vercel, GitHub Pages, …) unless it ACTUALLY completed this turn and you paste the live URL in the same message. The server rejects deploy claims with no URL (reason=deploy_claim_no_url). Some services physically can't be driven from your shell — Netlify Drop is a browser drag-and-drop; if you can't complete a deploy, you are BLOCKED, not done. The same honesty bar applies to completions: never announce a task or goal "complete" without checking its real status via GET /agent-api/tasks first, and never take credit for outcomes you didn't produce (a site being live does not mean YOUR deploy worked).`,
@@ -826,6 +833,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `  {"type":"delete_memory","key":"<key>","scope":"…","scope_id":"…"}  — remove a memory entry that's no longer true.`,
     `  {"type":"memory_append","label":"team|notes","text":"<one line to add>"}  — append a line to a MEMORY BLOCK (see MEMORY BLOCKS above). Use "team" to record shared project state/decisions so every teammate sees it next run; "notes" for your own cross-run reminders. This is how the team stays in sync WITHOUT re-reading chat — when you learn or decide something durable, append it.`,
     `  {"type":"memory_rethink","label":"team|notes","value":"<the full rewritten block>"}  — replace a memory block wholesale. Use when it's long or stale: rewrite concisely, keeping only what still matters (stay under the char budget shown above).`,
+    `  {"type":"project_note","project":"<slug e.g. neu-website>","file":"status.md","note":"<what to record>","mode":"append","summary":"<one-line for the index>","triggers":["neu","website"]}  — record durable PROJECT state into the shared multi-file tracker at /workspace/projects/<project>/<file> (see PROJECT TRACKER above). Use it for project-level facts/decisions/status that outlive a single task and that teammates need — NOT for per-task progress (that's task_comment/share_to_task). Conventional files: brief.md (goals/scope), status.md (current focus + next steps), decisions.md (decision log), changelog.md (what shipped). mode:"append" (default) adds a dated, attributed entry and is ALWAYS allowed — use it for logs/status updates and to add to a teammate's file. mode:"replace" overwrites the whole file and only works if you own it (or it's new) — use it to compact a file that's grown stale. Set summary on first write so the index line is meaningful; set triggers so the file gets injected when relevant work comes up.`,
     `  {"type":"request_approval","scope":"<tag>","action":"<human sentence>","conversation_id":"<optional>","payload":{…}}  — pre-flight gate. Use BEFORE actions that leave the workspace (email, paid APIs, external tickets, public posts) or are one-way (delete, cancel). Emit, stop, wait for trigger:"approval_response". In-workspace chat/task/file actions DO NOT need approval. CHECK "YOUR PENDING APPROVALS" above first — if the same request is already listed there, it's awaiting a human and re-requesting is a no-op (the server drops duplicates).`,
     ``,
     `Use the Member IDs block above to fill assignees / mentions / member_id fields — those fields take memberIds (m_…), NOT handles.`,
@@ -1173,6 +1181,35 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     ].filter(Boolean).join("\n");
   }
 
+  // PROJECT TRACKER — the shared, multi-file project memory under
+  // /workspace/projects. The INDEX (always injected) is the map of every
+  // tracked project + its files; the FILES below are the bodies whose triggers
+  // matched this run. This is how the team keeps durable project state in
+  // versionable files instead of re-deriving it from chat every turn.
+  let projectsBlock = "";
+  const projIndex =
+    packet.workspace && typeof packet.workspace.projectIndex === "string"
+      ? packet.workspace.projectIndex.trim()
+      : "";
+  const projFiles =
+    packet.workspace && Array.isArray(packet.workspace.projectFiles) ? packet.workspace.projectFiles : [];
+  if (projIndex) {
+    const parts = [
+      ``,
+      `PROJECT TRACKER (shared multi-file project memory on /workspace/projects — every agent reads & writes this; it is the source of truth for project state, NOT chat scrollback):`,
+      projIndex,
+      `Record durable project state here with a project_note action (append is the default & always allowed; mode:"replace" overwrites a file you own). To read a file not shown below, \`cat /workspace/projects/<project>/<file>\`.`,
+    ];
+    if (projFiles.length) {
+      parts.push(
+        ``,
+        `Relevant project files (bodies pulled in because they matched what you're doing):`,
+        ...projFiles.map((f) => `\n### projects/${f.project}/${f.name}\n${String(f.content || "").trim()}`),
+      );
+    }
+    projectsBlock = parts.join("\n");
+  }
+
   const sections = taskOnly
     ? [
         identity,
@@ -1181,6 +1218,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         ``,
         `You are currently in ${convLabel}.${colleaguesLine}${reportingLine}${memberIdBlock}`,
         filesBlock,
+        projectsBlock,
         myTasksBlock,
         goalsBlock,
         approvalsBlock,
@@ -1202,6 +1240,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         ``,
         `You are currently in ${convLabel}.${topicLine}${othersLine}${colleaguesLine}${reportingLine}${memberIdBlock}`,
         filesBlock,
+        projectsBlock,
         threadBlock,
         taskBlock,
         myTasksBlock,

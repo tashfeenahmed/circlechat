@@ -41,4 +41,10 @@ describe("validateActionShape", () => {
     expect(valid({ type: "ledger_update", goal_id: "goal_1", facts: ["x"] })).toBe(true);
     expect(valid({ type: "ledger_update", goal_id: "goal_1", progress_note: "moving" })).toBe(true);
   });
+
+  it("requires project + note on project_note", () => {
+    expect(error({ type: "project_note", note: "hi" })).toContain('"project"');
+    expect(error({ type: "project_note", project: "neu" })).toContain('"note"');
+    expect(valid({ type: "project_note", project: "neu", note: "shipped the homepage" })).toBe(true);
+  });
 });
