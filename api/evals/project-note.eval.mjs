@@ -11,6 +11,17 @@
 //   node api/evals/project-note.eval.mjs
 //
 // Secrets come from env — never hard-code the key.
+//
+// READING THE RESULTS — the gateway force-routes "auto" (pinned models disabled),
+// so each generator call may hit a different-quality model. With identical code,
+// EMIT has been observed anywhere from ~63% (auto routed to a weak model that
+// under-emits) to 100% (strong model), and FIDELITY from 0% to ~40%. Therefore:
+//   • Treat the agent-behavior numbers (emit/mode/fidelity) as a NOISY RANGE, not
+//     a point estimate — run ≥5 samples and only trust deltas larger than the
+//     run-to-run swing. The reliable uses are (a) catching a clear regression and
+//     (b) diagnosing a specific failure (e.g. it caught the self-stamp fabrication).
+//   • The one STABLE signal is the JUDGE itself — validate it with
+//     faithfulness-calibration.mjs (κ + unfaithful-recall), which is routing-robust.
 
 process.env.CC_BRIDGE_IMPORT_ONLY = "1"; // import buildPrompt without opening sockets
 const { buildPrompt, extractActions } = await import("../hermes-multi-bridge.mjs");
@@ -213,6 +224,30 @@ const SCENARIOS = [
       conv: conv([msg("m_tash", "Important for neu.ie: the contact form must POST to https://api.neu.ie/lead — wire every page's CTA to that endpoint. Don't lose this.")]),
     }),
   },
+  {
+    // A new decision must be APPENDED to the log, not replace (which would clobber
+    // the existing decisions). mode unset counts as append.
+    id: "MODE append a new decision (don't clobber the log)",
+    expect: { projectNote: true, project: "neu", mode: "append" },
+    entry: { handle: "rachel", title: "Designer" },
+    packet: pkt({
+      agentMemberId: "m_rachel", trigger: "channel_post",
+      projectFiles: [NEU_DECISIONS_FILE, NEU_STATUS_FILE],
+      conv: conv([msg("m_tash", "New decision for neu.ie: we're standardizing on the Inter typeface across the whole site. Add it to the record.")]),
+    }),
+  },
+  {
+    // An explicit "the file is stale, replace it with this clean snapshot" on a
+    // file the agent owns is the compaction case → mode:"replace".
+    id: "MODE replace to compact a stale owned file",
+    expect: { projectNote: true, project: "neu", mode: "replace" },
+    entry: { handle: "samantha", title: "CEO" },
+    packet: pkt({
+      agentMemberId: "m_samantha", trigger: "dm",
+      projectFiles: [NEU_STATUS_FILE],
+      conv: conv([msg("m_tash", "The neu.ie status.md is stale and cluttered. Replace it with a clean current snapshot: build is complete, all review tasks are signed off, and the site is live at the preview URL.")], { kind: "dm", name: null, members: ["m_samantha", "m_tash"] }),
+    }),
+  },
 ];
 
 // Generator call — routed through the shared, rate-limited gateway client so
@@ -227,18 +262,23 @@ async function callGateway(prompt) {
   });
 }
 
-// Ground truth a recorded note must be faithful to: the human message that woke
-// the agent (the new durable info), else the task body. Faithfulness = the note
-// asserts nothing beyond this.
+// Ground truth a recorded note must be faithful to: EVERYTHING the agent was
+// given that could legitimately ground a fact — the human message that woke it,
+// the task body, AND the existing project files it had in context (a
+// replace/compaction faithfully carries forward facts already on file, e.g. the
+// preview URL). Scoping the source to only the message wrongly flags that as
+// "invented" — the false-positive the research warns about.
 function deriveSource(scn) {
+  const parts = [];
   const c = scn.packet.inbox?.[0];
   if (c?.messages?.length) {
     const humans = c.messages.filter((m) => MEMBERS[m.memberId]?.kind === "user");
     const m = (humans.length ? humans : c.messages).slice(-1)[0];
-    if (m?.bodyMd) return m.bodyMd;
+    if (m?.bodyMd) parts.push(`[message]\n${m.bodyMd}`);
   }
-  if (scn.packet.task) return `${scn.packet.task.title}. ${scn.packet.task.bodyMd || ""}`.trim();
-  return "";
+  if (scn.packet.task) parts.push(`[task]\n${scn.packet.task.title}. ${scn.packet.task.bodyMd || ""}`.trim());
+  for (const f of scn.packet.workspace?.projectFiles || []) parts.push(`[existing ${f.project}/${f.name}]\n${f.content}`);
+  return parts.join("\n\n");
 }
 
 function grade(scn, replyText) {
@@ -261,6 +301,12 @@ function grade(scn, replyText) {
       pass = false; reasons.push(`project_note targeted "${pn.project}", expected ~"${scn.expect.project}"`);
     }
     if (pn && !(pn.note && String(pn.note).trim())) { pass = false; reasons.push("project_note has empty note"); }
+    // Append-vs-replace correctness: append (or unset) is the safe default and
+    // must NOT clobber; replace is for compacting a stale file you own.
+    if (pn && scn.expect.mode) {
+      const m = pn.mode || "append";
+      if (m !== scn.expect.mode) { pass = false; reasons.push(`mode "${m}", expected "${scn.expect.mode}"`); }
+    }
   } else if (scn.expect.projectNote === false) {
     if (pn) { pass = false; reasons.push(`unexpected project_note (project="${pn.project}")`); }
   }

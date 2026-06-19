@@ -38,6 +38,19 @@ const GOLD = [
   { id: "U wrong hex value", label: "unfaithful", source: "Lock the dark indigo #1a1a2e palette as canonical.", note: "Canonical palette: dark indigo #1a1a8e." },
   { id: "U invented metric", label: "unfaithful", source: "We got accepted into the Futurepedia AI directory.", note: "Accepted into 5 AI directories; referral traffic up 30%." },
   { id: "U status inflation", label: "unfaithful", source: "The homepage draft is in review.", note: "The homepage is done and shipped to production." },
+
+  // ── harder faithful negatives (must NOT be flagged) ──
+  { id: "F number rounding", label: "faithful", source: "The Q3 budget is $4,950.", note: "Q3 budget: ~$5k." },
+  { id: "F date format variation", label: "faithful", source: "Launch on 15 July 2026.", note: "Launch date: 2026-07-15." },
+  { id: "F multi-fact all supported", label: "faithful", source: "For neu.ie: dark theme, no build step, launch July 15.", note: "neu.ie — dark theme, no build step, launching July 15." },
+  { id: "F supported rephrased inference", label: "faithful", source: "Only Samantha can sign off on review tasks.", note: "Review-task sign-off is Samantha's call only." },
+
+  // ── harder fabrications (subtle; must be flagged) ──
+  { id: "U mixed (one invented item)", label: "unfaithful", source: "We got accepted into the Futurepedia directory.", note: "Listed in Futurepedia and Product Hunt directories." },
+  { id: "U wrong rounding", label: "unfaithful", source: "The Q3 budget is $4,950.", note: "Q3 budget is about $7k." },
+  { id: "U subtle scope creep", label: "unfaithful", source: "Let's draft a redesign proposal.", note: "Redesign approved; implementation has started." },
+  { id: "U digit transposition", label: "unfaithful", source: "The API runs on port 8080.", note: "The API runs on port 8088." },
+  { id: "U overgeneralization", label: "unfaithful", source: "Rachel finished the hero animation.", note: "Rachel finished the homepage." },
 ];
 
 async function runPool(items, n, fn) {
