@@ -719,7 +719,7 @@ function buildPrompt(entry, packet) {
         : packet.trigger === "thread_reply"
           ? `A new message landed in a thread you've previously participated in — not addressed directly to you. You may reply if you have something substantive to add; otherwise respond with exactly "HEARTBEAT_OK". Don't chime in for minor acks like "ok", "thanks", "nice". If someone thanked you or the thread is winding down, react with an emoji instead of replying.`
           : packet.trigger === "channel_post"
-            ? `A human posted in this channel without @-mentioning anyone. Read it and decide for yourself: if you can add something useful AND in your lane (a specific answer, a pointer, a concrete offer to help, a kudos if genuinely warranted) then reply in 1–2 sentences. Otherwise respond with exactly "HEARTBEAT_OK". Do NOT acknowledge, "+1", or echo — silence is fine. If another agent has already replied with the same point you'd make, react with an emoji instead of posting. If the post is broad ("team, anyone can…"), only chime in if it genuinely lands in YOUR role; don't pile on generically.`
+            ? `A human posted in this channel without @-mentioning anyone. Read it and decide for yourself: if you can add something useful AND in your lane (a specific answer, a pointer, a concrete offer to help, a kudos if genuinely warranted) then reply in 1–2 sentences. Otherwise respond with exactly "HEARTBEAT_OK". Do NOT acknowledge, "+1", or echo — silence is fine. If another agent has already replied with the same point you'd make, react with an emoji instead of posting. If the post is broad ("team, anyone can…"), only chime in if it genuinely lands in YOUR role; don't pile on generically. ONE exception overrides "silence is fine": if the post states a durable PROJECT-level decision, policy, deadline, or canonical fact (see the DURABLE-FACT RULE in the PROJECT TRACKER block), you MUST capture it with a project_note this turn even if you don't reply — silence is acceptable for chatter, never for an unrecorded project fact.`
             : packet.trigger === "scheduled"
               ? `Scheduled heartbeat — your job here is to MAKE PROGRESS on real work, not wait to be pinged.
 
@@ -793,7 +793,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     `WORKSPACE & REAL WORK (read carefully — this is how you avoid losing work):`,
     `  • Your shell's filesystem is WIPED after every turn, EXCEPT the shared directory /workspace. Anything you write to /tmp, your home, or the current dir is GONE next turn and is invisible to teammates. Write every file you want to keep or share to /workspace (e.g. /workspace/backlink-report.md).`,
     `  • /workspace is SHARED across all agents and persists. To build on a colleague's file, read it from /workspace — don't recreate it. Before you start a task, ls /workspace and read what's already there instead of starting from scratch.`,
-    `  • PROJECT MEMORY: durable project state (scope, decisions, current status, what shipped) lives in the shared multi-file tracker under /workspace/projects/<project>/ — see the PROJECT TRACKER block. READ the relevant project's files before acting so you don't contradict or redo what the team decided, and when you make or learn something durable at the PROJECT level, record it with a project_note action. This is distinct from a task_comment (which tracks one task): the tracker is the cross-task, cross-agent source of truth for a project. Don't fabricate entries — only record what's real.`,
+    `  • PROJECT MEMORY: durable project state (scope, decisions, current status, deadlines, what shipped) lives in the shared multi-file tracker under /workspace/projects/<project>/ — see the PROJECT TRACKER block and its DURABLE-FACT RULE. READ the relevant project's files before acting so you don't contradict or redo what the team decided. When a human states — or you make/learn — a durable PROJECT-level decision, policy, deadline, canonical fact, or status change, you MUST record it with a project_note that same turn (a chat reply does not persist it). This is distinct from a task_comment (which tracks ONE task): the tracker is the cross-task, cross-agent source of truth for a project. Only record what's real — never fabricate.`,
     `  • To attach a file you wrote, use share_files / share_to_task with {"path":"/workspace/<file>"}. A bare filesystem path mentioned in prose does NOT share anything and the file won't survive — only an explicit share action with a /workspace path actually ships it.`,
     `  • NEVER fabricate. Do not paste command output, logs, test results, or "Here's the output: …" blocks unless you actually ran the command THIS turn and are quoting its real output. Inventing results, or claiming a script "ran successfully" when you didn't run it, is a lie — worse than saying "not done yet". If you can't verify something, say so and do the next real step.`,
     `  • EXTERNAL-CLAIM RULE (server-enforced): never claim you deployed, uploaded, or published something to an external service (Netlify, Vercel, GitHub Pages, …) unless it ACTUALLY completed this turn and you paste the live URL in the same message. The server rejects deploy claims with no URL (reason=deploy_claim_no_url). Some services physically can't be driven from your shell — Netlify Drop is a browser drag-and-drop; if you can't complete a deploy, you are BLOCKED, not done. The same honesty bar applies to completions: never announce a task or goal "complete" without checking its real status via GET /agent-api/tasks first, and never take credit for outcomes you didn't produce (a site being live does not mean YOUR deploy worked).`,
@@ -1198,7 +1198,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
       ``,
       `PROJECT TRACKER (shared multi-file project memory on /workspace/projects — every agent reads & writes this; it is the source of truth for project state, NOT chat scrollback):`,
       projIndex,
-      `Record durable project state here with a project_note action (append is the default & always allowed; mode:"replace" overwrites a file you own). To read a file not shown below, \`cat /workspace/projects/<project>/<file>\`.`,
+      `DURABLE-FACT RULE (do this, it's how the team doesn't lose decisions): when this turn's message contains a durable PROJECT-LEVEL decision, policy, scope change, deadline, canonical fact, milestone, or status change — ESPECIALLY when it comes from the boss/a human — you MUST record it with a project_note action THIS TURN, in addition to any short reply or react. Chat scrolls away and is not persistent; a reply or 👍 alone does NOT capture it — if it's not in the tracker, it's lost. Pick the right project from the index above and the right file (decisions.md for decisions/policies, status.md for status/phase/deadline changes, changelog.md for what shipped, brief.md for scope). Append is the default and always allowed; mode:"replace" overwrites a file you own. This applies EVEN when the same message also asks you to DO something (e.g. "the endpoint is X, wire it up"): capture the durable fact with project_note FIRST, then handle/track the work — don't let the fact evaporate because you focused on the task. Only record what was actually stated — never fabricate. (This is for PROJECT-level info — NOT per-task progress, which goes on the task card via task_comment/share_to_task, and NOT acks/social/logistics, which need no record.) To read a file not shown below, \`cat /workspace/projects/<project>/<file>\`.`,
     ];
     if (projFiles.length) {
       parts.push(
@@ -1491,6 +1491,13 @@ function connect(entry) {
   });
 }
 
-reconcile();
-watchFile(CFG_PATH, { interval: 1500 }, reconcile);
-console.log(`[multi-bridge] watching ${CFG_PATH} for changes`);
+// Exported so evals/tests can build the EXACT production prompt + reuse the
+// action parser without copying. Importing the module never connects sockets
+// unless it's run as the entrypoint (or CC_BRIDGE_IMPORT_ONLY forces import-only).
+export { buildPrompt, extractActions, extractAttachments, sanitizeActions, canonicalActionType };
+
+if (!process.env.CC_BRIDGE_IMPORT_ONLY) {
+  reconcile();
+  watchFile(CFG_PATH, { interval: 1500 }, reconcile);
+  console.log(`[multi-bridge] watching ${CFG_PATH} for changes`);
+}

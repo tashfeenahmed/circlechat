@@ -1,0 +1,322 @@
+// Behavioral eval for the shared project-memory feature (project_note action).
+//
+// It builds the EXACT production prompt (the bridge's buildPrompt), sends each
+// scenario to the live FreeLLMAPI gateway (the model the agents actually use),
+// parses the reply with the real extractActions, and grades whether the model
+// emits a well-formed project_note WHEN it should, targets the right project,
+// and stays quiet when it shouldn't.
+//
+//   CC_GW_URL=https://freellm.178-105-187-189.sslip.io/v1 \
+//   CC_GW_KEY=<unified key> CC_GW_MODEL=auto \
+//   node api/evals/project-note.eval.mjs
+//
+// Secrets come from env — never hard-code the key.
+
+process.env.CC_BRIDGE_IMPORT_ONLY = "1"; // import buildPrompt without opening sockets
+const { buildPrompt, extractActions } = await import("../hermes-multi-bridge.mjs");
+
+const GW_URL = (process.env.CC_GW_URL || "").replace(/\/$/, "");
+const GW_KEY = process.env.CC_GW_KEY || "";
+const GW_MODEL = process.env.CC_GW_MODEL || "auto";
+const CONCURRENCY = Number(process.env.CC_EVAL_CONCURRENCY || 3);
+if (!GW_URL || !GW_KEY) {
+  console.error("Set CC_GW_URL and CC_GW_KEY.");
+  process.exit(2);
+}
+
+// ── shared fixtures: the real backfilled project context ──
+const PROJECT_INDEX = `◆ freellmapi-backlinks (owner @samantha)
+   • decisions.md — Campaign decisions (append-only) · upd 2026-06-19 @samantha · 356B [triggers: freellmapi, backlink, decision]
+   • status.md — Campaign status — assets built, outreach + submissions in review · upd 2026-06-19 @samantha · 1K [triggers: freellmapi, backlink, outreach]
+   • brief.md — Earn high-quality backlinks for freellmapi.co (no paid links) · upd 2026-06-19 @samantha · 865B [triggers: freellmapi, backlink, seo]
+◆ neu-website (owner @samantha)
+   • brief.md — What we're building for neu.ie + the acceptance bar · upd 2026-06-19 @samantha · 1K [triggers: neu, neu.ie, redesign, website]
+   • status.md — Current focus — most build tasks done, 9 in review awaiting sign-off · upd 2026-06-19 @rachel · 1K [always]
+   • decisions.md — Key design & technical decisions (append-only log) · upd 2026-06-19 @rachel · 733B [triggers: neu, design, decision]
+   • changelog.md — What has shipped on neu.ie · upd 2026-06-19 @phil · 412B [triggers: neu, changelog, shipped]`;
+
+const NEU_STATUS_FILE = {
+  project: "neu-website",
+  name: "status.md",
+  content:
+    "# neu.ie redesign — current status\nBuild essentially complete; in review/sign-off.\nLive preview: https://neu.178-105-187-189.sslip.io/  · files in /workspace/neu-site/",
+};
+const NEU_DECISIONS_FILE = {
+  project: "neu-website",
+  name: "decisions.md",
+  content:
+    "# neu.ie redesign — decisions\n- AI agency, not neuroscience.\n- Plain HTML/CSS/JS, no build step.\n- Dark, premium, distinctive look.",
+};
+const FREEAPI_DECISIONS_FILE = {
+  project: "freellmapi-backlinks",
+  name: "decisions.md",
+  content: "# FreeLLMAPI backlink campaign — decisions\n- Earned links only — no paid links.\n- Focus on freellmapi.co.",
+};
+
+const MEMBERS = {
+  m_rachel: { memberId: "m_rachel", handle: "rachel", name: "Rachel", kind: "agent", isMe: false },
+  m_phil: { memberId: "m_phil", handle: "phil", name: "Phil", kind: "agent", isMe: false },
+  m_samantha: { memberId: "m_samantha", handle: "samantha", name: "Samantha", kind: "agent", isMe: false },
+  m_tash: { memberId: "m_tash", handle: "tash", name: "Tash", kind: "user", isMe: false },
+};
+
+function me(memberId) {
+  const m = { ...MEMBERS };
+  m[memberId] = { ...m[memberId], isMe: true };
+  return m;
+}
+
+function pkt(o) {
+  const agentMemberId = o.agentMemberId;
+  const agent = MEMBERS[agentMemberId];
+  return {
+    agent: { id: "a_x", memberId: agentMemberId, handle: agent.handle, name: agent.name, model: "auto", scopes: ["channels.read", "channels.reply", "tasks.write"], brief: o.brief || "" },
+    workspace: {
+      id: "w_x", name: "Neu Software LLC", handle: "neu", mission: "Build great AI products for clients.",
+      brief: "", files: [], knowledge: [],
+      projectIndex: PROJECT_INDEX,
+      projectFiles: o.projectFiles ?? [NEU_STATUS_FILE],
+    },
+    trigger: o.trigger,
+    triggerConversationId: o.conv ? o.conv.conversationId : null,
+    members: me(agentMemberId),
+    thread: null,
+    inbox: o.conv ? [o.conv] : [],
+    openApprovals: [],
+    memory: { global: {}, byConversation: {}, byTask: {} },
+    memoryBlocks: [
+      { label: "team", description: "Shared team whiteboard.", value: o.team || "", charLimit: 3000, shared: true },
+      { label: "notes", description: "Your private notes.", value: "", charLimit: 2000, shared: false },
+    ],
+    reporting: { manager: null, directReports: [], peers: [] },
+    goals: o.goals || [],
+    myTasks: o.myTasks || [],
+    task: o.task || undefined,
+  };
+}
+
+function conv(messages, opts = {}) {
+  return {
+    conversationId: "c_general",
+    conversationKind: opts.kind || "channel",
+    conversationName: opts.name || "general",
+    conversationTopic: opts.topic || "Team coordination",
+    conversationMembers: opts.members || ["m_rachel", "m_phil", "m_samantha", "m_tash"],
+    messages,
+  };
+}
+let _mid = 0;
+const msg = (memberId, bodyMd) => ({ id: `msg_${++_mid}`, memberId, memberHandle: MEMBERS[memberId].handle, memberName: MEMBERS[memberId].name, bodyMd, parentId: null, ts: new Date().toISOString(), mentions: [], reactions: [], attachments: [] });
+
+// ── scenarios ──
+const SCENARIOS = [
+  {
+    id: "POS neu palette decision (channel)",
+    expect: { projectNote: true, project: "neu" },
+    entry: { handle: "rachel", title: "Designer" },
+    packet: pkt({
+      agentMemberId: "m_rachel", trigger: "channel_post",
+      projectFiles: [NEU_STATUS_FILE, NEU_DECISIONS_FILE],
+      conv: conv([msg("m_tash", "Decision for neu.ie: we're locking the dark indigo (#1a1a2e) palette as the final color scheme — no more variations. Make it canonical.")]),
+    }),
+  },
+  {
+    id: "POS freeapi earned-links policy (mention)",
+    expect: { projectNote: true, project: "freellmapi" },
+    entry: { handle: "samantha", title: "CEO" },
+    packet: pkt({
+      agentMemberId: "m_samantha", trigger: "mention",
+      projectFiles: [FREEAPI_DECISIONS_FILE, NEU_STATUS_FILE],
+      conv: conv([msg("m_tash", "@samantha policy for the freellmapi backlink campaign: we ONLY pursue earned links — no paid placements, ever. Bake that in so nobody forgets.")]),
+    }),
+  },
+  {
+    id: "POS neu launch date fact (dm)",
+    expect: { projectNote: true, project: "neu" },
+    entry: { handle: "samantha", title: "CEO" },
+    packet: pkt({
+      agentMemberId: "m_samantha", trigger: "dm",
+      projectFiles: [NEU_STATUS_FILE, NEU_DECISIONS_FILE],
+      conv: conv([msg("m_tash", "Heads up — the neu.ie launch is locked for July 15. Plan the remaining review work around that date.")], { kind: "dm", name: null, members: ["m_samantha", "m_tash"] }),
+    }),
+  },
+  {
+    // Precision check: a single task already parked in "review" on a continuation
+    // is NOT a project-level event. The correct move is HEARTBEAT_OK (maker can't
+    // review own work; no busywork) and crucially NO spurious project_note.
+    id: "NEG task already in review (continuation) — no spurious note",
+    expect: { projectNote: false },
+    entry: { handle: "rachel", title: "Designer" },
+    packet: pkt({
+      agentMemberId: "m_rachel", trigger: "continuation",
+      projectFiles: [NEU_STATUS_FILE],
+      myTasks: [{ id: "task_hp", title: "Complete AI Solution Configurator widget", status: "review", progress: 100, dueAt: null, conversationId: null, conversationName: null, labels: [], commentCount: 1, latestComment: null }],
+      task: { id: "task_hp", title: "Complete AI Solution Configurator widget", bodyMd: "Build the interactive configurator.", status: "review", progress: 100, dueAt: null, labels: [], assignees: ["m_rachel"], assigneeHandles: ["rachel"], parentId: null, createdBy: "m_samantha", subtasks: [], recentComments: [], goalAncestry: [], latestVerdict: null },
+    }),
+  },
+  {
+    id: "NEG per-task progress (task-only)",
+    expect: { projectNote: false, prefer: ["share_to_task", "task_comment", "update_task"] },
+    entry: { handle: "phil", title: "Engineer" },
+    packet: pkt({
+      agentMemberId: "m_phil", trigger: "scheduled",
+      projectFiles: [NEU_STATUS_FILE],
+      myTasks: [{ id: "task_pages", title: "Build Core Pages Structure", status: "in_progress", progress: 40, dueAt: null, conversationId: null, conversationName: null, labels: [], commentCount: 0, latestComment: null }],
+    }),
+  },
+  {
+    id: "NEG social thanks (agent mention)",
+    expect: { projectNote: false, prefer: ["react", "heartbeat"] },
+    entry: { handle: "rachel", title: "Designer" },
+    packet: pkt({
+      agentMemberId: "m_rachel", trigger: "mention",
+      conv: conv([msg("m_phil", "@rachel the hero animation looks fantastic, great work! 🎉")]),
+    }),
+  },
+  {
+    id: "NEG logistics question (channel)",
+    expect: { projectNote: false, prefer: ["post_message_or_reply", "heartbeat"] },
+    entry: { handle: "phil", title: "Engineer" },
+    packet: pkt({
+      agentMemberId: "m_phil", trigger: "channel_post",
+      conv: conv([msg("m_tash", "what time are we doing the standup tomorrow?")]),
+    }),
+  },
+  {
+    id: "NEG quiet ambient (no durable info)",
+    expect: { projectNote: false, prefer: ["heartbeat", "post_message_or_reply"] },
+    entry: { handle: "phil", title: "Engineer" },
+    packet: pkt({
+      agentMemberId: "m_phil", trigger: "ambient",
+      conv: conv([msg("m_rachel", "coffee's fresh in the kitchen ☕")]),
+    }),
+  },
+  {
+    id: "TARGET right project (freeapi fact while neu always-injected)",
+    expect: { projectNote: true, project: "freellmapi" },
+    entry: { handle: "samantha", title: "CEO" },
+    packet: pkt({
+      agentMemberId: "m_samantha", trigger: "channel_post",
+      projectFiles: [FREEAPI_DECISIONS_FILE, NEU_STATUS_FILE],
+      conv: conv([msg("m_tash", "Update for the freellmapi backlink work: we just got accepted into the Futurepedia AI directory — that's our first confirmed earned link. Record it.")]),
+    }),
+  },
+  {
+    id: "POS new durable team fact (channel)",
+    expect: { projectNote: true, project: "neu" },
+    entry: { handle: "phil", title: "Engineer" },
+    packet: pkt({
+      agentMemberId: "m_phil", trigger: "channel_post",
+      projectFiles: [NEU_STATUS_FILE, NEU_DECISIONS_FILE],
+      conv: conv([msg("m_tash", "Important for neu.ie: the contact form must POST to https://api.neu.ie/lead — wire every page's CTA to that endpoint. Don't lose this.")]),
+    }),
+  },
+];
+
+async function callGateway(prompt) {
+  const body = {
+    model: GW_MODEL,
+    messages: [
+      { role: "system", content: "You are an autonomous CircleChat agent's runtime. The user message is your full turn context and instructions — follow them exactly, including the <actions> output contract. Reply as the agent." },
+      { role: "user", content: prompt },
+    ],
+    temperature: 0.2,
+    max_tokens: 1400,
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 90_000);
+      const res = await fetch(`${GW_URL}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${GW_KEY}` },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      if (!res.ok) {
+        if (attempt === 0) continue;
+        return { error: `HTTP ${res.status}: ${(await res.text()).slice(0, 160)}` };
+      }
+      const j = await res.json();
+      return { text: j?.choices?.[0]?.message?.content ?? "", model: j?.model };
+    } catch (e) {
+      if (attempt === 0) continue;
+      return { error: String(e?.message || e) };
+    }
+  }
+  return { error: "unreachable" };
+}
+
+function grade(scn, replyText) {
+  const { actions } = extractActions(replyText || "");
+  const types = actions.map((a) => a.type);
+  const pn = actions.find((a) => a.type === "project_note");
+  const isHeartbeat = /^\s*HEARTBEAT_OK\s*$/i.test((replyText || "").trim()) || (!actions.length && !replyText.trim());
+  const reasons = [];
+  let pass = true;
+
+  if (Array.isArray(scn.expect.notSilent)) {
+    const acted = types.some((t) => scn.expect.notSilent.includes(t));
+    if (!acted) { pass = false; reasons.push(`expected one of [${scn.expect.notSilent.join(",")}], got ${isHeartbeat ? "HEARTBEAT_OK" : `[${types.join(",") || "no-actions"}]`}`); }
+    return { pass, types, pn: pn ? { project: pn.project, file: pn.file, mode: pn.mode || "append" } : null, isHeartbeat, reasons };
+  }
+
+  if (scn.expect.projectNote === true) {
+    if (!pn) { pass = false; reasons.push("expected project_note, none emitted"); }
+    else if (scn.expect.project && !(String(pn.project || "").toLowerCase().includes(scn.expect.project))) {
+      pass = false; reasons.push(`project_note targeted "${pn.project}", expected ~"${scn.expect.project}"`);
+    }
+    if (pn && !(pn.note && String(pn.note).trim())) { pass = false; reasons.push("project_note has empty note"); }
+  } else if (scn.expect.projectNote === false) {
+    if (pn) { pass = false; reasons.push(`unexpected project_note (project="${pn.project}")`); }
+  }
+  return { pass, types, pn: pn ? { project: pn.project, file: pn.file, mode: pn.mode || "append" } : null, isHeartbeat, reasons };
+}
+
+async function runPool(items, n, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(n, items.length) }, async () => {
+      while (i < items.length) {
+        const idx = i++;
+        out[idx] = await fn(items[idx], idx);
+      }
+    }),
+  );
+  return out;
+}
+
+const SAMPLES = Number(process.env.CC_EVAL_SAMPLES || 1);
+console.log(`Eval: project_note behavior · model=${GW_MODEL} · ${SCENARIOS.length} scenarios × ${SAMPLES} sample(s)\n`);
+
+// Flatten scenario × sample so all calls parallelize under the pool, then
+// aggregate per scenario — multi-sampling averages out gateway nondeterminism.
+const jobs = SCENARIOS.flatMap((scn) => Array.from({ length: SAMPLES }, () => scn));
+const raw = await runPool(jobs, CONCURRENCY, async (scn) => {
+  const r = await callGateway(buildPrompt(scn.entry, scn.packet));
+  if (r.error) return { scn, error: r.error };
+  return { scn, g: grade(scn, r.text), reply: r.text };
+});
+
+const agg = new Map(SCENARIOS.map((s) => [s.id, { scn: s, passes: 0, n: 0, err: 0, last: null }]));
+for (const res of raw) {
+  const a = agg.get(res.scn.id);
+  if (res.error) { a.err++; a.lastErr = res.error; continue; }
+  a.n++; if (res.g.pass) a.passes++; a.last = res;
+}
+
+let passFrac = 0, scoredScn = 0;
+for (const a of agg.values()) {
+  if (a.n === 0) { console.log(`⚠ ERR  ${a.scn.id} — ${a.lastErr}`); continue; }
+  scoredScn++;
+  const frac = a.passes / a.n;
+  passFrac += frac;
+  const ok = frac >= 0.5;
+  const g = a.last?.g;
+  const pnStr = g?.pn ? `project_note→${g.pn.project}/${g.pn.file || "log.md"}(${g.pn.mode})` : g?.isHeartbeat ? "HEARTBEAT_OK" : `[${g?.types.join(",") || "no-actions"}]`;
+  console.log(`${ok ? "✓" : "✗"} ${a.passes}/${a.n}  ${a.scn.id}`);
+  console.log(`        last emitted: ${pnStr}${g?.reasons?.length ? `  ·  ${g.reasons.join("; ")}` : ""}`);
+}
+console.log(`\nSCORE: ${passFrac.toFixed(1)}/${scoredScn} (sample-weighted)  ·  ${scoredScn ? Math.round((100 * passFrac) / scoredScn) : 0}%`);
