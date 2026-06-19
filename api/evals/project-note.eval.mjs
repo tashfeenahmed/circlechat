@@ -14,6 +14,8 @@
 
 process.env.CC_BRIDGE_IMPORT_ONLY = "1"; // import buildPrompt without opening sockets
 const { buildPrompt, extractActions } = await import("../hermes-multi-bridge.mjs");
+// Dimension 2 (isolated judge): faithfulness of the note the agent actually wrote.
+const { gatewayChat, judgeFaithfulness, JUDGE_DEFAULTS } = await import("./faithfulness-judge.mjs");
 
 const GW_URL = (process.env.CC_GW_URL || "").replace(/\/$/, "");
 const GW_KEY = process.env.CC_GW_KEY || "";
@@ -213,39 +215,30 @@ const SCENARIOS = [
   },
 ];
 
+// Generator call — routed through the shared, rate-limited gateway client so
+// generator + judge calls share one limiter and never trip the gateway's 120/min.
 async function callGateway(prompt) {
-  const body = {
-    model: GW_MODEL,
+  return gatewayChat({
+    url: GW_URL, key: GW_KEY, model: GW_MODEL, temperature: 0.2, maxTokens: 1400,
     messages: [
       { role: "system", content: "You are an autonomous CircleChat agent's runtime. The user message is your full turn context and instructions — follow them exactly, including the <actions> output contract. Reply as the agent." },
       { role: "user", content: prompt },
     ],
-    temperature: 0.2,
-    max_tokens: 1400,
-  };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 90_000);
-      const res = await fetch(`${GW_URL}/chat/completions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${GW_KEY}` },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      });
-      clearTimeout(t);
-      if (!res.ok) {
-        if (attempt === 0) continue;
-        return { error: `HTTP ${res.status}: ${(await res.text()).slice(0, 160)}` };
-      }
-      const j = await res.json();
-      return { text: j?.choices?.[0]?.message?.content ?? "", model: j?.model };
-    } catch (e) {
-      if (attempt === 0) continue;
-      return { error: String(e?.message || e) };
-    }
+  });
+}
+
+// Ground truth a recorded note must be faithful to: the human message that woke
+// the agent (the new durable info), else the task body. Faithfulness = the note
+// asserts nothing beyond this.
+function deriveSource(scn) {
+  const c = scn.packet.inbox?.[0];
+  if (c?.messages?.length) {
+    const humans = c.messages.filter((m) => MEMBERS[m.memberId]?.kind === "user");
+    const m = (humans.length ? humans : c.messages).slice(-1)[0];
+    if (m?.bodyMd) return m.bodyMd;
   }
-  return { error: "unreachable" };
+  if (scn.packet.task) return `${scn.packet.task.title}. ${scn.packet.task.bodyMd || ""}`.trim();
+  return "";
 }
 
 function grade(scn, replyText) {
@@ -259,7 +252,7 @@ function grade(scn, replyText) {
   if (Array.isArray(scn.expect.notSilent)) {
     const acted = types.some((t) => scn.expect.notSilent.includes(t));
     if (!acted) { pass = false; reasons.push(`expected one of [${scn.expect.notSilent.join(",")}], got ${isHeartbeat ? "HEARTBEAT_OK" : `[${types.join(",") || "no-actions"}]`}`); }
-    return { pass, types, pn: pn ? { project: pn.project, file: pn.file, mode: pn.mode || "append" } : null, isHeartbeat, reasons };
+    return { pass, types, pn: pn ? { project: pn.project, file: pn.file, mode: pn.mode || "append", note: pn.note } : null, isHeartbeat, reasons };
   }
 
   if (scn.expect.projectNote === true) {
@@ -271,7 +264,7 @@ function grade(scn, replyText) {
   } else if (scn.expect.projectNote === false) {
     if (pn) { pass = false; reasons.push(`unexpected project_note (project="${pn.project}")`); }
   }
-  return { pass, types, pn: pn ? { project: pn.project, file: pn.file, mode: pn.mode || "append" } : null, isHeartbeat, reasons };
+  return { pass, types, pn: pn ? { project: pn.project, file: pn.file, mode: pn.mode || "append", note: pn.note } : null, isHeartbeat, reasons };
 }
 
 async function runPool(items, n, fn) {
@@ -289,7 +282,8 @@ async function runPool(items, n, fn) {
 }
 
 const SAMPLES = Number(process.env.CC_EVAL_SAMPLES || 1);
-console.log(`Eval: project_note behavior · model=${GW_MODEL} · ${SCENARIOS.length} scenarios × ${SAMPLES} sample(s)\n`);
+const JUDGE_FIDELITY = process.env.CC_EVAL_NO_JUDGE !== "1";
+console.log(`Eval: project_note behavior · gen=${GW_MODEL} · judge=${JUDGE_DEFAULTS.model}(${JUDGE_DEFAULTS.polls}p) · ${SCENARIOS.length} scenarios × ${SAMPLES} sample(s)\n`);
 
 // Flatten scenario × sample so all calls parallelize under the pool, then
 // aggregate per scenario — multi-sampling averages out gateway nondeterminism.
@@ -297,16 +291,31 @@ const jobs = SCENARIOS.flatMap((scn) => Array.from({ length: SAMPLES }, () => sc
 const raw = await runPool(jobs, CONCURRENCY, async (scn) => {
   const r = await callGateway(buildPrompt(scn.entry, scn.packet));
   if (r.error) return { scn, error: r.error };
-  return { scn, g: grade(scn, r.text), reply: r.text };
+  const g = grade(scn, r.text);
+  // Dimension 2: if the agent recorded a note where one was expected, judge
+  // whether that note is faithful to what was actually said (isolated judge).
+  let fidelity = null;
+  if (JUDGE_FIDELITY && g.pn?.note && scn.expect.projectNote === true) {
+    const source = deriveSource(scn);
+    if (source) fidelity = await judgeFaithfulness({ source, note: g.pn.note, url: GW_URL, key: GW_KEY });
+  }
+  return { scn, g, fidelity, reply: r.text };
 });
 
-const agg = new Map(SCENARIOS.map((s) => [s.id, { scn: s, passes: 0, n: 0, err: 0, last: null }]));
+const agg = new Map(SCENARIOS.map((s) => [s.id, { scn: s, passes: 0, n: 0, err: 0, last: null, fidJudged: 0, fidFaithful: 0, fabs: [] }]));
 for (const res of raw) {
   const a = agg.get(res.scn.id);
   if (res.error) { a.err++; a.lastErr = res.error; continue; }
   a.n++; if (res.g.pass) a.passes++; a.last = res;
+  if (res.fidelity && res.fidelity.verdict !== "error") {
+    a.fidJudged++;
+    if (res.fidelity.verdict === "faithful") a.fidFaithful++;
+    else a.fabs.push(...(res.fidelity.fabrications || []));
+  }
 }
 
+// ── Dimension 1: did the agent emit project_note correctly? ──
+console.log("DIMENSION 1 — emit behavior (does the agent record when it should, stay quiet when not):");
 let passFrac = 0, scoredScn = 0;
 for (const a of agg.values()) {
   if (a.n === 0) { console.log(`⚠ ERR  ${a.scn.id} — ${a.lastErr}`); continue; }
@@ -319,4 +328,20 @@ for (const a of agg.values()) {
   console.log(`${ok ? "✓" : "✗"} ${a.passes}/${a.n}  ${a.scn.id}`);
   console.log(`        last emitted: ${pnStr}${g?.reasons?.length ? `  ·  ${g.reasons.join("; ")}` : ""}`);
 }
-console.log(`\nSCORE: ${passFrac.toFixed(1)}/${scoredScn} (sample-weighted)  ·  ${scoredScn ? Math.round((100 * passFrac) / scoredScn) : 0}%`);
+console.log(`EMIT SCORE: ${passFrac.toFixed(1)}/${scoredScn} (sample-weighted)  ·  ${scoredScn ? Math.round((100 * passFrac) / scoredScn) : 0}%`);
+
+// ── Dimension 2: are the notes the agent recorded faithful (no fabrication)? ──
+if (JUDGE_FIDELITY) {
+  let judged = 0, faithful = 0;
+  console.log("\nDIMENSION 2 — content fidelity of recorded notes (LLM-judge; lower fabrication = better):");
+  for (const a of agg.values()) {
+    if (!a.fidJudged) continue;
+    judged += a.fidJudged; faithful += a.fidFaithful;
+    const ok = a.fidFaithful === a.fidJudged;
+    console.log(`${ok ? "✓" : "✗"} ${a.fidFaithful}/${a.fidJudged} faithful  ${a.scn.id}`);
+    if (a.fabs.length) console.log(`        fabrications: ${Array.from(new Set(a.fabs)).slice(0, 3).join("; ")}`);
+    if (a.last?.g?.pn?.note) console.log(`        last note: "${String(a.last.g.pn.note).replace(/\s+/g, " ").slice(0, 140)}"`);
+  }
+  const fabRate = judged ? (judged - faithful) / judged : 0;
+  console.log(`FIDELITY: ${faithful}/${judged} notes faithful  ·  fabrication rate ${Math.round(fabRate * 100)}%  ${fabRate === 0 ? "✓ (target 0%)" : "⚠ (target 0% for a durable-fact store)"}`);
+}
