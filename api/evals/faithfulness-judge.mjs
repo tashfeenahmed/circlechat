@@ -10,20 +10,22 @@
 //   • structured JSON output
 //   • ChainPoll-style multi-poll: N polls, score = fraction flagging unfaithful,
 //     flag unfaithful if fraction ≥ threshold (bias toward catching fabrications)
-//   • judge model PINNED to a different family than the generator (avoid
-//     self-preference); never "auto".
+//   • judge model PINNED to a fixed, different family than the generator (avoid
+//     self-preference); default deepseek-ai/deepseek-v4-pro, never "auto".
 //
 // Secrets (gateway key) come from env — never hard-coded.
 
 export const JUDGE_DEFAULTS = {
-  // NOTE: the FreeLLMAPI gateway force-routes via "auto" and DISABLES pinned
-  // model ids, so we cannot pin the judge to a different family than the
-  // generator (the research's self-preference mitigation is unavailable here).
-  // We compensate with the model-agnostic mitigations — CoT + forced source
-  // quoting, binary verdict, multi-poll — and, crucially, the calibration gold
-  // set (faithfulness-calibration.mjs), which proves the judge is trustworthy
-  // regardless of which model "auto" lands on.
-  model: process.env.CC_JUDGE_MODEL || "auto",
+  // Pinned to a fixed, different family than the generator to avoid self-
+  // preference: agents (and the planner) write notes via "auto"/Moonshot, so the
+  // judge is pinned to DeepSeek. The gateway now accepts registry model ids
+  // (earlier it force-routed "auto" and 400'd pinned ids — that constraint is
+  // gone), so the research's self-preference mitigation is back. This exact model
+  // cleared the calibration gold set at κ=1.00 / 100% unfaithful-recall
+  // (faithfulness-calibration.mjs, 2026-06-19) — re-run it before changing this.
+  // We still keep the model-agnostic mitigations (CoT + forced source quoting,
+  // binary verdict, multi-poll) as defense in depth. Override via CC_JUDGE_MODEL.
+  model: process.env.CC_JUDGE_MODEL || "deepseek-ai/deepseek-v4-pro",
   polls: Number(process.env.CC_JUDGE_POLLS || 5),
   temperature: Number(process.env.CC_JUDGE_TEMP || 0.4),
   // Flag unfaithful when at least this fraction of polls say unfaithful. 0.4 with

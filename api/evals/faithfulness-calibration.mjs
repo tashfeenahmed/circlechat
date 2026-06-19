@@ -7,8 +7,10 @@
 // named owner) — then reports accuracy, unfaithful-class precision/recall/F1, and
 // Cohen's κ. Per the research: never trust the judge until it clears the gold set.
 //
-//   CC_GW_URL=… CC_GW_KEY=… CC_JUDGE_MODEL=gemini-2.5-pro CC_JUDGE_POLLS=5 \
+//   CC_GW_URL=… CC_GW_KEY=… CC_JUDGE_MODEL=deepseek-ai/deepseek-v4-pro CC_JUDGE_POLLS=5 \
 //     node api/evals/faithfulness-calibration.mjs
+// (CC_JUDGE_MODEL defaults to the validated cross-family judge; override to bake off
+//  a different one. Last validated 2026-06-19: deepseek-v4-pro → κ=1.00, recall 100%.)
 
 import { judgeFaithfulness, JUDGE_DEFAULTS } from "./faithfulness-judge.mjs";
 
