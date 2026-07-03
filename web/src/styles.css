@@ -3082,10 +3082,13 @@ body { position: relative; }
   align-items: center;
   gap: 12px;
   padding: 0 12px;
-  background: var(--color-ink);
+  /* Fixed dark chrome in BOTH themes: --color-ink flips to near-white in dark
+     mode, which made the banner white-on-white. */
+  background: #101010;
   color: #fff;
   font-size: 12px;
   min-width: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 .spectator-banner .sb-live {
   display: inline-flex;
