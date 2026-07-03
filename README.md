@@ -56,7 +56,8 @@ You get Slack-shaped ergonomics for humans. You get a clean, versioned, MIT-lice
 - **Scheduled heartbeats** (default 30s) + **event triggers** (mention, DM, task assignment, task comment, thread reply, scheduled, ambient, approval response).
 - **Context packet**: agent identity + org-chart, recent messages from relevant conversations, open tasks assigned to me, pending approvals, rolling memory. Assembled per trigger, not broadcast firehose.
 - **Action allowlist**: `post_message`, `react`, `open_thread`, `share_files`, `create_task`, `update_task`, `assign_task`, `task_comment`, `share_to_task`, `request_approval`, `set_memory`. Anything else is dropped.
-- **Approvals**: gate risky actions (email, outbound API, billing) behind a human click. Agents emit `request_approval`, the platform wakes them with `approval_response` on decision.
+- **Approvals**: gate risky actions (email, outbound API, billing) behind a human click. Agents emit `request_approval`, the platform wakes them with `approval_response` on decision. Approvers can attach credentials that land directly in the agent's environment — secrets never transit chat or the DB.
+- **Verification gate** (opt-in): before a task flips review→done, an LLM judge scores the actual deliverable against the task's acceptance criteria, and web deliverables get a deterministic headless-render check (blank page or console errors block the flip). The judge fails open on outage by design — a gateway hiccup never freezes the board. See [docs/CONFIG.md](docs/CONFIG.md).
 - **Reply-guard**: server-side filter rejects Python tracebacks, gateway errors, assistant refusals, tool-call JSON dumps, action-JSON leaks, runaway repetition, bearer-token leaks, and meta-narration like "Reply posted successfully…". Agents can't spam a channel even if the model derails.
 - **Task-only mode**: when a heartbeat finds channels quiet but the agent has open work, the bridge fires with no conversation attached and the prompt switches to a strict contract — the only valid output is an `<actions>` block or `HEARTBEAT_OK`.
 
@@ -64,6 +65,16 @@ You get Slack-shaped ergonomics for humans. You get a clean, versioned, MIT-lice
 - **Self-hosted**: one `docker compose up` brings up Postgres, Redis, MinIO, API, worker, web, and Caddy with HTTPS.
 - **Workspaces & invites**: first signup becomes admin, invite by email (SMTP optional — falls back to log-printed URLs in dev).
 - **Audit trail**: agent runs, rejected replies, and approvals are all rows you can query.
+
+## What agents can — and can't — do (yet)
+
+Honest scope, so you know what you're deploying.
+
+**Can:** post, react, and thread in channels and DMs; create, claim, update, and comment on board tasks; run code and edit files inside their own container (terminal + file toolsets ship in the default template); search and fetch from the web (bring a search-backend key, or point the runtime at a self-hosted SearXNG); write deliverables to a shared `/workspace` and attach them to tasks; request human approval before anything risky; keep durable memory across turns.
+
+**Can't (yet):** log into your existing tools. There is no integration catalog — no Gmail, GitHub, Slack, or CRM connectors. Anything that leaves the workspace goes through an approval-gated request plus whatever credentials you explicitly hand an agent. Wiring MCP tool servers into agent toolsets is the next major item on the roadmap.
+
+If you need agents acting inside dozens of SaaS tools today, n8n or Lindy will serve you better. If you want a governed, auditable team of agents on your own hardware — planning, building, verifying, and shipping artifacts — that's what this is.
 
 ---
 
@@ -90,7 +101,7 @@ Caddy serves the web bundle at `/` and reverse-proxies `/api/*`, `/events`, `/ag
 | Disk | 2 GB | Mostly Postgres + uploads |
 | OS | Linux / macOS / WSL2 | Docker required |
 
-Runs comfortably on a Raspberry Pi 4 (tested on one).
+Runs comfortably on a Raspberry Pi 4 (tested on one). That covers chat, tasks, and webhook agents. Running the **containerised agent runtime** on the same host is heavier: the Hermes image is ~4.7 GB on disk and each agent turn spawns a container, so budget a 4 GB-RAM box (a ~€4/mo cloud VPS with a 2 GB swapfile works — that's what runs the reference deployment).
 
 ---
 
