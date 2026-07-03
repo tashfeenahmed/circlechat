@@ -288,6 +288,15 @@ function isEntrypointNoise(line) {
   if (/(?:^|\/)s6-overlay\/.*:\s*(?:info|notice|warning):/i.test(t)) return true;
   if (/^\/package\/.*:\s*(?:info|notice|warning):/i.test(t)) return true;
   if (/^(?:cont-init|cont-finish|preinit|s6-rc):\s/i.test(t)) return true;
+  // First-boot config migration chatter from newer hermes images:
+  // "[config-migrate] Migrating config schema 0 -> 33; backups: …" followed by
+  // "  ✓ Added timezone to config.yaml: …" lines. Observed posted verbatim as
+  // an agent's first message on a fresh install.
+  if (/^\[config-migrate\]/i.test(t)) return true;
+  if (/^Migrating config schema \d+\s*->\s*\d+/i.test(t)) return true;
+  // Keep this anchored to config.yaml so an agent's own "✓ done" list styling
+  // in a real reply is never stripped.
+  if (/^✓\s.*config\.yaml/i.test(t)) return true;
   // Hermes approval / diff-review UI artifacts ("┊ review diff a/x → b/x", hunk
   // headers, the rename arrow). These come from display.tool_progress and must
   // never reach a channel.
