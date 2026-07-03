@@ -426,6 +426,16 @@ async function findDuplicateApproval(
 
 // Actionable rejection copy for a duplicate/denied approval match. Returned as
 // an executor error so the agent reads WHY it was dropped and what to do.
+// A request_approval whose text quotes an ap_… id is (in every observed case)
+// an agent mistaking a previous approval card's internal id for a credential —
+// "Approve API token ap_i094…" sat pending for 11 days because approving it
+// could never produce a secret. Detect and refuse at emit time with a teaching
+// error, instead of parking a human-unanswerable card. Exported for tests.
+export function approvalIdMisuse(action: string, payload?: Record<string, unknown>): boolean {
+  const hay = `${action || ""} ${payload ? JSON.stringify(payload) : ""}`;
+  return /\bap_[a-z0-9]{12,}\b/i.test(hay);
+}
+
 function duplicateApprovalError(actionType: string, dup: DuplicateApproval, agentId: string): string {
   if (dup.status === "denied") {
     const when = dup.decidedAt ? dup.decidedAt.toISOString().slice(0, 10) : "recently";
@@ -900,6 +910,13 @@ async function applyOne(
       return;
     }
     case "request_approval": {
+      if (approvalIdMisuse(a.action, a.payload)) {
+        out.trace.push(`request_approval → rejected, quotes an ap_… id`);
+        out.errors.push(
+          `request_approval: your request quotes an approval id (ap_…). An approval id is an internal card reference, NOT a credential — approving it can never produce a token or key. If you need a real secret, name the actual external resource and env var (e.g. "MAILCHIMP_API_KEY for the outreach account") without quoting any ap_… id. If a human already approved but attached no secret, the value does not exist yet — set the dependent task to "blocked" instead of re-asking.`,
+        );
+        return;
+      }
       const dup = await findDuplicateApproval(agentId, a.action);
       if (dup) {
         out.trace.push(`request_approval → ${dup.status} duplicate ${dup.id}, skipped`);

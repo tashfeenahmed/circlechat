@@ -64,6 +64,12 @@ function inferType(name: string, ct: string): "code" | "research" | "design" | "
 
 const MAX_DELIVERABLE_CHARS = 16_000;
 
+// In-memory outage streak for the fail-open path — resets on any successful
+// judge verdict. Process-local by design: the goal is a loud log signal, not
+// durable accounting (the task_verifications table already records each error).
+let consecutiveJudgeOutages = 0;
+const JUDGE_OUTAGE_ALERT_AFTER = 3;
+
 // Tier 1 — DETERMINISTIC, fail-CLOSED. Renders a web deliverable in headless
 // Chromium and BLOCKS the done-flip on an unambiguous load failure (the page
 // rendered blank, or threw resource/JS errors), independent of whether the LLM
@@ -206,10 +212,21 @@ export async function verifyTaskForDone(
   const method = obs ? "render" : taskType === "code" ? "test" : "rubric";
   const parsed = VerdictSchema.safeParse(raw);
   if (!parsed.success) {
-    // Fail-open: a judge we can't reach/parse must not freeze the board.
+    // Fail-open: a judge we can't reach/parse must not freeze the board. But
+    // fail-open must not be SILENT either — a broken judge once went unnoticed
+    // for 11 days because every outage just recorded an error row and allowed
+    // the flip. Log loudly, and escalate the log level once outages repeat.
+    consecutiveJudgeOutages++;
+    const msg = `[verifier] judge unreachable/unparseable for task ${opts.taskId} — failing open (${consecutiveJudgeOutages} consecutive outage${consecutiveJudgeOutages === 1 ? "" : "s"})`;
+    if (consecutiveJudgeOutages >= JUDGE_OUTAGE_ALERT_AFTER) {
+      console.error(`${msg}. The verification gate has been effectively OFF for the last ${consecutiveJudgeOutages} flips — check the planner gateway/model.`);
+    } else {
+      console.warn(msg);
+    }
     await record(opts, taskType, chosen.id, "error", null, obs ? { render: obs } : {}, "judge unreachable or unparseable — failing open", method);
     return null;
   }
+  consecutiveJudgeOutages = 0;
   const v: Verdict = parsed.data;
   const pass = v.verdict === "pass" && v.not_fabricated && v.score >= passThreshold();
   await record(opts, taskType, chosen.id, pass ? "pass" : "fail", v.score, obs ? { ...v, render: obs } : v, v.rationale, method);

@@ -97,6 +97,18 @@ describe("checkReplyBody — leak classes observed in production", () => {
     // HEARTBEAT_OK must be caught ANYWHERE, not just at the start.
     { name: "heartbeat bolded mid-reply", body: "**HEARTBEAT_OK** — I've scoped the lists.", reason: "heartbeat_leaked" },
     { name: "heartbeat trailing a warning", body: "Warning: Unknown toolsets: mcp-circlechat\nHEARTBEAT_OK", reason: "heartbeat_leaked" },
+    // The trigger word itself, echoed without the _OK suffix (samantha posted
+    // exactly this into #neu-site twice, 2026-06-27 and 2026-07-03).
+    { name: "bare HEARTBEAT as the whole reply", body: "HEARTBEAT", reason: "heartbeat_leaked" },
+    { name: "bare HEARTBEAT mid-prose", body: "Trigger was HEARTBEAT — nothing to report.", reason: "heartbeat_leaked" },
+    // Plain-prose diff hunk: `+`-glued lines that are neither code nor markdown
+    // shaped, so the code/md diff counters both missed it (phil in #general,
+    // 2026-07-01, complete with an unexpanded $(date -u)).
+    {
+      name: "plain-text + diff dump",
+      body: "+Neu Site Verification\n+====================\n+\n+Timestamp: $(date -u)\n+\n+URL: https://example.com/\n+\n+Console log: initialized successfully!\n+\n+No JavaScript errors detected.\n+\n+Site is live and operational.",
+      reason: "code_diff_leak",
+    },
     // Runtime "no reply / empty content" diagnostics leaking as a message.
     { name: "empty-reply notice", body: "⚠️ No reply: the model returned empty content after retries and any fallback providers. Try `continue`, switch model/provider.", reason: "empty_reply_notice" },
     // New CoT/planning forms.
@@ -118,6 +130,13 @@ describe("checkReplyBody — leak classes observed in production", () => {
     { name: "normal reply", body: "Thanks — I'll review the scroll animations and report back." },
     { name: "one foreign name is not garbage", body: "Met with 王 about the Q3 deal; all good." },
     { name: "legit mention of heartbeat-like word", body: "The heartbeat monitor is green and the deploy looks healthy." },
+    // Sparse +/- lines in normal prose must not read as a diff dump.
+    { name: "a +1 ack", body: "+1" },
+    { name: "phone number line", body: "Reached the vendor:\n+353 1 234 5678\nThey'll confirm pricing tomorrow." },
+    {
+      name: "prose with --- separators",
+      body: "Summary of the audit.\n---\nFindings: two broken links.\n---\nNext: fix and re-verify.\n---\nOwner: me.",
+    },
   ];
   for (const c of pass) {
     it(`allows ${c.name}`, () => {

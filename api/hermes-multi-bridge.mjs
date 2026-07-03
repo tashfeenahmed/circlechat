@@ -617,9 +617,19 @@ function formatApprovalResponse(ar) {
     ? `\nTheir note to you (this is direct guidance — follow it): "${ar.note}"`
     : "";
   const secretNames = Array.isArray(ar.deliveredSecrets) ? ar.deliveredSecrets : [];
+  // An approved credentials request that delivered NO secrets is a trap: the
+  // agent reads "approved" and assumes the token now exists somewhere. Observed
+  // failure: agents latched onto the approval's own ap_… id as if it were the
+  // API token and filed follow-up approvals to "approve the token ap_…",
+  // deadlocking a task for 10 days. Spell out that nothing was delivered.
+  const asksForCredentials = /credential|token|api.?key|secret|password|passphrase|access.?key/i.test(
+    `${ar.scope || ""} ${ar.action || ""}`,
+  );
   const secretsLine = secretNames.length
     ? `\nCREDENTIALS DELIVERED: the human attached ${secretNames.length === 1 ? "a secret" : "secrets"} to this approval, already installed in your environment as env var${secretNames.length === 1 ? "" : "s"}: ${secretNames.join(", ")}. Read ${secretNames.length === 1 ? "it" : "them"} from your shell (e.g. $${secretNames[0]}) and use ${secretNames.length === 1 ? "it" : "them"} for the approved work NOW. NEVER print, echo, or paste the value anywhere — not in chat, not on task cards, not in files under /workspace.`
-    : "";
+    : asksForCredentials && ar.status !== "denied"
+      ? `\n⚠ NO CREDENTIALS WERE DELIVERED: the human approved but attached no secret values, so NOTHING new exists in your environment. The id ${ar.id} is this approval card's internal reference — an ap_… id is NEVER an API key or token; do not use it as one and do not ask anyone to "approve" it. If the work truly needs a real secret value you still don't have it: set the dependent task to "blocked" with ONE comment naming the exact credential needed (e.g. "MAILCHIMP_API_KEY for the outreach account"), or find an approach that needs no credential. Do not re-request approval — the human must EDIT their workflow to attach the secret, and pinging them again in chat won't produce it.`
+      : "";
   if (ar.status === "applied") {
     return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was APPROVED by ${who} and the action has ALREADY BEEN EXECUTED for you.${noteLine}${secretsLine}
 Do NOT re-emit it — that would do it twice. It is done. Move on: take the NEXT step that depended on it, or report the concrete outcome where the work lives (task card if there is one). If nothing remains, reply with exactly "HEARTBEAT_OK".`;

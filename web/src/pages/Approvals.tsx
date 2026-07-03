@@ -8,6 +8,12 @@ import { useQueryClient } from "@tanstack/react-query";
 
 const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
+// Requests that ask for a credential. Approving one of these WITHOUT attaching
+// a secret delivers nothing — the agent reads "approved", finds no value in its
+// environment, and the dependent work stays stuck (observed: a task deadlocked
+// for 10 days this way). Mirror of the bridge-side detector.
+const CREDENTIAL_ASK_RE = /credential|token|api.?key|secret|password|passphrase|access.?key/i;
+
 type SecretRow = { name: string; value: string };
 
 export default function ApprovalsPage() {
@@ -97,6 +103,8 @@ export default function ApprovalsPage() {
             const busy = working === ap.id;
             const secretRows = secrets[ap.id] ?? [];
             const valid = secretsValid(ap.id);
+            const asksForCreds = CREDENTIAL_ASK_RE.test(`${ap.scope} ${ap.action}`);
+            const hasAttachedSecret = secretRows.some((r) => r.name && r.value);
             return (
               <li key={ap.id} className="px-6 py-4 flex gap-4">
                 {ag ? (
@@ -117,6 +125,14 @@ export default function ApprovalsPage() {
                     <span className="tag">{ap.scope}</span>
                   </div>
                   <div className="text-[13px] mt-1">{ap.action}</div>
+                  {asksForCreds && !hasAttachedSecret && (
+                    <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11.5px] text-[var(--color-warn,#b45309)]">
+                      <KeyRound size={12} strokeWidth={2} />
+                      This asks for a credential. Attach the secret below so it lands in the
+                      agent&apos;s environment — approving without one delivers nothing and the
+                      work stays stuck. No credential to give? Deny with a note.
+                    </div>
+                  )}
                   {Object.keys(ap.payloadJson ?? {}).length > 0 && (
                     <pre className="mt-2 bg-[var(--color-bg-2)] border border-[var(--color-hair)] rounded p-2 text-[11.5px] font-mono overflow-auto max-h-40">
 {JSON.stringify(ap.payloadJson, null, 2)}
@@ -191,7 +207,19 @@ export default function ApprovalsPage() {
                 </div>
                 <div className="flex flex-col gap-2 shrink-0">
                   <button
-                    onClick={() => decide(ap.id, "approve")}
+                    onClick={() => {
+                      if (
+                        asksForCreds &&
+                        !hasAttachedSecret &&
+                        !window.confirm(
+                          "This request asks for a credential, but no secret is attached.\n\n" +
+                            "Approving delivers NOTHING to the agent — it still won't have the credential and the dependent work stays stuck.\n\n" +
+                            "Approve anyway? (Cancel to go back and attach the secret, or deny with a note.)",
+                        )
+                      )
+                        return;
+                      decide(ap.id, "approve");
+                    }}
                     disabled={busy || !valid}
                     title={valid ? undefined : "Fix the secret rows: name must be ENV_VAR shaped and value non-empty"}
                     className="btn sm primary inline-flex items-center gap-1"

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateActionShape, type AgentAction } from "../agents/executor.js";
+import { validateActionShape, approvalIdMisuse, type AgentAction } from "../agents/executor.js";
 
 // Schema gate in front of action dispatch: malformed actions become teaching
 // errors fed back to the agent instead of silent no-ops (the old applied:0
@@ -46,5 +46,29 @@ describe("validateActionShape", () => {
     expect(error({ type: "project_note", note: "hi" })).toContain('"project"');
     expect(error({ type: "project_note", project: "neu" })).toContain('"note"');
     expect(valid({ type: "project_note", project: "neu", note: "shipped the homepage" })).toBe(true);
+  });
+});
+
+// Approval-id-as-credential confusion: agents quoting a previous approval
+// card's ap_… id as if it were an API token ("Approve API token ap_i094…").
+// Such a request is human-unanswerable — refuse it at emit time.
+describe("approvalIdMisuse", () => {
+  it("flags an ap_ id quoted in the action text", () => {
+    expect(
+      approvalIdMisuse("Approve API token ap_i094j11rhh8xss2c80wn for executing the outreach batch"),
+    ).toBe(true);
+  });
+  it("flags an ap_ id buried in the payload", () => {
+    expect(approvalIdMisuse("Unblock the outreach task", { token: "ap_kofvm7xkk5oxev36vfid" })).toBe(true);
+  });
+  it("allows a normal credentials request", () => {
+    expect(
+      approvalIdMisuse("Provide API credentials for the outreach platforms so the batch can run", {
+        task_id: "task_3wm20v6hzn8ytrcbht7l",
+      }),
+    ).toBe(false);
+  });
+  it("ignores short ap_ shaped words", () => {
+    expect(approvalIdMisuse("Set up the ap_south region bucket")).toBe(false);
   });
 });

@@ -28,7 +28,25 @@ export interface ChatMessage {
 
 // Call chat/completions and return the assistant's raw text, or null on any
 // failure (unconfigured, network, bad shape). Callers decide how to treat null.
+//
+// A PINNED model (PLANNER_MODEL set to something other than "auto") falls back
+// to "auto" when the pinned call fails. Rationale: the pin exists for judge
+// consistency, but pinned free-tier models get rate-limited for hours at a
+// time, and every consumer of this client fails soft (planner errors out,
+// verifier fails open) — so a dead pin silently disables planning AND
+// verification until someone notices. A drifting judge beats a dormant one.
 export async function chat(
+  messages: ChatMessage[],
+  opts: { temperature?: number; maxTokens?: number; timeoutMs?: number } = {},
+): Promise<string | null> {
+  const first = await chatWithModel(model(), messages, opts);
+  if (first !== null || model() === "auto") return first;
+  console.warn(`[completion] pinned model ${model()} failed — retrying with model=auto`);
+  return chatWithModel("auto", messages, opts);
+}
+
+async function chatWithModel(
+  modelName: string,
   messages: ChatMessage[],
   opts: { temperature?: number; maxTokens?: number; timeoutMs?: number } = {},
 ): Promise<string | null> {
@@ -44,7 +62,7 @@ export async function chat(
         ...(apiKey() ? { Authorization: `Bearer ${apiKey()}` } : {}),
       },
       body: JSON.stringify({
-        model: model(),
+        model: modelName,
         messages,
         temperature: opts.temperature ?? 0.2,
         ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),

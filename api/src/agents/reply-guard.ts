@@ -20,9 +20,11 @@ export type GuardResult =
 // channel. Match it ANYWHERE, not just at the start: observed leaks put it after
 // a runtime warning ("Warning: Unknown toolsets: … /// HEARTBEAT_OK"), bolded
 // mid-reply ("**HEARTBEAT_OK** — I've scoped…"), and trailing a chain-of-thought
-// dump. The token never legitimately appears in organic chat, so an anywhere
-// match has no real false-positive surface.
-const HEARTBEAT_RE = /\bHEARTBEAT_OK\b/;
+// dump. Bare HEARTBEAT (no _OK) is matched too: models echo the trigger word
+// itself as their whole reply (observed twice in #neu-site). Uppercase-only and
+// word-bounded, so prose about "the heartbeat monitor" stays unaffected —
+// the all-caps token never legitimately appears in organic chat.
+const HEARTBEAT_RE = /\bHEARTBEAT(?:_OK)?\b/;
 // Upstream "the model produced nothing" notices that the hermes runtime streams
 // to stdout (not from our code) and the bridge can pick up as a reply, e.g.
 // "⚠️ No reply: the model returned empty content after retries and any fallback
@@ -211,7 +213,17 @@ function looksLikeCodeDiffDump(s: string): boolean {
   ).length;
   const mdDiff = (s.match(/^[+-]\s*(?:#{1,6}\s|\*\*\S|[-*]\s+\S|>\s)/gm) || [])
     .length;
-  return codeDiff >= 3 || mdDiff >= 3;
+  if (codeDiff >= 3 || mdDiff >= 3) return true;
+  // Plain-prose diff: a pasted hunk whose lines are neither code nor markdown
+  // shaped ("+Neu Site Verification", "+Timestamp: $(date -u)", bare "+" spacer
+  // lines — observed from Phil in #general). Count lines that start with the
+  // polarity sign glued to content (or standing alone); require them to be
+  // both numerous AND the bulk of the message so "+1" acks, phone numbers, and
+  // "---" separators sprinkled through normal prose never trip it.
+  const lines = s.split(/\r?\n/);
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  const plainDiff = nonEmpty.filter((l) => /^[+-](?:\S|\s*$)/.test(l)).length;
+  return plainDiff >= 4 && plainDiff >= Math.ceil(nonEmpty.length * 0.6);
 }
 
 function scrubSecrets(s: string): string {
