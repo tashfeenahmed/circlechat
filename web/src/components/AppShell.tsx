@@ -8,7 +8,7 @@ import TopSearch from "./TopSearch";
 import NotificationBell from "./NotificationBell";
 import WorkspaceRail from "./WorkspaceRail";
 import { api } from "../api/client";
-import { useMe, useMembersDirectory } from "../lib/hooks";
+import { useMe, useMembersDirectory, useSpectator } from "../lib/hooks";
 import { useBus } from "../state/store";
 import { useEffect } from "react";
 
@@ -43,9 +43,25 @@ export default function AppShell() {
   }
 
   const meLabel = me.data?.user.handle ? `@${me.data.user.handle}` : "me";
+  const spectator = useSpectator();
 
   return (
-    <div className={`shell ${drawerOpen ? "drawer-open" : ""}`}>
+    <div className={`shell ${spectator ? "spectating" : ""} ${drawerOpen ? "drawer-open" : ""}`}>
+      {spectator && (
+        <div className="spectator-banner">
+          <span className="sb-live">
+            <span className="sb-dot" />
+            LIVE
+          </span>
+          <span className="sb-text">
+            You&apos;re watching a real CircleChat workspace — the agents here are doing actual work.
+          </span>
+          <span className="sb-ctas">
+            <a href="https://github.com/tashfeenahmed/circlechat">Self-host free</a>
+            <a href="https://cloud.circlechat.co">Get your own team →</a>
+          </span>
+        </div>
+      )}
       <div className="shell-topbar">
         <button
           type="button"
@@ -59,29 +75,31 @@ export default function AppShell() {
           Circle
         </Link>
         <TopSearch />
-        <NotificationBell />
-        <Menu
-          title={`Account · ${meLabel}`}
-          align="end"
-          items={[
-            {
-              label: "Members",
-              icon: <Users size={13} strokeWidth={2} />,
-              onSelect: () => nav("/members"),
-            },
-            {
-              label: "Settings",
-              icon: <SettingsIcon size={13} strokeWidth={2} />,
-              onSelect: () => nav("/settings"),
-            },
-            {
-              label: `Sign out (${meLabel})`,
-              icon: <LogOut size={13} strokeWidth={2} />,
-              onSelect: logout,
-              danger: true,
-            },
-          ]}
-        />
+        {!spectator && <NotificationBell />}
+        {!spectator && (
+          <Menu
+            title={`Account · ${meLabel}`}
+            align="end"
+            items={[
+              {
+                label: "Members",
+                icon: <Users size={13} strokeWidth={2} />,
+                onSelect: () => nav("/members"),
+              },
+              {
+                label: "Settings",
+                icon: <SettingsIcon size={13} strokeWidth={2} />,
+                onSelect: () => nav("/settings"),
+              },
+              {
+                label: `Sign out (${meLabel})`,
+                icon: <LogOut size={13} strokeWidth={2} />,
+                onSelect: logout,
+                danger: true,
+              },
+            ]}
+          />
+        )}
       </div>
 
       {me.data && <WorkspaceRail me={me.data} />}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { X, Plus, Trash2, Paperclip, Bold, Italic, Code, ChevronDown, Upload, Maximize2, Minimize2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  useSpectator,
   useTaskDetail,
   useMembersDirectory,
   useMe,
@@ -42,6 +43,7 @@ export default function TaskModal({
   onClose: () => void;
 }) {
   const q = useTaskDetail(taskId);
+  const spectator = useSpectator();
   const me = useMe();
   const qc = useQueryClient();
   const dir = useMembersDirectory();
@@ -429,7 +431,7 @@ export default function TaskModal({
                   size="sm"
                 />
               </div>
-              {!composerOpen ? (
+              {spectator ? null : !composerOpen ? (
                 <button
                   type="button"
                   className="tm-composer-prompt"

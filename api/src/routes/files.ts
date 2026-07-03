@@ -12,7 +12,7 @@ import {
   taskComments,
   tasks,
 } from "../db/schema.js";
-import { requireAuth, requireWorkspace, loadSession } from "../auth/session.js";
+import { requireAuth, requireWorkspace, loadSession, loadSpectatorAuth } from "../auth/session.js";
 import { statObject, streamObject, deleteObject } from "../lib/storage.js";
 import { workspaceMembers } from "../db/schema.js";
 import { artifactByStorageKey } from "../lib/task-artifacts.js";
@@ -66,6 +66,17 @@ async function requireSessionOrAgent(
     const s = await loadSession(sid);
     if (s && s.workspaceId && s.memberId) {
       req.filePrincipal = { kind: "user", memberId: s.memberId, workspaceId: s.workspaceId };
+      return;
+    }
+  }
+  // Spectator fallback (SPECTATOR_MODE), READS ONLY — this principal also
+  // guards mutating file routes, and the shared identity must never reach
+  // those. Visibility checks below still apply: spectators see attachments
+  // only in conversations their member joined.
+  if (req.method === "GET" || req.method === "HEAD") {
+    const spec = await loadSpectatorAuth();
+    if (spec && spec.workspaceId && spec.memberId) {
+      req.filePrincipal = { kind: "user", memberId: spec.memberId, workspaceId: spec.workspaceId };
       return;
     }
   }

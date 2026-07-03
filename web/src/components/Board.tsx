@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Plus, MessageSquare, GitBranch, Link2, Calendar, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useTasks, useMembersDirectory, useMe } from "../lib/hooks";
+import { useTasks, useMembersDirectory, useMe, useSpectator } from "../lib/hooks";
 import { api, type Task, type TaskStatus } from "../api/client";
 import Avatar from "./Avatar";
 import TaskModal from "./TaskModal";
@@ -24,6 +24,7 @@ export default function Board() {
   const q = useTasks();
   const qc = useQueryClient();
   const me = useMe();
+  const spectator = useSpectator();
   const dir = useMembersDirectory();
   // The open task lives in the URL as `/board?task=<id>`, so every task has its
   // own unique, shareable, back-button-friendly address. Opening a card (or a
@@ -170,13 +171,15 @@ export default function Board() {
                 <span className="kh-title">{col.title}</span>
                 <span className="kh-count">{cards.length}</span>
                 <span className="kh-spacer" />
-                <button
-                  className="kh-menu"
-                  onClick={() => setAddingIn(col.id)}
-                  title="Add task"
-                >
-                  +
-                </button>
+                {!spectator && (
+                  <button
+                    className="kh-menu"
+                    onClick={() => setAddingIn(col.id)}
+                    title="Add task"
+                  >
+                    +
+                  </button>
+                )}
               </div>
               <div className="kanban-col-body">
                 {addingIn === col.id && (
@@ -222,8 +225,9 @@ export default function Board() {
                   <div
                     key={c.id}
                     className={`kcard ${dragId === c.id ? "dragging" : ""} ${isFresh ? "fresh" : ""}`}
-                    draggable
+                    draggable={!spectator}
                     onDragStart={() => {
+                      if (spectator) return;
                       dragIdRef.current = c.id;
                       setDragId(c.id);
                     }}
@@ -318,9 +322,11 @@ export default function Board() {
                   </div>
                   );
                 })}
-                <button className="kanban-col-add" onClick={() => setAddingIn(col.id)}>
-                  <Plus size={12} strokeWidth={2} /> add task
-                </button>
+                {!spectator && (
+                  <button className="kanban-col-add" onClick={() => setAddingIn(col.id)}>
+                    <Plus size={12} strokeWidth={2} /> add task
+                  </button>
+                )}
               </div>
             </div>
           );

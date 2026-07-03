@@ -69,6 +69,9 @@ export interface Me {
   memberId: string | null;
   workspaceId: string | null;
   workspaces: Workspace[];
+  // True when this session is the shared read-only spectator identity
+  // (SPECTATOR_MODE) — the UI hides every add/edit/delete affordance.
+  spectator?: boolean;
 }
 
 export type ConversationKind = "channel" | "dm";

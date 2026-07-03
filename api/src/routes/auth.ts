@@ -222,6 +222,9 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       memberId,
       workspaceId,
       workspaces: wsRows,
+      // Set when this request rode the spectator fallback (SPECTATOR_MODE) —
+      // the client uses it to hide every add/edit/delete affordance.
+      ...(req.spectator ? { spectator: true } : {}),
     };
   });
 

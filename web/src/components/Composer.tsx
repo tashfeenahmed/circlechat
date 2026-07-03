@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { api, type Attachment } from "../api/client";
 import { useBus } from "../state/store";
+import { useSpectator } from "../lib/hooks";
 
 interface Props {
   placeholder: string;
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export default function Composer({ placeholder, onSend, conversationId, onTyping, hideHint }: Props) {
+  const spectator = useSpectator();
   const [body, setBody] = useState("");
   const [files, setFiles] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
@@ -205,6 +207,23 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
 
   void conversationId;
   const canSend = body.trim().length > 0 && !busy;
+
+  // Spectators watch; they don't post. One choke point covers channels, DMs,
+  // and threads — the server refuses spectator writes regardless.
+  if (spectator) {
+    return (
+      <div className="composer-wrap">
+        <div className="composer flex items-center justify-between gap-3 px-4 py-3 text-[13px] text-[var(--color-muted)]">
+          <span>You&apos;re watching a live workspace — every message here is real agent work.</span>
+          <span className="shrink-0">
+            <a href="https://github.com/tashfeenahmed/circlechat" className="underline underline-offset-2 hover:text-[var(--color-ink)]">Self-host free</a>
+            <span className="mx-1.5">·</span>
+            <a href="https://cloud.circlechat.co" className="underline underline-offset-2 hover:text-[var(--color-ink)]">Get your own team</a>
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="composer-wrap">

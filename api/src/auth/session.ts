@@ -141,21 +141,76 @@ declare module "fastify" {
       workspaceId: string | null;
       memberId: string | null;
     };
+    // True when this request was authenticated via the spectator fallback —
+    // a shared read-only identity, not a real logged-in user.
+    spectator?: boolean;
   }
 }
 
+// ─────────── spectator mode ───────────
+// SPECTATOR_MODE=on turns the instance into a public fishbowl: anonymous
+// visitors are authenticated as one shared read-only user instead of getting
+// 401s, so the whole app (channels, board, analytics, live events) renders
+// without a login. Server-side the fallback identity may only GET — every
+// mutating verb is refused before any route handler runs, which is what makes
+// this safe regardless of what the UI disables. Real users with a session
+// cookie are untouched, and login/signup stay usable (they don't run
+// requireAuth). Fully dormant unless the env flag is set.
+export function spectatorEnabled(): boolean {
+  return process.env.SPECTATOR_MODE === "on";
+}
+const spectatorEmail = (): string => process.env.SPECTATOR_EMAIL || "spectator@circlechat.local";
+
+// The fallback runs on every anonymous request, so cache the resolved identity
+// briefly rather than hitting the DB three times per page asset.
+let spectatorCache: { auth: NonNullable<FastifyRequest["auth"]>; at: number } | null = null;
+const SPECTATOR_CACHE_MS = 60_000;
+
+export async function loadSpectatorAuth(): Promise<NonNullable<FastifyRequest["auth"]> | null> {
+  if (!spectatorEnabled()) return null;
+  if (spectatorCache && Date.now() - spectatorCache.at < SPECTATOR_CACHE_MS) return spectatorCache.auth;
+  const [u] = await db.select().from(users).where(eq(users.email, spectatorEmail())).limit(1);
+  if (!u) return null; // flag on but no spectator account seeded → behave as off
+  const [wm] = await db
+    .select({ workspaceId: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, u.id))
+    .limit(1);
+  const workspaceId = wm?.workspaceId ?? null;
+  let memberId: string | null = null;
+  if (workspaceId) {
+    const [m] = await db
+      .select({ id: members.id })
+      .from(members)
+      .where(and(eq(members.workspaceId, workspaceId), eq(members.kind, "user"), eq(members.refId, u.id)))
+      .limit(1);
+    memberId = m?.id ?? null;
+  }
+  const auth = { userId: u.id, user: u, workspaceId, memberId };
+  spectatorCache = { auth, at: Date.now() };
+  return auth;
+}
+
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
 export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const sid = req.cookies[COOKIE_NAME];
-  if (!sid) {
-    reply.code(401).send({ error: "unauthenticated" });
+  const s = sid ? await loadSession(sid) : null;
+  if (s) {
+    req.auth = s;
     return;
   }
-  const s = await loadSession(sid);
-  if (!s) {
-    reply.code(401).send({ error: "unauthenticated" });
+  const spec = await loadSpectatorAuth();
+  if (spec) {
+    if (!READ_METHODS.has(req.method)) {
+      reply.code(403).send({ error: "spectator_read_only" });
+      return;
+    }
+    req.auth = spec;
+    req.spectator = true;
     return;
   }
-  req.auth = s;
+  reply.code(401).send({ error: "unauthenticated" });
 }
 
 // Stricter guard: user must be attached to a specific workspace. Use this in

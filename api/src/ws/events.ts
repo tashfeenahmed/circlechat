@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { eq, and, inArray, or, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agentRuns, agents, conversationMembers, presence } from "../db/schema.js";
-import { COOKIE_NAME, loadSession } from "../auth/session.js";
+import { COOKIE_NAME, loadSession, loadSpectatorAuth } from "../auth/session.js";
 import { subscribe, unsubscribeAll } from "./bus.js";
 import { CONV_CHANNEL, WORKSPACE_CHANNEL, USER_CHANNEL, GLOBAL_CHANNEL, publishGlobal } from "../lib/events.js";
 
@@ -34,20 +34,26 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
         on: (ev: string, cb: (...args: unknown[]) => void) => void;
       };
       // Auth: session cookie (parsed by @fastify/cookie earlier in the pipeline).
+      // In spectator mode, anonymous sockets fall back to the shared read-only
+      // identity so visitors get the live feed; their presence is never
+      // written (one member flapping online/offline per pageview is noise).
       const sid = (req as unknown as { cookies: Record<string, string> }).cookies?.[COOKIE_NAME];
-      if (!sid) {
-        socket.close(4401);
-        return;
-      }
-      const s = await loadSession(sid);
+      let s = sid ? await loadSession(sid) : null;
+      let isSpectator = false;
       if (!s || !s.memberId) {
-        // No valid session, or the user has no member identity in any
-        // workspace yet — there's nothing member-scoped to subscribe to.
-        socket.close(4401);
-        return;
+        const spec = await loadSpectatorAuth();
+        if (spec && spec.memberId) {
+          s = spec;
+          isSpectator = true;
+        } else {
+          // No valid session, or the user has no member identity in any
+          // workspace yet — there's nothing member-scoped to subscribe to.
+          socket.close(4401);
+          return;
+        }
       }
 
-      const memberId = s.memberId;
+      const memberId = s.memberId!;
       // Subscribe to per-member channel + all conversation channels.
       const myConvs = await db
         .select({ id: conversationMembers.conversationId })
@@ -154,7 +160,7 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
               .limit(1);
             if (m) await subscribe(socket, CONV_CHANNEL(data.conversationId));
           }
-          if (data.type === "presence") {
+          if (data.type === "presence" && !isSpectator) {
             const status = typeof data.status === "string" ? data.status : "online";
             await writePresence(memberId, status);
             await publishGlobal({
@@ -171,12 +177,16 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
       socket.on("close", async () => {
         clearInterval(ping);
         await unsubscribeAll(socket);
-        await writePresence(memberId, "offline");
-        await publishGlobal({ type: "presence.update", memberId, status: "offline" });
+        if (!isSpectator) {
+          await writePresence(memberId, "offline");
+          await publishGlobal({ type: "presence.update", memberId, status: "offline" });
+        }
       });
 
-      await writePresence(memberId, "online");
-      await publishGlobal({ type: "presence.update", memberId, status: "online" });
+      if (!isSpectator) {
+        await writePresence(memberId, "online");
+        await publishGlobal({ type: "presence.update", memberId, status: "online" });
+      }
     },
   );
 }

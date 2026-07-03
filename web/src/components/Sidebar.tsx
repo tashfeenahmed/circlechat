@@ -1,7 +1,7 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target, BarChart3, MoreHorizontal } from "lucide-react";
-import { useConversations, useMe, useMembersDirectory, useApprovals, useTasks } from "../lib/hooks";
+import { useConversations, useMe, useMembersDirectory, useApprovals, useTasks, useSpectator } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBus } from "../state/store";
@@ -10,6 +10,7 @@ export default function Sidebar() {
   const convs = useConversations();
   const dir = useMembersDirectory();
   const me = useMe();
+  const spectator = useSpectator();
   const approvalsQ = useApprovals();
   const location = useLocation();
   const nav = useNavigate();
@@ -207,13 +208,15 @@ export default function Sidebar() {
       <div className="sb-group">
         <div className="sb-group-head">
           <span>Channels</span>
-          <button
-            className="sbgh-add"
-            title="Create channel"
-            onClick={() => setCreating(true)}
-          >
-            <Plus size={12} strokeWidth={2.2} />
-          </button>
+          {!spectator && (
+            <button
+              className="sbgh-add"
+              title="Create channel"
+              onClick={() => setCreating(true)}
+            >
+              <Plus size={12} strokeWidth={2.2} />
+            </button>
+          )}
         </div>
         {creating && (
           <div className="px-[10px] py-1">

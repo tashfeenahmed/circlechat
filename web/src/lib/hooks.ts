@@ -20,6 +20,13 @@ import {
 import { bus } from "../ws/client";
 import { useBus } from "../state/store";
 
+// True when the viewer is the shared read-only spectator (SPECTATOR_MODE).
+// Components use it to hide composers, buttons, and drag handles — the server
+// independently refuses every mutation from the spectator identity.
+export function useSpectator(): boolean {
+  return useMe().data?.spectator === true;
+}
+
 export function useMe() {
   return useQuery<Me | null>({
     queryKey: ["me"],
