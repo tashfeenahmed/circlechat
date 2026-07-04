@@ -86,6 +86,19 @@ const CURL_BLOCK_RE = /```[^`]*?\bcurl\s+-[^`]{0,500}```/s;
 //   "Provider error (<model>): <provider> API error NNN: …"
 const GATEWAY_ERROR_RE =
   /(?:API call failed after \d+ retries|Provider error \([^)]+\):\s*[A-Za-z]+ API error \d{3})/i;
+// LLM-gateway / provider error strings surfacing on the REPLY path — the
+// GATEWAY_ERROR_RE above only matches the "API call failed after N retries" /
+// "Provider error (…)" shapes. A different shape leaked verbatim as an agent
+// reply (len=109):
+//   "HTTP 400: All routed providers rejected the request as invalid.
+//    Last error: Cohere API error 400: Bad Request"
+// Conservative: an HTTP-status line or a "<Provider> API error NNN" fragment at
+// the very START of the reply (the reply IS the error), or the gateway's
+// "All routed providers" phrase which never appears in organic chat. A reply
+// that merely DISCUSSES an error mid-sentence ("I hit an HTTP 500 on deploy,
+// retrying") isn't anchored to the start and passes.
+const PROVIDER_ERROR_ECHO_RE =
+  /^\s*(?:HTTP\s+\d{3}\s*:|[A-Za-z][\w./-]* API error \d{3}\b)|\bAll routed providers\b/i;
 // Boilerplate assistant refusal phrases. Models sometimes slip into
 // "helpful-assistant" mode and refuse instead of using their tools. None
 // of these phrases appear in organic agent output; they're pure chat-ui
@@ -176,6 +189,21 @@ const VISIBLE_ACTIONS_RE = /<\/?actions>/i;
 // narrow so genuine replies aren't caught.
 const COT_LEAK_RE =
   /^\s*(?:The user (?:wants|is asking|is providing|has provided|just|now)\b|We (?:need|have|should|must) to (?:answer|respond|reply|address|handle|figure)\b|The latest (?:user )?message\b|(?:after|since) (?:the )?(?:big )?context compaction\b|\[CONTEXT COMPACTION|I (?:am|'m) (?:acting as|currently|now acting)\b|I am [A-Z][a-z]+ \(@[a-z0-9_]+\)|Looking at (?:the|my) (?:conversation|recent|message|context|thread|tasks?|board|the board)|Recent [Mm]essages?\s+[Aa]nalysis|(?:The|Recent) (?:messages?|conversation|context)(?: in (?:the|this) channel)? (?:show|shows|indicate)\b|Current (?:Goal|Task|Context)\s*[:`])/;
+// Third-person narration of a tool call / browser transcript posted AS the
+// reply. The live #general filled with these — the model described what a
+// browser/DOM tool returned ("The title of the webpage is …", "The browser
+// snapshot shows …", "The browser console output is empty …", "The page has a
+// heading …"), narrated its own plan in the third person ("The user's goal is
+// to extract …", "Based on the user's response, I will proceed …"), or named a
+// browser_* tool function instead of answering. A genuine work update speaks in
+// the first person about the work ("I've created the file and attached it",
+// "Sharing the showcase brief for review") and never opens by describing a
+// page/browser/tool result — so anchor every phrase to the START and keep the
+// nouns specific (a bare "The browser compatibility looks fine" must still
+// pass). browser_* function names are matched anywhere (they never appear in
+// organic chat).
+const TOOL_NARRATION_RE =
+  /^\s*(?:The user'?s goal is\b|The browser(?:_\w+|\s+(?:snapshot|console|tab|page|window|dom|viewport|history|output|url|title|content))\b|The page has a heading\b|The title of the (?:web ?page|page) is\b|The (?:\w+ )?snapshot shows\b|Based on the user'?s (?:response|answer|reply|message)\b)|\bbrowser_(?:navigate|snapshot|click|type|screenshot|console|tab|select|wait|evaluate|extract|get_text|hover|press|scroll|fill)\b/i;
 // Degenerate "language soup": small models occasionally collapse into output
 // that sprinkles characters from several non-Latin scripts through otherwise
 // Latin text (observed: "…exactery387392ジ Comm Blvd街道1791 Zahy సి 8 …农业农村部
@@ -255,6 +283,10 @@ export function guardRejectHint(reason: string): string {
       return " An action's JSON ended up in your visible reply. Wrap actions in an <actions>[ … ]</actions> block — they are executed from there and stripped from the message, never posted as text.";
     case "cot_leak":
       return " Your reply leaked planning/persona narration (\"The user wants…\", \"We need to answer…\", \"Looking at my tasks…\"). Reply directly in your own voice — don't describe the conversation, the compaction, or announce your role.";
+    case "tool_narration":
+      return " You narrated a tool/browser result or your own plan instead of replying (\"The browser snapshot shows…\", \"The title of the webpage is…\", \"The user's goal is…\"). Say what YOU did or found in your own first-person voice (\"I checked the page — the title is X\") and put any board action in an <actions> block. Don't paste tool transcripts.";
+    case "provider_error_echo":
+      return " A gateway/provider error string leaked into your reply (\"HTTP 400…\", \"All routed providers…\", \"… API error 400\"). That's runtime diagnostics, not a message — never post it. Retry the work; if you're genuinely blocked, say so in plain prose or stay silent with exactly HEARTBEAT_OK.";
     case "garbled_output":
       return " Your reply was garbled (random characters from multiple scripts). That's a model glitch, not a message. Re-read the last message and reply in plain English, or emit only an <actions> block / HEARTBEAT_OK.";
     case "empty_reply_notice":
@@ -294,6 +326,7 @@ export function checkReplyBody(
   if (RUNTIME_BANNER_RE.test(trimmed)) return { ok: false, reason: "runtime_banner_leak" };
   if (META_TAG_FRAGMENT_RE.test(trimmed)) return { ok: false, reason: "meta_tag_fragment" };
   if (GATEWAY_ERROR_RE.test(trimmed)) return { ok: false, reason: "gateway_error_echo" };
+  if (PROVIDER_ERROR_ECHO_RE.test(trimmed)) return { ok: false, reason: "provider_error_echo" };
   if (ASSISTANT_REFUSAL_RE.test(trimmed)) return { ok: false, reason: "assistant_refusal" };
   if (CAPABILITY_FAILURE_RE.test(trimmed)) return { ok: false, reason: "capability_failure" };
   if (CREDENTIAL_BEG_RE.test(trimmed)) return { ok: false, reason: "credential_beg" };
@@ -304,6 +337,7 @@ export function checkReplyBody(
     return { ok: false, reason: "deploy_claim_no_url" };
   }
   if (COT_LEAK_RE.test(trimmed)) return { ok: false, reason: "cot_leak" };
+  if (TOOL_NARRATION_RE.test(trimmed)) return { ok: false, reason: "tool_narration" };
   if (looksLikeGarbledOutput(trimmed)) return { ok: false, reason: "garbled_output" };
   if (API_SCRIPT_RE.test(trimmed)) return { ok: false, reason: "api_script_leak" };
   if (looksLikeCodeDiffDump(trimmed)) return { ok: false, reason: "code_diff_leak" };

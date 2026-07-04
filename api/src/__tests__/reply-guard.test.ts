@@ -149,3 +149,79 @@ describe("checkReplyBody — leak classes observed in production", () => {
     expect(guardRejectHint("empty_reply_notice")).toContain("HEARTBEAT_OK");
   });
 });
+
+describe("checkReplyBody — tool-narration replies", () => {
+  // Verbatim tool-output narration that filled the live #general fishbowl:
+  // the model described what a browser/DOM tool returned, or narrated its own
+  // plan in the third person, instead of replying.
+  const reject: Array<{ name: string; body: string }> = [
+    { name: "title-of-webpage narration", body: 'The title of the webpage is "Example Domain".' },
+    { name: "browser snapshot narration", body: "The browser snapshot shows an empty page with no interactive elements." },
+    {
+      name: "user's-goal + tool-function narration",
+      body: "The user's goal is to extract the content of the webpage at the given URL. The browser_navigate function was used to load it.",
+    },
+    { name: "browser console narration", body: "The browser console output is empty, with no messages or JavaScript errors." },
+    { name: "page-heading narration", body: 'The page has a heading "Example Domains" and a paragraph of body copy.' },
+    { name: "based-on-user's-response narration", body: "Based on the user's response, I will proceed with the assumption that the copy is approved." },
+    { name: "bare browser_ function name", body: "browser_click(selector=\"#submit\") returned no error." },
+  ];
+  for (const c of reject) {
+    it(`rejects ${c.name}`, () => {
+      const r = checkReplyBody(c.body);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toBe("tool_narration");
+    });
+  }
+
+  // Legitimate first-person work updates must pass — these were the exact
+  // examples flagged as false-positive risks.
+  const pass: Array<{ name: string; body: string }> = [
+    { name: "sharing a brief", body: "Sharing showcase brief for review." },
+    { name: "created + attached a file", body: "I've created a simple HTML file for the showcase page and attached it to the task." },
+    { name: "browser compatibility is not narration", body: "The browser compatibility looks fine across Chrome and Safari." },
+    { name: "prose about a page title", body: "The title of the page needs updating — I'll shorten it." },
+  ];
+  for (const c of pass) {
+    it(`allows ${c.name}`, () => {
+      expect(checkReplyBody(c.body).ok).toBe(true);
+    });
+  }
+
+  it("has a teaching hint", () => {
+    expect(guardRejectHint("tool_narration")).toContain("first-person");
+  });
+});
+
+describe("checkReplyBody — provider/gateway error echoes on the reply path", () => {
+  const reject: Array<{ name: string; body: string }> = [
+    // The exact string that leaked verbatim as an agent reply (len=109).
+    {
+      name: "HTTP 400 all-routed-providers (live leak)",
+      body: "HTTP 400: All routed providers rejected the request as invalid. Last error: Cohere API error 400: Bad Request",
+    },
+    { name: "bare HTTP status line", body: "HTTP 502: Bad Gateway" },
+    { name: "provider API error at start", body: "OpenAI API error 429: rate limit exceeded" },
+  ];
+  for (const c of reject) {
+    it(`rejects ${c.name}`, () => {
+      const r = checkReplyBody(c.body);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toBe("provider_error_echo");
+    });
+  }
+
+  const pass: Array<{ name: string; body: string }> = [
+    { name: "discussing an HTTP error mid-sentence", body: "I hit an HTTP 500 on deploy, retrying with a smaller payload now." },
+    { name: "mentioning an API error in prose", body: "Heads up: the vendor returned an API error 503 earlier, but it recovered." },
+  ];
+  for (const c of pass) {
+    it(`allows ${c.name}`, () => {
+      expect(checkReplyBody(c.body).ok).toBe(true);
+    });
+  }
+
+  it("has a teaching hint", () => {
+    expect(guardRejectHint("provider_error_echo")).toContain("HEARTBEAT_OK");
+  });
+});
