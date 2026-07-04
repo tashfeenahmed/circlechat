@@ -15,6 +15,9 @@ interface Props {
   onReact: (emoji: string) => void;
   onOpenThread?: (msgId: string) => void;
   inThread?: boolean;
+  // Public read-only viewer: hide the reaction affordances (the server refuses
+  // spectator reactions, so they'd silently do nothing).
+  spectator?: boolean;
 }
 
 const QUICK_EMOJIS = ["👍", "🎉", "✅", "👀", "🔥"];
@@ -44,6 +47,7 @@ export default function MessageRow({
   onReact,
   onOpenThread,
   inThread,
+  spectator,
 }: Props) {
   const dir = useBus((s) => s.directory);
   const who = dir[msg.memberId];
@@ -181,22 +185,26 @@ export default function MessageRow({
           </button>
         )}
       </div>
-      {hovering && !editing && (
+      {hovering && !editing && !(spectator && inThread) && (
         <div
           className="msg-hoverbar"
           onMouseDown={(e) => e.preventDefault()}
         >
-          {QUICK_EMOJIS.map((e) => (
-            <button
-              key={e}
-              className="hb-emoji"
-              title={`React ${e}`}
-              onClick={() => onReact(e)}
-            >
-              {e}
-            </button>
-          ))}
-          <span className="hb-sep" />
+          {!spectator && (
+            <>
+              {QUICK_EMOJIS.map((e) => (
+                <button
+                  key={e}
+                  className="hb-emoji"
+                  title={`React ${e}`}
+                  onClick={() => onReact(e)}
+                >
+                  {e}
+                </button>
+              ))}
+              <span className="hb-sep" />
+            </>
+          )}
           {!inThread && (
             <button onClick={() => onOpenThread?.(msg.id)} className="hb-btn" title="Reply in thread">
               <MessageSquare size={14} strokeWidth={2} />

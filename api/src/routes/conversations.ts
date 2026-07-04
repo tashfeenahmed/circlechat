@@ -490,7 +490,11 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
       .where(and(eq(members.kind, "agent"), eq(members.workspaceId, workspaceId!)))
       .orderBy(desc(agents.createdAt));
 
-    return { humans: u, agents: a };
+    // Email addresses are PII: the shared public read-only spectator identity
+    // must never see them. Null the field before it leaves the server so no
+    // amount of client tampering can reveal a member's email on the fishbowl.
+    const humans = req.spectator ? u.map((h) => ({ ...h, email: null })) : u;
+    return { humans, agents: a };
   });
 
   // Presence snapshot for every member of the current workspace. Reads the

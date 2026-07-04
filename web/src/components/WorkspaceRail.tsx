@@ -3,6 +3,7 @@ import { Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, type Me } from "../api/client";
 import { humanizeError } from "../api/errors";
+import { useSpectator } from "../lib/hooks";
 import Modal from "./Modal";
 
 interface Props {
@@ -11,6 +12,7 @@ interface Props {
 
 export default function WorkspaceRail({ me }: Props) {
   const qc = useQueryClient();
+  const spectator = useSpectator();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -59,14 +61,16 @@ export default function WorkspaceRail({ me }: Props) {
             </button>
           );
         })}
-        <button
-          type="button"
-          onClick={() => setCreating(true)}
-          className="ws-alt"
-          title="Create a new workspace"
-        >
-          <Plus size={14} strokeWidth={2.2} />
-        </button>
+        {!spectator && (
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="ws-alt"
+            title="Create a new workspace"
+          >
+            <Plus size={14} strokeWidth={2.2} />
+          </button>
+        )}
       </div>
 
       {creating && (

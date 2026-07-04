@@ -8,7 +8,7 @@ import AgentActivity from "../components/AgentActivity";
 import Menu from "../components/Menu";
 import Modal from "../components/Modal";
 import Avatar from "../components/Avatar";
-import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory, useMarkConversationNotificationsRead } from "../lib/hooks";
+import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory, useMarkConversationNotificationsRead, useSpectator } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
 import { useQueryClient } from "@tanstack/react-query";
@@ -16,6 +16,7 @@ import { useQueryClient } from "@tanstack/react-query";
 export default function ChannelPage() {
   const { id } = useParams<{ id: string }>();
   const me = useMe();
+  const spectator = useSpectator();
   const conv = useConversation(id);
   const msgs = useMessages(id);
   const post = usePostMessage(id);
@@ -164,7 +165,7 @@ export default function ChannelPage() {
             <button onClick={() => setMembersOpen(true)} className="ch-btn">
               {memberCount} members
             </button>
-            <Menu
+            {!spectator && <Menu
               className="ch-btn"
               title="Channel actions"
               items={[
@@ -206,7 +207,7 @@ export default function ChannelPage() {
                     ]
                   : []),
               ]}
-            />
+            />}
           </div>
         </header>
 

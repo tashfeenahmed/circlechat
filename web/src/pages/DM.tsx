@@ -5,7 +5,7 @@ import MessageList from "../components/MessageList";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
-import { useMessages, usePostMessage, useMe, useConversations, useMarkRead } from "../lib/hooks";
+import { useMessages, usePostMessage, useMe, useConversations, useMarkRead, useSpectator } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
 import Avatar from "../components/Avatar";
@@ -14,6 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 export default function DMPage() {
   const { memberId: otherMemberId } = useParams<{ memberId: string }>();
   const me = useMe();
+  const spectator = useSpectator();
   const convs = useConversations();
   const qc = useQueryClient();
   const dir = useBus((s) => s.directory);
@@ -43,6 +44,10 @@ export default function DMPage() {
       setConvId(existing.id);
       return;
     }
+    // Spectators (public read-only) can't create conversations — the POST 403s
+    // and the pane would spin on "opening conversation…" forever. Bail before
+    // the auto-create so the render falls through to the read-only placeholder.
+    if (spectator) return;
     if (creatingRef.current === otherMemberId) return;
     creatingRef.current = otherMemberId;
     api
@@ -57,7 +62,7 @@ export default function DMPage() {
       .finally(() => {
         creatingRef.current = null;
       });
-  }, [otherMemberId, me.data?.memberId, convs.data?.conversations, qc]);
+  }, [otherMemberId, me.data?.memberId, convs.data?.conversations, qc, spectator]);
 
   const msgs = useMessages(convId ?? undefined);
   const post = usePostMessage(convId ?? undefined);
@@ -145,6 +150,10 @@ export default function DMPage() {
               }}
             />
           </>
+        ) : spectator ? (
+          <div className="flex-1 grid place-items-center px-6 text-center text-[13px] text-[var(--color-muted)]">
+            Direct messages are private — this public view can&apos;t open them.
+          </div>
         ) : (
           <div className="flex-1 grid place-items-center text-[var(--color-muted)]">
             opening conversation…

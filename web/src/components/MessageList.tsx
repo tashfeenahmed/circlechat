@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Message } from "../api/client";
 import MessageRow from "./MessageRow";
 import { api } from "../api/client";
+import { useSpectator } from "../lib/hooks";
 
 interface Props {
   messages: Message[];
@@ -26,6 +27,7 @@ export default function MessageList({
   isLoadingOlder,
 }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const spectator = useSpectator();
   const visible = messages.filter((m) => !m.deletedAt);
 
   const virtualizer = useVirtualizer({
@@ -143,6 +145,7 @@ export default function MessageList({
                 onReact={(e) => react(m.id, e)}
                 onOpenThread={onOpenThread}
                 inThread={inThread}
+                spectator={spectator}
               />
             </div>
           );

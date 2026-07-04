@@ -11,7 +11,7 @@ import {
   Mail,
   ExternalLink,
 } from "lucide-react";
-import { useMembersDirectory, useConversations, useMe } from "../lib/hooks";
+import { useMembersDirectory, useConversations, useMe, useSpectator } from "../lib/hooks";
 import { api } from "../api/client";
 import { humanizeError } from "../api/errors";
 import Avatar from "../components/Avatar";
@@ -25,6 +25,7 @@ export default function MembersPage() {
   const dir = useMembersDirectory();
   const convs = useConversations();
   const me = useMe();
+  const spectator = useSpectator();
   const [tab, setTab] = useState<Tab>("humans");
   const [q, setQ] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -64,14 +65,16 @@ export default function MembersPage() {
         <div className="ch-meta">
           <span>{(dir.data?.humans ?? []).length} people · {(dir.data?.agents ?? []).length} agents</span>
         </div>
-        <div className="ch-right">
-          <button onClick={() => setInviteOpen(true)} className="btn sm inline-flex items-center gap-1">
-            <UserPlus size={13} strokeWidth={2} /> Invite teammate
-          </button>
-          <button onClick={() => setAgentOpen(true)} className="btn primary sm inline-flex items-center gap-1">
-            <Bot size={13} strokeWidth={2} /> Add agent
-          </button>
-        </div>
+        {!spectator && (
+          <div className="ch-right">
+            <button onClick={() => setInviteOpen(true)} className="btn sm inline-flex items-center gap-1">
+              <UserPlus size={13} strokeWidth={2} /> Invite teammate
+            </button>
+            <button onClick={() => setAgentOpen(true)} className="btn primary sm inline-flex items-center gap-1">
+              <Bot size={13} strokeWidth={2} /> Add agent
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="px-6 pt-3 pb-2 flex items-center gap-3 border-b border-[var(--color-hair)]">
@@ -143,9 +146,11 @@ export default function MembersPage() {
                       {isMe && <span className="text-[10px] font-mono uppercase tracking-wide text-[var(--color-muted)]">you</span>}
                       <span className="text-[12px] font-mono text-[var(--color-muted)]">@{hh.handle}</span>
                     </div>
-                    <div className="text-[12px] text-[var(--color-muted)] inline-flex items-center gap-1.5 mt-0.5">
-                      <Mail size={11} strokeWidth={2} /> {hh.email}
-                    </div>
+                    {!spectator && (
+                      <div className="text-[12px] text-[var(--color-muted)] inline-flex items-center gap-1.5 mt-0.5">
+                        <Mail size={11} strokeWidth={2} /> {hh.email}
+                      </div>
+                    )}
                   </div>
                   {!isMe && (
                     <button

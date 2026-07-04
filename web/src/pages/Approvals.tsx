@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Check, X, ShieldAlert, KeyRound, Plus, Trash2 } from "lucide-react";
-import { useApprovals, useAgents } from "../lib/hooks";
+import { useApprovals, useAgents, useSpectator } from "../lib/hooks";
 import { api } from "../api/client";
 import Avatar from "../components/Avatar";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,6 +19,7 @@ type SecretRow = { name: string; value: string };
 export default function ApprovalsPage() {
   const approvalsQ = useApprovals();
   const agentsQ = useAgents();
+  const spectator = useSpectator();
   const qc = useQueryClient();
   const [working, setWorking] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -125,7 +126,7 @@ export default function ApprovalsPage() {
                     <span className="tag">{ap.scope}</span>
                   </div>
                   <div className="text-[13px] mt-1">{ap.action}</div>
-                  {asksForCreds && !hasAttachedSecret && (
+                  {!spectator && asksForCreds && !hasAttachedSecret && (
                     <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11.5px] text-[var(--color-warn,#b45309)]">
                       <KeyRound size={12} strokeWidth={2} />
                       This asks for a credential. Attach the secret below so it lands in the
@@ -133,7 +134,9 @@ export default function ApprovalsPage() {
                       work stays stuck. No credential to give? Deny with a note.
                     </div>
                   )}
-                  {Object.keys(ap.payloadJson ?? {}).length > 0 && (
+                  {/* The raw payload can carry request specifics that aren't for a
+                      public audience — only the workspace's own reviewers see it. */}
+                  {!spectator && Object.keys(ap.payloadJson ?? {}).length > 0 && (
                     <pre className="mt-2 bg-[var(--color-bg-2)] border border-[var(--color-hair)] rounded p-2 text-[11.5px] font-mono overflow-auto max-h-40">
 {JSON.stringify(ap.payloadJson, null, 2)}
                     </pre>
@@ -141,6 +144,8 @@ export default function ApprovalsPage() {
                   <div className="text-[11.5px] text-[var(--color-muted-2)] mt-2 font-mono">
                     requested {new Date(ap.createdAt).toLocaleString()}
                   </div>
+                  {!spectator && (
+                    <>
                   <input
                     type="text"
                     value={notes[ap.id] ?? ""}
@@ -204,7 +209,10 @@ export default function ApprovalsPage() {
                       </button>
                     )}
                   </div>
+                    </>
+                  )}
                 </div>
+                {!spectator && (
                 <div className="flex flex-col gap-2 shrink-0">
                   <button
                     onClick={() => {
@@ -234,6 +242,7 @@ export default function ApprovalsPage() {
                     <X size={13} strokeWidth={2} /> Deny
                   </button>
                 </div>
+                )}
               </li>
             );
           })}

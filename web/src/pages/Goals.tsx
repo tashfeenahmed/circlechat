@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Target, Plus, Wand2, ChevronRight, ChevronDown, FolderKanban } from "lucide-react";
 import { api, type Goal, type Task, type PlanResult } from "../api/client";
 import { humanizeError } from "../api/errors";
-import { useGoals, useTasks, useMembersDirectory } from "../lib/hooks";
+import { useGoals, useTasks, useMembersDirectory, useSpectator } from "../lib/hooks";
 import Segmented from "../components/Segmented";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -27,6 +27,7 @@ export default function GoalsPage() {
   const goalsQ = useGoals();
   const tasksQ = useTasks();
   const dir = useMembersDirectory();
+  const spectator = useSpectator();
   const nav = useNavigate();
 
   const [adding, setAdding] = useState(false);
@@ -121,14 +122,16 @@ export default function GoalsPage() {
         <div className="ch-meta">
           <span>{active.length} active</span>
         </div>
-        <div className="ch-right">
-          <button
-            className="btn sm primary btn-scale inline-flex items-center gap-1"
-            onClick={() => setAdding((v) => !v)}
-          >
-            <Plus size={14} /> New goal
-          </button>
-        </div>
+        {!spectator && (
+          <div className="ch-right">
+            <button
+              className="btn sm primary btn-scale inline-flex items-center gap-1"
+              onClick={() => setAdding((v) => !v)}
+            >
+              <Plus size={14} /> New goal
+            </button>
+          </div>
+        )}
       </header>
 
       {toast && (
@@ -232,7 +235,7 @@ export default function GoalsPage() {
             // In an auto workspace the planner runs itself — no button. We only
             // show a manual control when planning is OFF, or to retry a goal the
             // planner gave up on.
-            const showPlanBtn = unplanned && (!autoPlan || failed);
+            const showPlanBtn = !spectator && unplanned && (!autoPlan || failed);
             const isProject = g.kind === "project";
             const parent = g.parentGoalId ? goals.find((p) => p.id === g.parentGoalId) : null;
             return (

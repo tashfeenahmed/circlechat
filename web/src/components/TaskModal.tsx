@@ -299,31 +299,39 @@ export default function TaskModal({
 
         <div className="task-modal-body tm-split">
           <div className="tm-main">
-            <input
-              className="tm-title"
-              value={titleDraft}
-              onChange={(e) => {
-                titleTouched.current = true;
-                setTitleDraft(e.target.value);
-              }}
-              onBlur={saveTitle}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              }}
-            />
-            <textarea
-              className="tm-body"
-              placeholder="Add a description…"
-              rows={3}
-              value={bodyDraft}
-              onChange={(e) => {
-                bodyTouched.current = true;
-                setBodyDraft(e.target.value);
-              }}
-              onBlur={saveBody}
-            />
+            {spectator ? (
+              <div className="tm-title">{t.title}</div>
+            ) : (
+              <input
+                className="tm-title"
+                value={titleDraft}
+                onChange={(e) => {
+                  titleTouched.current = true;
+                  setTitleDraft(e.target.value);
+                }}
+                onBlur={saveTitle}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                }}
+              />
+            )}
+            {spectator ? (
+              t.bodyMd ? <div className="tm-body whitespace-pre-wrap">{t.bodyMd}</div> : null
+            ) : (
+              <textarea
+                className="tm-body"
+                placeholder="Add a description…"
+                rows={3}
+                value={bodyDraft}
+                onChange={(e) => {
+                  bodyTouched.current = true;
+                  setBodyDraft(e.target.value);
+                }}
+                onBlur={saveBody}
+              />
+            )}
 
-            <DeliverablesSection taskId={taskId} />
+            <DeliverablesSection taskId={taskId} readOnly={spectator} />
 
             <section className="tm-section">
               <div className="tm-section-head">
@@ -340,23 +348,26 @@ export default function TaskModal({
                     <input
                       type="checkbox"
                       checked={s.status === "done"}
+                      disabled={spectator}
                       onChange={() => toggleSubStatus(s)}
                     />
                     <span className={s.status === "done" ? "tm-sub-done" : ""}>{s.title}</span>
                   </li>
                 ))}
               </ul>
-              <div className="tm-sub-add">
-                <input
-                  value={subDraft}
-                  onChange={(e) => setSubDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") createSubtask();
-                  }}
-                  placeholder="+ subtask"
-                  className="tm-sub-input"
-                />
-              </div>
+              {!spectator && (
+                <div className="tm-sub-add">
+                  <input
+                    value={subDraft}
+                    onChange={(e) => setSubDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") createSubtask();
+                    }}
+                    placeholder="+ subtask"
+                    className="tm-sub-input"
+                  />
+                </div>
+              )}
             </section>
 
             <section className="tm-section">
@@ -540,6 +551,12 @@ export default function TaskModal({
             <div className="tm-rail-field">
               <div className="tm-rail-label">Status</div>
               <div className="tm-rail-status-wrap">
+                {spectator ? (
+                  <span className={`tm-rail-status s-${t.status}`}>
+                    <span className="tm-status-dot" />
+                    <span>{STATUS_LABELS[t.status]}</span>
+                  </span>
+                ) : (
                 <Popover.Root open={statusMenuOpen} onOpenChange={setStatusMenuOpen}>
                   <Popover.Trigger className={`tm-rail-status s-${t.status}`}>
                     <span className="tm-status-dot" />
@@ -569,6 +586,7 @@ export default function TaskModal({
                     </Popover.Positioner>
                   </Popover.Portal>
                 </Popover.Root>
+                )}
               </div>
             </div>
 
@@ -586,16 +604,19 @@ export default function TaskModal({
                         size="sm"
                       />
                       <span className="tm-chip-label">{m?.handle ?? mid.slice(0, 8)}</span>
-                      <button
-                        className="tm-chip-x"
-                        onClick={() => removeAssignee(mid)}
-                        title="Unassign"
-                      >
-                        <X size={10} />
-                      </button>
+                      {!spectator && (
+                        <button
+                          className="tm-chip-x"
+                          onClick={() => removeAssignee(mid)}
+                          title="Unassign"
+                        >
+                          <X size={10} />
+                        </button>
+                      )}
                     </span>
                   );
                 })}
+                {!spectator && (
                 <Popover.Root open={assignPickerOpen} onOpenChange={setAssignPickerOpen}>
                   <Popover.Trigger className="tm-add-chip">
                     <Plus size={11} /> add
@@ -638,6 +659,7 @@ export default function TaskModal({
                     </Popover.Positioner>
                   </Popover.Portal>
                 </Popover.Root>
+                )}
               </div>
             </div>
 
@@ -647,48 +669,66 @@ export default function TaskModal({
                 {(t.labels ?? []).map((l) => (
                   <span key={l} className="kc-label">
                     {l}
-                    <button className="tm-chip-x" onClick={() => removeLabel(l)}>
-                      <X size={10} />
-                    </button>
+                    {!spectator && (
+                      <button className="tm-chip-x" onClick={() => removeLabel(l)}>
+                        <X size={10} />
+                      </button>
+                    )}
                   </span>
                 ))}
-                <input
-                  value={labelDraft}
-                  onChange={(e) => setLabelDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") addLabel();
-                  }}
-                  placeholder="+ label"
-                  className="tm-label-input"
-                />
+                {!spectator && (
+                  <input
+                    value={labelDraft}
+                    onChange={(e) => setLabelDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addLabel();
+                    }}
+                    placeholder="+ label"
+                    className="tm-label-input"
+                  />
+                )}
               </div>
             </div>
 
             <div className="tm-rail-field">
               <div className="tm-rail-label">Due date</div>
-              <input
-                type="date"
-                value={t.dueAt ? t.dueAt.slice(0, 10) : ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  patchTask({ dueAt: v ? new Date(v).toISOString() : null } as Partial<Task>);
-                }}
-                className="tm-date"
-              />
+              {spectator ? (
+                <div className="mono text-[11px] text-[var(--color-muted)]">
+                  {t.dueAt
+                    ? new Date(t.dueAt).toLocaleDateString(undefined, {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                      })
+                    : "—"}
+                </div>
+              ) : (
+                <input
+                  type="date"
+                  value={t.dueAt ? t.dueAt.slice(0, 10) : ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    patchTask({ dueAt: v ? new Date(v).toISOString() : null } as Partial<Task>);
+                  }}
+                  className="tm-date"
+                />
+              )}
             </div>
 
             <div className="tm-rail-field">
               <div className="tm-rail-label">Progress</div>
               <div className="tm-rail-progress">
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={t.progress}
-                  onChange={(e) => patchTask({ progress: Number(e.target.value) })}
-                  className="tm-slider"
-                />
+                {!spectator && (
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={t.progress}
+                    onChange={(e) => patchTask({ progress: Number(e.target.value) })}
+                    className="tm-slider"
+                  />
+                )}
                 <span className="tm-rail-progress-num">{t.progress}%</span>
               </div>
             </div>
@@ -706,27 +746,31 @@ export default function TaskModal({
                       <span className="tm-link-title">
                         {l.linked?.title ?? l.linkedTaskId}
                       </span>
-                      <button className="tm-chip-x" onClick={() => removeLink(l.id)}>
-                        <X size={10} />
-                      </button>
+                      {!spectator && (
+                        <button className="tm-chip-x" onClick={() => removeLink(l.id)}>
+                          <X size={10} />
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
               )}
-              <div className="tm-link-add">
-                <input
-                  value={linkDraft}
-                  onChange={(e) => setLinkDraft(e.target.value)}
-                  placeholder="task_id to link"
-                  className="tm-sub-input"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") addLink();
-                  }}
-                />
-                <button className="btn xs" onClick={addLink} disabled={!linkDraft.trim()}>
-                  Link
-                </button>
-              </div>
+              {!spectator && (
+                <div className="tm-link-add">
+                  <input
+                    value={linkDraft}
+                    onChange={(e) => setLinkDraft(e.target.value)}
+                    placeholder="task_id to link"
+                    className="tm-sub-input"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addLink();
+                    }}
+                  />
+                  <button className="btn xs" onClick={addLink} disabled={!linkDraft.trim()}>
+                    Link
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="tm-rail-field tm-rail-meta">
@@ -738,9 +782,11 @@ export default function TaskModal({
                   day: "numeric",
                 })}
               </div>
-              <button className="tm-delete-btn" onClick={deleteTask} title="Delete task">
-                <Trash2 size={13} strokeWidth={2} /> Delete task
-              </button>
+              {!spectator && (
+                <button className="tm-delete-btn" onClick={deleteTask} title="Delete task">
+                  <Trash2 size={13} strokeWidth={2} /> Delete task
+                </button>
+              )}
             </div>
           </aside>
         </div>
@@ -753,7 +799,7 @@ export default function TaskModal({
 // comments. Drag-drop or pick a file to upload; download via the file-serve
 // route (object-auth'd); delete your own (or any, if you're an admin → server
 // gates).
-function DeliverablesSection({ taskId }: { taskId: string }) {
+function DeliverablesSection({ taskId, readOnly }: { taskId: string; readOnly?: boolean }) {
   const q = useTaskArtifacts(taskId);
   const upload = useUploadTaskArtifact(taskId);
   const del = useDeleteTaskArtifact(taskId);
@@ -780,34 +826,40 @@ function DeliverablesSection({ taskId }: { taskId: string }) {
         <span className="tm-section-title">Deliverables</span>
         {artifacts.length > 0 && <span className="tm-section-count">{artifacts.length}</span>}
         <span className="tm-head-spacer" style={{ flex: 1 }} />
-        <button
-          type="button"
-          className="btn xs"
-          onClick={() => fileRef.current?.click()}
-          disabled={upload.isPending}
-        >
-          <Upload size={11} /> {upload.isPending ? "Uploading…" : "Upload"}
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          style={{ display: "none" }}
-          onChange={(e) => {
-            if (e.target.files?.length) uploadFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
+        {!readOnly && (
+          <>
+            <button
+              type="button"
+              className="btn xs"
+              onClick={() => fileRef.current?.click()}
+              disabled={upload.isPending}
+            >
+              <Upload size={11} /> {upload.isPending ? "Uploading…" : "Upload"}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => {
+                if (e.target.files?.length) uploadFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </>
+        )}
       </div>
 
       <div
         className={`tm-deliverables-drop ${dragOver ? "over" : ""}`}
         onDragOver={(e) => {
+          if (readOnly) return;
           e.preventDefault();
           setDragOver(true);
         }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
+          if (readOnly) return;
           e.preventDefault();
           setDragOver(false);
           if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files);
@@ -815,7 +867,9 @@ function DeliverablesSection({ taskId }: { taskId: string }) {
       >
         {artifacts.length === 0 ? (
           <div className="tm-rail-empty">
-            No deliverables yet. Drop a file here or use Upload — agents land theirs here too.
+            {readOnly
+              ? "No deliverables yet."
+              : "No deliverables yet. Drop a file here or use Upload — agents land theirs here too."}
           </div>
         ) : (
           <ul className="tm-deliverable-list">

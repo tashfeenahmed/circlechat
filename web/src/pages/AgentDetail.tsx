@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { FlaskConical, HeartPulse, Pause, Play, Download } from "lucide-react";
-import { useAgent } from "../lib/hooks";
+import { useAgent, useSpectator } from "../lib/hooks";
 import { api, type AgentRun } from "../api/client";
 import Avatar from "../components/Avatar";
 import { useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 export default function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data, isLoading } = useAgent(id);
+  const spectator = useSpectator();
   const nav = useNavigate();
   const qc = useQueryClient();
   const [pending, setPending] = useState<string | null>(null);
@@ -102,6 +103,8 @@ export default function AgentDetailPage() {
             </div>
           </div>
           <div className="agent-toolbar">
+            {!spectator && (
+              <>
             <button
               onClick={runTest}
               disabled={!!pending}
@@ -134,6 +137,8 @@ export default function AgentDetailPage() {
                 </>
               )}
             </button>
+              </>
+            )}
             <button
               onClick={exportYaml}
               title="Download this agent's definition as reviewable YAML (agent-as-code)"
@@ -180,6 +185,7 @@ export default function AgentDetailPage() {
               agentId={agent.id}
               currentSec={agent.heartbeatIntervalSec}
               onSaved={refresh}
+              readOnly={spectator}
             />
           </section>
           <section>
@@ -189,6 +195,7 @@ export default function AgentDetailPage() {
               currentUsd={agent.budgetUsdMonth}
               pausedForBudget={agent.status === "paused" && agent.pauseReason === "budget"}
               onSaved={refresh}
+              readOnly={spectator}
             />
           </section>
         </div>
@@ -212,18 +219,22 @@ export default function AgentDetailPage() {
                     <div className="text-[12px] font-mono text-[var(--color-muted)]">{a.scope}</div>
                     <div className="text-[14px]">{a.action}</div>
                   </div>
-                  <button
-                    onClick={() => decide(a.id, "deny")}
-                    className="text-[12px] border border-[var(--color-hair-2)] rounded px-2 py-1"
-                  >
-                    Deny
-                  </button>
-                  <button
-                    onClick={() => decide(a.id, "approve")}
-                    className="text-[12px] bg-[var(--color-ink)] text-paper rounded px-2 py-1"
-                  >
-                    Approve
-                  </button>
+                  {!spectator && (
+                    <>
+                      <button
+                        onClick={() => decide(a.id, "deny")}
+                        className="text-[12px] border border-[var(--color-hair-2)] rounded px-2 py-1"
+                      >
+                        Deny
+                      </button>
+                      <button
+                        onClick={() => decide(a.id, "approve")}
+                        className="text-[12px] bg-[var(--color-ink)] text-paper rounded px-2 py-1"
+                      >
+                        Approve
+                      </button>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -331,11 +342,13 @@ function BudgetControl({
   currentUsd,
   pausedForBudget,
   onSaved,
+  readOnly,
 }: {
   agentId: string;
   currentUsd: number | null;
   pausedForBudget: boolean;
   onSaved: () => void;
+  readOnly?: boolean;
 }) {
   const [value, setValue] = useState<string>(currentUsd != null ? String(currentUsd) : "");
   const [busy, setBusy] = useState(false);
@@ -358,6 +371,15 @@ function BudgetControl({
     } finally {
       setBusy(false);
     }
+  }
+
+  // Public read-only viewer: show the configured cap, no editable input.
+  if (readOnly) {
+    return (
+      <div className="mt-1 text-[13px] text-[var(--color-muted)]">
+        {currentUsd != null ? `$${currentUsd} / month` : "Unlimited"}
+      </div>
+    );
   }
 
   const unchanged = (value.trim() === "" ? null : Number(value.trim())) === currentUsd;
@@ -398,10 +420,12 @@ function HeartbeatControl({
   agentId,
   currentSec,
   onSaved,
+  readOnly,
 }: {
   agentId: string;
   currentSec: number;
   onSaved: () => void;
+  readOnly?: boolean;
 }) {
   const matchedPreset = PRESETS.find((p) => p.sec === currentSec);
   const [mode, setMode] = useState<string>(matchedPreset ? String(matchedPreset.sec) : "custom");
@@ -424,6 +448,15 @@ function HeartbeatControl({
     } finally {
       setBusy(false);
     }
+  }
+
+  // Public read-only viewer: show the configured cadence, no editable picker.
+  if (readOnly) {
+    return (
+      <div className="mt-1 text-[13px] text-[var(--color-muted)]">
+        {matchedPreset?.label ?? `${currentSec}s`}
+      </div>
+    );
   }
 
   return (

@@ -6,10 +6,12 @@ import { useBus } from "../state/store";
 import { api } from "../api/client";
 import Avatar from "./Avatar";
 import { usePaneResize } from "../lib/usePaneResize";
+import { useSpectator } from "../lib/hooks";
 import { AssignDialog, type OrgNode } from "../pages/Org";
 
 export default function MemberDetailsPanel() {
   const memberId = useBus((s) => s.detailsMemberId);
+  const spectator = useSpectator();
   const close = useBus((s) => s.closeDetails);
   const dir = useBus((s) => s.directory);
   const presence = useBus((s) => s.presence);
@@ -98,7 +100,7 @@ export default function MemberDetailsPanel() {
         </div>
 
         <dl className="details-kv">
-          {email && (
+          {email && !spectator && (
             <>
               <dt>Email</dt>
               <dd className="truncate">{email}</dd>
