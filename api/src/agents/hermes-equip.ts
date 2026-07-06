@@ -10,6 +10,7 @@ import {
   buildHermesCommand,
   mcpScriptPathForRegistration,
 } from "./hermes-runtime.js";
+import { composioEnabled } from "../lib/composio.js";
 
 const HERMES_HOMES_DIR = process.env.HERMES_HOMES_DIR ?? homedir();
 const BRIDGE_CONFIG_PATH =
@@ -48,6 +49,10 @@ const BROWSER_SKILL_TEMPLATE_DIR =
 const MCP_SCRIPT =
   process.env.CC_MCP_SCRIPT ??
   pathResolve(process.cwd(), "scripts/circlechat-mcp.mjs");
+// The Composio MCP stdio shim (dep-free; proxies to /agent-api/composio + /act).
+const COMPOSIO_MCP_SCRIPT =
+  process.env.CC_COMPOSIO_MCP_SCRIPT ??
+  pathResolve(process.cwd(), "scripts/composio-mcp.mjs");
 
 // What CircleChat's MCP server knows the API base as. Hermes only passes argv
 // strings, not env, to stdio servers — so we bake this in.
@@ -188,6 +193,44 @@ export async function installCircleChatTooling(params: {
     void mcpScriptForRegistration;
     void botToken;
     void CC_API_BASE;
+  }
+
+  // Composio MCP — the user's connected SaaS tools. Registered whenever Composio
+  // is configured server-side (COMPOSIO_API_KEY set). Unlike the circlechat MCP
+  // (whose writes have an <actions> fallback), MCP is the ONLY path to Composio
+  // tools, so it's on by default when enabled; opt out with CC_COMPOSIO_MCP=off.
+  if (composioEnabled() && process.env.CC_COMPOSIO_MCP !== "off") {
+    try {
+      let composioScriptForRegistration = COMPOSIO_MCP_SCRIPT;
+      if (HERMES_RUNTIME === "docker") {
+        // Stage the shim inside HERMES_HOME so the containerised hermes can spawn
+        // it (same trick as the circlechat shim above).
+        const staged = join(hermesHome, basename(COMPOSIO_MCP_SCRIPT));
+        await fs.copyFile(COMPOSIO_MCP_SCRIPT, staged);
+        composioScriptForRegistration = mcpScriptPathForRegistration(hermesHome, COMPOSIO_MCP_SCRIPT);
+      }
+      const configPath = join(hermesHome, "config.yaml");
+      const raw = await fs.readFile(configPath, "utf8");
+      const cfg = (parseYaml(raw) as Record<string, unknown>) ?? {};
+      cfg.mcp_servers = {
+        ...((cfg.mcp_servers as Record<string, unknown>) ?? {}),
+        composio: {
+          command: "node",
+          args: [composioScriptForRegistration, botToken, CC_API_BASE],
+          enabled: true,
+          timeout: 120,
+        },
+      };
+      const pt = (cfg.platform_toolsets as Record<string, string[]>) ?? {};
+      const cli = Array.isArray(pt.cli) ? pt.cli : ["hermes-cli"];
+      if (!cli.includes("mcp-composio")) cli.push("mcp-composio");
+      pt.cli = cli;
+      cfg.platform_toolsets = pt;
+      await fs.writeFile(configPath, stringifyYaml(cfg));
+      notes.push("registered composio MCP (connected SaaS tools)");
+    } catch (e) {
+      notes.push(`composio mcp registration failed: ${(e as Error).message.slice(0, 200)}`);
+    }
   }
 
   return { skillInstalled, mcpRegistered, notes };

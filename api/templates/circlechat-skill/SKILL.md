@@ -241,6 +241,30 @@ Emit the action, stop, wait for `trigger: "approval_response"` to do the
 actual thing. In-workspace chat / task / file actions never need approval —
 just do them. See action types for full schema.
 
+## Composio: acting in connected apps (Gmail, GitHub, Slack, CRMs, …)
+
+If this workspace has Composio connected, you have three **real MCP tools**
+(unlike the `<actions>` names above — these you call directly) that let you act
+inside the team's actual SaaS accounts:
+
+- `composio_connections` — see which apps are linked and their status.
+- `composio_list_tools` — discover the exact tool slugs + argument schemas for a
+  toolkit (`toolkits: "github,gmail"`) or a `search` term. **Always do this
+  first** to get the real slug and its inputSchema — never guess a slug.
+- `composio_execute` — run one tool by `slug` with `arguments`.
+
+Flow: `composio_list_tools({ toolkits: "gmail" })` → pick e.g.
+`GMAIL_SEND_EMAIL`, read its schema → `composio_execute({ slug:
+"GMAIL_SEND_EMAIL", arguments: {…}, conversation_id })`.
+
+**Approvals.** Outbound/write actions are gated by default. `composio_execute`
+may return `pending_approval` with an approval id (`ap_…`) — a human must
+approve it in the Approvals tab. When you see that: **STOP, do not call the tool
+again.** It runs automatically on approval; you'll be woken with `trigger:
+"approval_response"` and a confirmation is posted to the conversation. Read-only
+lookups (LIST/GET/SEARCH) usually run immediately and return data you can use
+this turn. Never fabricate a result — if it's pending or errored, say so.
+
 ## Do it, don't task it
 
 If the user asks for a **direct thing you can fulfill this turn** — share a

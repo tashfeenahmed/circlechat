@@ -41,6 +41,9 @@ services:
       CC_SKILL_TEMPLATE: ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/templates/circlechat-skill
       CC_BROWSER_SKILL_TEMPLATE: ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/templates/browser-skill
       CC_MCP_SCRIPT: ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/scripts/circlechat-mcp.mjs
+      # The Composio MCP shim staged into each agent when COMPOSIO_API_KEY is set.
+      # Lives in the same (already-mounted) scripts dir as circlechat-mcp.mjs.
+      CC_COMPOSIO_MCP_SCRIPT: ${CC_REPO_HOST_DIR:-/opt/circlechat}/api/scripts/composio-mcp.mjs
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HERMES_HOMES_DIR:-/opt/hermes-homes}:${HERMES_HOMES_DIR:-/opt/hermes-homes}

@@ -3,10 +3,14 @@ import { promises as fs } from "node:fs";
 import { join, resolve as pathResolve, basename } from "node:path";
 import { buildOpenClawCommand, CONTAINER_OPENCLAW_HOME } from "./openclaw-runtime.js";
 import { skillHasDescription } from "./hermes-equip.js";
+import { composioEnabled } from "../lib/composio.js";
 
 const MCP_SCRIPT =
   process.env.CC_MCP_SCRIPT ??
   pathResolve(process.cwd(), "scripts/circlechat-mcp.mjs");
+const COMPOSIO_MCP_SCRIPT =
+  process.env.CC_COMPOSIO_MCP_SCRIPT ??
+  pathResolve(process.cwd(), "scripts/composio-mcp.mjs");
 const CC_API_BASE = process.env.CC_API_BASE ?? "http://localhost:3300/api";
 const SKILL_TEMPLATE_DIR =
   process.env.CC_SKILL_TEMPLATE ??
@@ -108,6 +112,32 @@ export async function equipOpenClawAgent(params: {
     mcpRegistered = true;
   } catch (e) {
     notes.push(`mcp set failed: ${(e as Error).message.slice(0, 200)}`);
+  }
+
+  // Composio MCP — register the connected-SaaS-tools shim when Composio is
+  // configured server-side. Opt out with CC_COMPOSIO_MCP=off.
+  if (composioEnabled() && process.env.CC_COMPOSIO_MCP !== "off") {
+    try {
+      const composioName = basename(COMPOSIO_MCP_SCRIPT);
+      await fs.copyFile(COMPOSIO_MCP_SCRIPT, join(openclawHome, composioName));
+      const composioMcpJson = JSON.stringify({
+        command: "node",
+        args: [`${CONTAINER_OPENCLAW_HOME}/${composioName}`, botToken, CC_API_BASE],
+      });
+      const cmd = buildOpenClawCommand(openclawHome, ["mcp", "set", "composio", composioMcpJson]);
+      await new Promise<void>((resolve, reject) => {
+        const p = spawn(cmd.cmd, cmd.args, { env: cmd.env, timeout: 60_000 });
+        let err = "";
+        p.stderr.on("data", (d) => (err += d));
+        p.on("error", reject);
+        p.on("close", (code) =>
+          code === 0 ? resolve() : reject(new Error(`openclaw mcp set composio exit ${code}: ${err.slice(0, 200)}`)),
+        );
+      });
+      notes.push("registered composio MCP (connected SaaS tools)");
+    } catch (e) {
+      notes.push(`composio mcp set failed: ${(e as Error).message.slice(0, 200)}`);
+    }
   }
 
   return { mcpRegistered, skillInstalled, notes };

@@ -1,0 +1,16 @@
+{
+  "name": "circlechat-composio-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference CircleChat webhook agent whose tools are the user's Composio connections, driven by Claude.",
+  "scripts": {
+    "start": "node agent.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@composio/anthropic": "^0.10.0",
+    "@composio/core": "^0.13.1",
+    "zod": "^3.25.0"
+  }
+}
