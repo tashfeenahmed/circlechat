@@ -35,6 +35,14 @@ import { checkReplyBody, guardRejectHint } from "../agents/reply-guard.js";
 import { checkRecentDuplicate } from "../agents/dedupe.js";
 import { sanitizeAttachments, applyActions, type AgentAction } from "../agents/executor.js";
 import {
+  composioEnabled,
+  composioUserId,
+  composioApprovalPolicy,
+  composioConfiguredToolkits,
+  listComposioTools,
+  listComposioConnections,
+} from "../lib/composio.js";
+import {
   STATUSES,
   listTasks,
   getTaskDetail,
@@ -239,6 +247,9 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       applied: outcome.actionsApplied,
       errors: outcome.errors,
       trace: outcome.trace,
+      // Present only when a composio_execute ran in this batch — carries the
+      // tool's output so the MCP shim can hand it back to the model mid-turn.
+      ...(outcome.composioResults ? { composioResults: outcome.composioResults } : {}),
     };
   });
 
@@ -1007,6 +1018,41 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       .parse((req.query as Record<string, unknown>) ?? {});
     const hits = await recallKnowledge(req.agentCtx!.workspaceId, q.q, q.k ?? 5);
     return { hits };
+  });
+
+  // ───── Composio: the user's connected SaaS tools ─────
+  // DISCOVERY only (read-only). Execution goes through the gated /agent-api/act
+  // (composio_execute action) so every outbound call inherits scope/risk/approval
+  // — the Composio SDK + API key live server-side and never reach the agent.
+  // Both endpoints degrade to { enabled:false } when COMPOSIO_API_KEY is unset.
+  app.get("/agent-api/composio/status", async () => {
+    if (!composioEnabled()) return { enabled: false };
+    const connections = await listComposioConnections().catch(() => []);
+    return {
+      enabled: true,
+      userId: composioUserId(),
+      approval: composioApprovalPolicy(),
+      toolkits: composioConfiguredToolkits(),
+      connections,
+    };
+  });
+
+  // GET /agent-api/composio/tools?toolkits=github,gmail&search=issue&limit=50
+  // Returns MCP-ready tool defs ({ name=slug, description, inputSchema }) for the
+  // agent to discover what it can call, then pass a chosen slug to composio_execute.
+  app.get("/agent-api/composio/tools", async (req) => {
+    if (!composioEnabled()) return { enabled: false, tools: [] };
+    const q = req.query as { toolkits?: string; search?: string; limit?: string };
+    const toolkits = (q.toolkits ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const tools = await listComposioTools({
+      toolkits: toolkits.length ? toolkits : undefined,
+      search: q.search?.trim() || undefined,
+      limit: q.limit ? Number(q.limit) : undefined,
+    });
+    return { enabled: true, tools };
   });
 
   // Browser proxy: shell out to the host's `agent-browser` CLI so agents can

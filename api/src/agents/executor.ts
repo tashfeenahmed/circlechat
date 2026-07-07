@@ -43,6 +43,7 @@ import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
 import { notifyForMessage } from "../lib/notifications.js";
 import { writeProjectFile } from "../lib/project-files.js";
+import { executeComposioTool, composioNeedsApproval } from "../lib/composio.js";
 
 export interface AgentAttachment {
   key: string;
@@ -173,12 +174,35 @@ export type AgentAction =
       mode?: "append" | "replace";
       summary?: string;
       triggers?: string[];
+    }
+  // Execute a tool from the user's Composio connections (Gmail, GitHub, Slack,
+  // CRMs, …). The Composio SDK + API key live server-side (lib/composio.ts); the
+  // agent only names a `slug` + `arguments` it discovered via composio_list_tools.
+  // Gated by COMPOSIO_APPROVAL (approval-gated by default) and audit-logged like
+  // every other action.
+  | {
+      type: "composio_execute";
+      slug: string;
+      arguments?: Record<string, unknown>;
+      conversation_id?: string;
+      task_id?: string;
     };
+
+// Result of a composio_execute action, surfaced back to the caller (the MCP
+// shim → the model) so a tool's output is available mid-turn. Not persisted.
+export interface ComposioActionResult {
+  slug: string;
+  ok: boolean;
+  data?: Record<string, unknown>;
+  error?: string | null;
+}
 
 export interface ExecOutcome {
   actionsApplied: number;
   errors: string[];
   trace: string[];
+  // Populated only when the batch contained composio_execute action(s).
+  composioResults?: ComposioActionResult[];
 }
 
 // Executor-performed actions that are safe to AUTO-REPLAY when their gated
@@ -205,6 +229,9 @@ const AUTO_REPLAYABLE = new Set([
   "memory_append",
   "memory_rethink",
   "project_note",
+  // Approved outbound Composio calls replay server-side from their stored
+  // payload — the human authorized exactly this slug + arguments.
+  "composio_execute",
 ]);
 
 export interface ApprovedReplayResult {
@@ -357,6 +384,23 @@ function describeForApproval(a: AgentAction): { action: string; conversationId: 
       return { action: `${a.type} on ${a.task_id}`, conversationId: null, payload: { ...a } };
     case "project_note":
       return { action: `project_note ${a.project}/${a.file ?? "log.md"}`, conversationId: null, payload: { ...a } };
+    case "composio_execute": {
+      // Include a truncated argument preview so (a) the human sees exactly what
+      // the tool will do in the approvals UI, and (b) two distinct calls to the
+      // same slug aren't collapsed by the trigram approval-dedupe.
+      let argHint = "";
+      try {
+        const s = JSON.stringify(a.arguments ?? {});
+        argHint = s.length > 140 ? `${s.slice(0, 140)}…` : s;
+      } catch {
+        argHint = "";
+      }
+      return {
+        action: `composio_execute ${a.slug} ${argHint}`.trim(),
+        conversationId: a.conversation_id ?? null,
+        payload: { ...a },
+      };
+    }
     default:
       return { action: a.type, conversationId: null, payload: {} };
   }
@@ -506,6 +550,7 @@ const REQUIRED_STRING_FIELDS: Record<string, string[]> = {
   share_files: ["conversation_id"],
   share_to_task: ["task_id"],
   project_note: ["project", "note"],
+  composio_execute: ["slug"],
 };
 
 export function validateActionShape(a: AgentAction): string | null {
@@ -618,9 +663,18 @@ export async function applyActions(params: {
       // the approvals UI. The payload is preserved for replay-on-approval.
       const outOfScope = enforce && !actionAllowedByScopes(a.type, scopes);
       const riskGated = riskGate && actionGatedByRisk(a.type);
-      if (outOfScope || riskGated) {
+      // Composio has its own gate (COMPOSIO_APPROVAL), independent of the global
+      // scope/risk flags: an outbound call to a connected SaaS tool is gated by
+      // default so a human sees "send this email / create this issue" first.
+      const composioGated =
+        a.type === "composio_execute" && composioNeedsApproval((a as { slug: string }).slug);
+      if (outOfScope || riskGated || composioGated) {
         const d = describeForApproval(a);
-        const reason = outOfScope ? (ACTION_SCOPE[a.type] ?? a.type) : `risk:${ACTION_RISK[a.type] ?? "low"}`;
+        const reason = composioGated
+          ? `composio:${(a as { slug: string }).slug}`
+          : outOfScope
+            ? (ACTION_SCOPE[a.type] ?? a.type)
+            : `risk:${ACTION_RISK[a.type] ?? "low"}`;
         // A matching APPROVED approval is a one-shot pass: the human already
         // said yes to exactly this action, so execute it now and consume the
         // approval (status → applied) so it can't authorize a second replay.
@@ -675,7 +729,11 @@ export async function applyActions(params: {
             conversationId: d.conversationId,
           });
         }
-        const why = outOfScope ? `requires scope "${reason}"` : `is ${reason} and needs approval`;
+        const why = composioGated
+          ? `is a Composio tool call and needs approval before it runs`
+          : outOfScope
+            ? `requires scope "${reason}"`
+            : `is ${reason} and needs approval`;
         out.trace.push(`gated ${a.type} → approval ${apId} (${why})`);
         out.errors.push(`${a.type} ${why} — opened approval ${apId}`);
         continue;
@@ -991,6 +1049,52 @@ async function applyOne(
     case "call_tool": {
       // The platform doesn't execute tools — the agent runtime does. We just record it.
       out.trace.push(`tool ${a.name}`);
+      return;
+    }
+    case "composio_execute": {
+      // Run the tool via the server-side Composio SDK (lib/composio.ts). The gate
+      // in applyActions already decided this call is allowed to run now (either
+      // COMPOSIO_APPROVAL let it through, or a human approved it and this is the
+      // replay). Failures come back as {successful:false, error} — surface them
+      // to the model rather than throwing.
+      let result;
+      try {
+        result = await executeComposioTool(a.slug, a.arguments ?? {});
+      } catch (e) {
+        const msg = (e as Error).message;
+        out.trace.push(`composio_execute ${a.slug} → error: ${msg}`);
+        out.errors.push(`composio_execute ${a.slug}: ${msg}`);
+        (out.composioResults ??= []).push({ slug: a.slug, ok: false, error: msg });
+        return;
+      }
+      (out.composioResults ??= []).push({
+        slug: a.slug,
+        ok: result.successful,
+        data: result.data,
+        error: result.error,
+      });
+      out.trace.push(
+        `composio_execute ${a.slug} → ${result.successful ? "ok" : `failed: ${result.error}`}`,
+      );
+      if (!result.successful) {
+        out.errors.push(`composio_execute ${a.slug} failed: ${result.error ?? "unknown_error"}`);
+      }
+      // Approval-replay runs server-side with no synchronous caller to receive
+      // the result, so post a concise confirmation into the originating
+      // conversation (the agent is also woken with an approval_response trigger).
+      // Non-fatal: the agent may not be a member of the conversation.
+      if (runId === "approval-replay" && a.conversation_id) {
+        const summary = result.successful
+          ? `✅ Approved Composio action ran: \`${a.slug}\`.`
+          : `⚠️ Approved Composio action \`${a.slug}\` failed: ${result.error ?? "unknown error"}.`;
+        await applyOne(
+          agentId,
+          runId,
+          agentMemberId,
+          { type: "post_message", conversation_id: a.conversation_id, body_md: summary } as AgentAction,
+          out,
+        ).catch((e) => out.trace.push(`composio replay post failed: ${(e as Error).message}`));
+      }
       return;
     }
     case "run_code": {

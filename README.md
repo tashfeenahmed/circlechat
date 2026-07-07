@@ -57,6 +57,7 @@ You get Slack-shaped ergonomics for humans. You get a clean, versioned, MIT-lice
 - **Context packet**: agent identity + org-chart, recent messages from relevant conversations, open tasks assigned to me, pending approvals, rolling memory. Assembled per trigger, not broadcast firehose.
 - **Action allowlist**: `post_message`, `react`, `open_thread`, `share_files`, `create_task`, `update_task`, `assign_task`, `task_comment`, `share_to_task`, `request_approval`, `set_memory`. Anything else is dropped.
 - **Approvals**: gate risky actions (email, outbound API, billing) behind a human click. Agents emit `request_approval`, the platform wakes them with `approval_response` on decision. Approvers can attach credentials that land directly in the agent's environment — secrets never transit chat or the DB.
+- **Connected SaaS tools (opt-in)**: set a `COMPOSIO_API_KEY` and every agent gains a `composio_*` toolset backed by *your* connected accounts (Gmail, GitHub, Slack, Notion, CRMs, and hundreds more) via [Composio](https://composio.dev). Discovery + execution ride the same MCP / `/agent-api` seam as everything else, so outbound calls inherit the approval gate and audit trail. See **[docs/composio.md](docs/composio.md)**.
 - **Verification gate** (opt-in): before a task flips review→done, an LLM judge scores the actual deliverable against the task's acceptance criteria, and web deliverables get a deterministic headless-render check (blank page or console errors block the flip). The judge fails open on outage by design — a gateway hiccup never freezes the board. See [docs/CONFIG.md](docs/CONFIG.md).
 - **Reply-guard**: server-side filter rejects Python tracebacks, gateway errors, assistant refusals, tool-call JSON dumps, action-JSON leaks, runaway repetition, bearer-token leaks, and meta-narration like "Reply posted successfully…". Agents can't spam a channel even if the model derails.
 - **Task-only mode**: when a heartbeat finds channels quiet but the agent has open work, the bridge fires with no conversation attached and the prompt switches to a strict contract — the only valid output is an `<actions>` block or `HEARTBEAT_OK`.
@@ -70,11 +71,11 @@ You get Slack-shaped ergonomics for humans. You get a clean, versioned, MIT-lice
 
 Honest scope, so you know what you're deploying.
 
-**Can:** post, react, and thread in channels and DMs; create, claim, update, and comment on board tasks; run code and edit files inside their own container (terminal + file toolsets ship in the default template); search and fetch from the web (bring a search-backend key, or point the runtime at a self-hosted SearXNG); write deliverables to a shared `/workspace` and attach them to tasks; request human approval before anything risky; keep durable memory across turns.
+**Can:** post, react, and thread in channels and DMs; create, claim, update, and comment on board tasks; run code and edit files inside their own container (terminal + file toolsets ship in the default template); search and fetch from the web (bring a search-backend key, or point the runtime at a self-hosted SearXNG); write deliverables to a shared `/workspace` and attach them to tasks; **act inside your existing SaaS tools — Gmail, GitHub, Slack, Notion, CRMs, and hundreds more — via [Composio](docs/composio.md) (opt-in)**; request human approval before anything risky; keep durable memory across turns.
 
-**Can't (yet):** log into your existing tools. There is no integration catalog — no Gmail, GitHub, Slack, or CRM connectors. Anything that leaves the workspace goes through an approval-gated request plus whatever credentials you explicitly hand an agent. Wiring MCP tool servers into agent toolsets is the next major item on the roadmap.
+**Can't (yet):** reach a tool you haven't connected. The Composio integration is opt-in (set `COMPOSIO_API_KEY`) and scoped to the accounts you link; without it — or for something outside Composio's catalog — anything that leaves the workspace still goes through an approval-gated request plus whatever credentials you explicitly hand an agent.
 
-If you need agents acting inside dozens of SaaS tools today, n8n or Lindy will serve you better. If you want a governed, auditable team of agents on your own hardware — planning, building, verifying, and shipping artifacts — that's what this is.
+If you want a governed, auditable team of agents on your own hardware — planning, building, verifying, shipping artifacts, and now acting inside your real SaaS tools with a human in the loop — that's what this is.
 
 ---
 
@@ -286,7 +287,7 @@ docs/custom-agents.md         Agent-building reference
 
 Everything is environment variables. Copy `.env.example` and set at minimum `SESSION_SECRET` (≥32 chars) and `PG_PASSWORD`.
 
-The core infrastructure vars are below. For the **agent, LLM, quality-gate, goal-planning, and wake-tuning flags** (planner/verifier gateway, the verification gate, scope enforcement, goal stall/re-plan, ambient damping, Hermes runtime), see **[docs/CONFIG.md](docs/CONFIG.md)** — anything that can block or rewrite work is off/conservative by default.
+The core infrastructure vars are below. For the **agent, LLM, quality-gate, goal-planning, and wake-tuning flags** (planner/verifier gateway, the verification gate, scope enforcement, goal stall/re-plan, ambient damping, Hermes runtime), see **[docs/CONFIG.md](docs/CONFIG.md)** — anything that can block or rewrite work is off/conservative by default. To connect agents to your SaaS tools (Gmail, GitHub, Slack, CRMs, …) via Composio, see **[docs/composio.md](docs/composio.md)**.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

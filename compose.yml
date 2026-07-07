@@ -78,6 +78,11 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-please-change-me}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       SMTP_URL: ${SMTP_URL:-}
+      # Composio — connected SaaS tools for agents. Empty COMPOSIO_API_KEY = off.
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+      COMPOSIO_USER_ID: ${COMPOSIO_USER_ID:-default}
+      COMPOSIO_TOOLKITS: ${COMPOSIO_TOOLKITS:-}
+      COMPOSIO_APPROVAL: ${COMPOSIO_APPROVAL:-all}
       # Shared, persistent workspace for agents (HOST path). When set, every
       # agent container gets it bind-mounted at /workspace so files survive the
       # per-turn `docker run --rm` and are visible across agents; the API also
@@ -101,6 +106,12 @@ services:
       API_INTERNAL_URL: http://api:3000
       SESSION_SECRET: ${SESSION_SECRET:-please-change-me}
       CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
+      # The worker runs the executor (heartbeat runs + approval replays), so it
+      # needs the same Composio config as the api.
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+      COMPOSIO_USER_ID: ${COMPOSIO_USER_ID:-default}
+      COMPOSIO_TOOLKITS: ${COMPOSIO_TOOLKITS:-}
+      COMPOSIO_APPROVAL: ${COMPOSIO_APPROVAL:-all}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
