@@ -9,6 +9,8 @@ import {
   taskActivity,
   members,
   goals,
+  boardStages,
+  taskVerifications,
 } from "../db/schema.js";
 import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
@@ -18,6 +20,7 @@ import { liveArtifactRows, isSubstantiveArtifact, purgeArtifactsForTasks } from 
 import { forgetTaskKnowledge } from "./knowledge.js";
 import { verifyTaskForDone, deterministicGateForDone } from "./task-verifier.js";
 import { recordProgress } from "./ledger-core.js";
+import { evaluateStageRules, StageRulesSchema } from "./p1-platform.js";
 
 export const STATUSES = ["backlog", "in_progress", "blocked", "review", "done"] as const;
 export type Status = (typeof STATUSES)[number];
@@ -158,6 +161,86 @@ export async function maybeFireAgentTrigger(
     .limit(1);
   if (!m || m.kind !== "agent") return;
   await enqueueAgentEvent(m.refId, { trigger, conversationId, taskId });
+}
+
+async function stageContext(task: TaskRow): Promise<{
+  assignees: string[];
+  labels: string[];
+  progress: number;
+  artifactCount: number;
+  verificationPassed: boolean;
+}> {
+  const [assigned, labels, artifacts, latestVerification] = await Promise.all([
+    db.select({ memberId: taskAssignees.memberId }).from(taskAssignees).where(eq(taskAssignees.taskId, task.id)),
+    db.select({ label: taskLabels.label }).from(taskLabels).where(eq(taskLabels.taskId, task.id)),
+    liveArtifactRows(task.id),
+    db.select({ verdict: taskVerifications.verdict }).from(taskVerifications)
+      .where(eq(taskVerifications.taskId, task.id)).orderBy(desc(taskVerifications.createdAt)).limit(1),
+  ]);
+  return {
+    assignees: assigned.map((row) => row.memberId),
+    labels: labels.map((row) => row.label),
+    progress: task.progress,
+    artifactCount: artifacts.length,
+    verificationPassed: latestVerification[0]?.verdict === "pass",
+  };
+}
+
+async function assertStageTransition(task: TaskRow, target: Status, actorMemberId: string): Promise<{
+  violations: string[];
+  escalationMemberId: string | null;
+}> {
+  const rows = await db.select().from(boardStages).where(and(
+    eq(boardStages.workspaceId, task.workspaceId),
+    inArray(boardStages.stage, [task.status, target]),
+  ));
+  if (!rows.length) return { violations: [], escalationMemberId: null };
+  const source = rows.find((row) => row.stage === task.status);
+  const destination = rows.find((row) => row.stage === target);
+  const context = await stageContext(task);
+  const [actor] = await db.select({ kind: members.kind }).from(members).where(eq(members.id, actorMemberId)).limit(1);
+  const violations = [
+    ...evaluateStageRules(StageRulesSchema.parse(source?.exitRulesJson ?? {}), context).map((value) => `exit:${value}`),
+    ...evaluateStageRules(StageRulesSchema.parse(destination?.entryRulesJson ?? {}), context).map((value) => `entry:${value}`),
+  ];
+  const verification = destination?.verification ?? "none";
+  if (verification === "artifact" && context.artifactCount === 0) violations.push("entry:artifact_required");
+  if (verification === "judge" && !context.verificationPassed) violations.push("entry:verification_required");
+  if (verification === "human" && actor?.kind !== "user") violations.push("entry:human_review_required");
+  return { violations: Array.from(new Set(violations)), escalationMemberId: destination?.escalationMemberId ?? source?.escalationMemberId ?? null };
+}
+
+async function executeStageEntry(
+  taskId: string,
+  stage: Status,
+  actorMemberId: string,
+  workspaceId: string,
+  conversationId: string | null,
+): Promise<void> {
+  const [cfg] = await db.select().from(boardStages).where(and(eq(boardStages.workspaceId, workspaceId), eq(boardStages.stage, stage))).limit(1);
+  if (!cfg?.agentId) return;
+  const [agentMember] = await db.select({ id: members.id }).from(members).where(and(eq(members.workspaceId, workspaceId), eq(members.kind, "agent"), eq(members.refId, cfg.agentId))).limit(1);
+  if (!agentMember) return;
+  await db.insert(taskAssignees).values({ taskId, memberId: agentMember.id, assignedBy: actorMemberId }).onConflictDoNothing();
+  await logActivity(taskId, actorMemberId, "stage_agent_assigned", {
+    stage,
+    agentId: cfg.agentId,
+    skill: cfg.skill,
+    instructions: cfg.instructions,
+  });
+  await enqueueAgentEvent(cfg.agentId, {
+    trigger: "task_assigned",
+    taskId,
+    conversationId,
+    stageExecution: {
+      stage: cfg.stage,
+      title: cfg.title,
+      instructions: cfg.instructions,
+      skill: cfg.skill,
+      verification: cfg.verification,
+      nextStage: cfg.nextStage,
+    },
+  });
 }
 
 // ───── list / get ─────
@@ -335,6 +418,24 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
   const t = await loadTask(taskId);
   const g = guard(t, workspaceId);
   if (!g.ok) return { error: g.error! };
+  if (input.status !== undefined && input.status !== t!.status) {
+    const stageGate = await assertStageTransition(t!, input.status, actorMemberId);
+    if (stageGate.violations.length) {
+      if (stageGate.escalationMemberId) {
+        void notify({
+          workspaceId,
+          memberId: stageGate.escalationMemberId,
+          kind: "system",
+          actorMemberId,
+          title: `Stage rule blocked “${t!.title}”`,
+          body: stageGate.violations.join(", "),
+          link: `/board?task=${taskId}`,
+          taskId,
+        }).catch(() => {});
+      }
+      return { error: "stage_rules_failed", violations: stageGate.violations };
+    }
+  }
   // Done-requires-evidence: an agent can't move a task to `done` without
   // either an attached deliverable on a task comment OR a human reviewer
   // having weighed in after the agent's most recent comment. Humans can
@@ -358,6 +459,7 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
   if (input.status !== undefined && input.status !== t!.status) {
     await logActivity(taskId, actorMemberId, "status_changed", { from: t!.status, to: input.status });
+    await executeStageEntry(taskId, input.status, actorMemberId, workspaceId, t!.conversationId);
   }
   if (input.title !== undefined && input.title !== t!.title) {
     await logActivity(taskId, actorMemberId, "renamed", { from: t!.title, to: input.title });

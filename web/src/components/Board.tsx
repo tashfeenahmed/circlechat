@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Plus, MessageSquare, GitBranch, Link2, Calendar, Lock } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTasks, useMembersDirectory, useMe, useSpectator } from "../lib/hooks";
 import { api, type Task, type TaskStatus } from "../api/client";
 import Avatar from "./Avatar";
@@ -26,6 +26,16 @@ export default function Board() {
   const me = useMe();
   const spectator = useSpectator();
   const dir = useMembersDirectory();
+  const stageQuery = useQuery<{ stages: Array<{ stage: TaskStatus; title: string; position: number }> }>({
+    queryKey: ["platform", "stages"],
+    queryFn: () => api.get("/board-stages"),
+  });
+  const columns = useMemo(() => {
+    const stored = stageQuery.data?.stages;
+    if (!stored?.length) return COLUMNS;
+    const glyph = new Map(COLUMNS.map((column) => [column.id, column.glyph]));
+    return stored.map((stage) => ({ id: stage.stage, title: stage.title, glyph: glyph.get(stage.stage) ?? "•", position: stage.position })).sort((a, b) => a.position - b.position);
+  }, [stageQuery.data]);
   // The open task lives in the URL as `/board?task=<id>`, so every task has its
   // own unique, shareable, back-button-friendly address. Opening a card (or a
   // deep-link from a notification / the Goals page) is just a URL change; the
@@ -143,7 +153,7 @@ export default function Board() {
   return (
     <div className="board-wrap">
       <div className="kanban">
-        {COLUMNS.map((col) => {
+        {columns.map((col) => {
           const cards = byCol(col.id);
           return (
             <div

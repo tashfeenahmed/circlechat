@@ -14,6 +14,7 @@ import {
   tasks,
   taskAssignees,
   agents,
+  workspaceRoles,
 } from "../db/schema.js";
 import { requireAuth, ensureUserMember, COOKIE_NAME } from "../auth/session.js";
 import { id } from "../lib/ids.js";
@@ -194,10 +195,15 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
     const targetWs = (req.params as { id: string }).id;
     const targetUser = (req.params as { userId: string }).userId;
     const { user } = req.auth!;
-    const body = z.object({ role: z.enum(["admin", "member"]) }).parse(req.body);
+    const body = z.object({ role: z.string().min(2).max(40).regex(/^[a-z][a-z0-9_-]*$/) }).parse(req.body);
 
     const me = await loadWorkspaceRole(targetWs, user.id);
     if (!me || me.role !== "admin") return reply.code(403).send({ error: "admin_only" });
+    if (!["admin", "member", "guest"].includes(body.role)) {
+      const [custom] = await db.select({ id: workspaceRoles.id }).from(workspaceRoles)
+        .where(and(eq(workspaceRoles.workspaceId, targetWs), eq(workspaceRoles.key, body.role))).limit(1);
+      if (!custom) return reply.code(400).send({ error: "role_not_found" });
+    }
 
     const [target] = await db
       .select({ role: workspaceMembers.role })

@@ -13,6 +13,8 @@
     "db:push": "drizzle-kit push",
     "db:migrate": "tsx src/db/migrate.ts",
     "test": "vitest run",
+    "test:p0-e2e": "node scripts/p0-e2e.mjs",
+    "test:p1-e2e": "node scripts/p1-e2e.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

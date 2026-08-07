@@ -34,6 +34,10 @@ export const workspaces = pgTable(
     // When the hard-stop notification last fired (separate from the 80% warn
     // marker so "budget reached" still notifies after a warning already did).
     budgetStoppedAt: timestamp("budget_stopped_at", { withTimezone: true }),
+    // Enterprise governance controls. NULL retention means operator policy;
+    // residency is an explicit deployment/data-placement label.
+    retentionDays: integer("retention_days"),
+    dataResidency: varchar("data_residency", { length: 32 }).notNull().default("operator"),
   },
   (t) => ({
     handleIdx: uniqueIndex("workspaces_handle_key").on(t.handle),
@@ -231,6 +235,12 @@ export const agentRuns = pgTable(
     // never reaches us. Estimated is better than blind; see lib/budgets.ts.
     tokensEst: integer("tokens_est"),
     errorText: text("error_text"),
+    cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+    cancelledBy: varchar("cancelled_by", { length: 32 }),
+    steerJson: jsonb("steer_json").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    followupJson: jsonb("followup_json").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    timeoutAt: timestamp("timeout_at", { withTimezone: true }),
+    ownerMemberId: varchar("owner_member_id", { length: 32 }),
   },
   (t) => ({
     agentStartedIdx: index("agent_runs_agent_started_idx").on(t.agentId, t.startedAt),
@@ -276,6 +286,8 @@ export const invites = pgTable(
     invitedBy: varchar("invited_by", { length: 32 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    role: varchar("role", { length: 40 }).notNull().default("member"),
+    channelIds: jsonb("channel_ids").$type<string[]>().notNull().default([]),
   },
   (t) => ({
     tokenIdx: uniqueIndex("invites_token_key").on(t.token),
@@ -681,3 +693,451 @@ export type ProgressLedger = {
 };
 
 export type GoalLedger = typeof goalLedgers.$inferSelect;
+
+// ───────────────── connector / MCP registry ──────────────────────────────
+// Connectors are workspace-owned and intentionally split into public config
+// plus encrypted credentials.  `kind=mcp` speaks MCP's JSON-RPC HTTP shape;
+// `kind=http` is a governed generic REST connector.  Grants keep a connector
+// installed in the workspace from automatically becoming available to every
+// agent.
+export const connectors = pgTable(
+  "connectors",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    description: text("description").notNull().default(""),
+    kind: varchar("kind", { length: 16 }).notNull(), // http | mcp
+    baseUrl: text("base_url").notNull(),
+    authType: varchar("auth_type", { length: 20 }).notNull().default("none"), // none | bearer | header | oauth2
+    configJson: jsonb("config_json").$type<Record<string, unknown>>().notNull().default({}),
+    secretCiphertext: text("secret_ciphertext"),
+    status: varchar("status", { length: 20 }).notNull().default("unchecked"), // unchecked | healthy | error | disabled
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    wsIdx: index("connectors_ws_idx").on(t.workspaceId, t.status),
+    wsName: uniqueIndex("connectors_ws_name_key").on(t.workspaceId, t.name),
+  }),
+);
+
+export const agentConnectorGrants = pgTable(
+  "agent_connector_grants",
+  {
+    connectorId: varchar("connector_id", { length: 32 }).notNull(),
+    agentId: varchar("agent_id", { length: 32 }).notNull(),
+    scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.connectorId, t.agentId] }),
+    agentIdx: index("agent_connector_grants_agent_idx").on(t.agentId),
+  }),
+);
+
+// ───────────────── durable workflows ─────────────────────────────────────
+export type WorkflowStateDefinition = {
+  id: string;
+  type: "agent" | "connector" | "wait" | "approval" | "poll" | "terminal";
+  name?: string;
+  next?: string;
+  onSuccess?: string;
+  onFailure?: string;
+  config?: Record<string, unknown>;
+};
+
+export type WorkflowDefinition = {
+  start: string;
+  states: WorkflowStateDefinition[];
+};
+
+export const workflows = pgTable(
+  "workflows",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    name: varchar("name", { length: 140 }).notNull(),
+    description: text("description").notNull().default(""),
+    status: varchar("status", { length: 20 }).notNull().default("active"), // active | paused
+    triggerType: varchar("trigger_type", { length: 20 }).notNull().default("manual"), // manual | webhook
+    definitionJson: jsonb("definition_json").$type<WorkflowDefinition>().notNull(),
+    version: integer("version").notNull().default(1),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    wsIdx: index("workflows_ws_idx").on(t.workspaceId, t.status),
+    wsName: uniqueIndex("workflows_ws_name_key").on(t.workspaceId, t.name),
+  }),
+);
+
+export const workflowRuns = pgTable(
+  "workflow_runs",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workflowId: varchar("workflow_id", { length: 32 }).notNull(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("queued"), // queued | running | waiting | completed | failed | cancelled
+    currentStateId: varchar("current_state_id", { length: 80 }),
+    inputJson: jsonb("input_json").$type<Record<string, unknown>>().notNull().default({}),
+    outputJson: jsonb("output_json").$type<Record<string, unknown>>().notNull().default({}),
+    waitKind: varchar("wait_kind", { length: 20 }), // agent | human | timer | poll
+    waitKey: varchar("wait_key", { length: 100 }),
+    waitUntil: timestamp("wait_until", { withTimezone: true }),
+    errorText: text("error_text"),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+    cancelledBy: varchar("cancelled_by", { length: 32 }),
+    steerJson: jsonb("steer_json").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    followupJson: jsonb("followup_json").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    timeoutAt: timestamp("timeout_at", { withTimezone: true }),
+    ownerMemberId: varchar("owner_member_id", { length: 32 }),
+  },
+  (t) => ({
+    workflowIdx: index("workflow_runs_workflow_idx").on(t.workflowId, t.startedAt),
+    wsStatusIdx: index("workflow_runs_ws_status_idx").on(t.workspaceId, t.status),
+  }),
+);
+
+export const workflowSteps = pgTable(
+  "workflow_steps",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    runId: varchar("run_id", { length: 32 }).notNull(),
+    stateId: varchar("state_id", { length: 80 }).notNull(),
+    kind: varchar("kind", { length: 20 }).notNull(),
+    attempt: integer("attempt").notNull().default(1),
+    status: varchar("status", { length: 20 }).notNull().default("running"), // running | waiting | completed | failed
+    inputJson: jsonb("input_json").$type<Record<string, unknown>>().notNull().default({}),
+    outputJson: jsonb("output_json").$type<Record<string, unknown>>().notNull().default({}),
+    agentRunId: varchar("agent_run_id", { length: 32 }),
+    errorText: text("error_text"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => ({
+    runIdx: index("workflow_steps_run_idx").on(t.runId, t.startedAt),
+    runStateAttempt: uniqueIndex("workflow_steps_run_state_attempt_key").on(t.runId, t.stateId, t.attempt),
+  }),
+);
+
+// Every webhook endpoint gets a distinct signing secret.  It is encrypted at
+// rest and returned only once at creation/rotation.  Delivery ids provide
+// replay protection and safe client retries.
+export const webhookEndpoints = pgTable(
+  "webhook_endpoints",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    workflowId: varchar("workflow_id", { length: 32 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    secretCiphertext: text("secret_ciphertext").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    workflowIdx: index("webhook_endpoints_workflow_idx").on(t.workflowId),
+  }),
+);
+
+export const webhookEvents = pgTable(
+  "webhook_events",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    endpointId: varchar("endpoint_id", { length: 32 }).notNull(),
+    deliveryId: varchar("delivery_id", { length: 120 }).notNull(),
+    signatureValid: boolean("signature_valid").notNull().default(false),
+    status: varchar("status", { length: 20 }).notNull().default("received"), // received | accepted | rejected | duplicate
+    payloadJson: jsonb("payload_json").$type<Record<string, unknown>>().notNull().default({}),
+    workflowRunId: varchar("workflow_run_id", { length: 32 }),
+    errorText: text("error_text"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    endpointDelivery: uniqueIndex("webhook_events_endpoint_delivery_key").on(t.endpointId, t.deliveryId),
+    endpointIdx: index("webhook_events_endpoint_idx").on(t.endpointId, t.receivedAt),
+  }),
+);
+
+// ───────────────── model routing + actual usage ──────────────────────────
+export const modelRoutes = pgTable(
+  "model_routes",
+  {
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    tier: varchar("tier", { length: 20 }).notNull(), // economy | balanced | frontier | advisor
+    provider: varchar("provider", { length: 60 }).notNull(),
+    model: varchar("model", { length: 120 }).notNull(),
+    inputCostPerMtok: real("input_cost_per_mtok").notNull().default(0),
+    outputCostPerMtok: real("output_cost_per_mtok").notNull().default(0),
+    cachedInputCostPerMtok: real("cached_input_cost_per_mtok").notNull().default(0),
+    contextWindow: integer("context_window"),
+    enabled: boolean("enabled").notNull().default(true),
+    updatedBy: varchar("updated_by", { length: 32 }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workspaceId, t.tier] }),
+  }),
+);
+
+export const modelUsageEvents = pgTable(
+  "model_usage_events",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    agentId: varchar("agent_id", { length: 32 }).notNull(),
+    runId: varchar("run_id", { length: 32 }).notNull(),
+    // Stable idempotency key for one logical model call. The agent worker uses
+    // `worker` so BullMQ retries update one event; runtime-side multi-call
+    // reports get a fresh key and remain individually auditable.
+    eventKey: varchar("event_key", { length: 80 }).notNull(),
+    provider: varchar("provider", { length: 60 }).notNull().default("unknown"),
+    model: varchar("model", { length: 120 }).notNull().default("unknown"),
+    routeTier: varchar("route_tier", { length: 20 }),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+    costUsd: real("cost_usd").notNull().default(0),
+    source: varchar("source", { length: 20 }).notNull().default("reported"), // reported | estimated
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    runIdx: index("model_usage_events_run_idx").on(t.runId),
+    runEventKey: uniqueIndex("model_usage_events_run_event_key").on(t.runId, t.eventKey),
+    wsTimeIdx: index("model_usage_events_ws_time_idx").on(t.workspaceId, t.occurredAt),
+    agentTimeIdx: index("model_usage_events_agent_time_idx").on(t.agentId, t.occurredAt),
+  }),
+);
+
+// ───────────────── P1 product platform ──────────────────────────────────
+export const decisionMemories = pgTable(
+  "decision_memories",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    kind: varchar("kind", { length: 20 }).notNull(),
+    title: varchar("title", { length: 180 }).notNull(),
+    decision: text("decision").notNull(),
+    rationale: text("rationale").notNull().default(""),
+    alternativesJson: jsonb("alternatives_json").$type<string[]>().notNull().default([]),
+    provenanceJson: jsonb("provenance_json").$type<Record<string, unknown>>().notNull().default({}),
+    source: varchar("source", { length: 20 }).notNull().default("observer"),
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    supersedesId: varchar("supersedes_id", { length: 32 }),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    correctedAt: timestamp("corrected_at", { withTimezone: true }),
+  },
+  (t) => ({ wsIdx: index("decision_memories_ws_idx").on(t.workspaceId, t.status, t.createdAt) }),
+);
+
+export const hostedApps = pgTable(
+  "hosted_apps",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    taskId: varchar("task_id", { length: 32 }).notNull(),
+    name: varchar("name", { length: 140 }).notNull(),
+    slug: varchar("slug", { length: 80 }).notNull(),
+    previewToken: varchar("preview_token", { length: 80 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("preview"),
+    activeDeploymentId: varchar("active_deployment_id", { length: 32 }),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    slugKey: uniqueIndex("hosted_apps_slug_key").on(t.slug),
+    previewKey: uniqueIndex("hosted_apps_preview_key").on(t.previewToken),
+    wsIdx: index("hosted_apps_ws_idx").on(t.workspaceId, t.status),
+  }),
+);
+
+export const appDeployments = pgTable(
+  "app_deployments",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    appId: varchar("app_id", { length: 32 }).notNull(),
+    artifactId: varchar("artifact_id", { length: 32 }).notNull(),
+    artifactSha256: varchar("artifact_sha256", { length: 64 }),
+    status: varchar("status", { length: 20 }).notNull().default("preview"),
+    healthStatus: varchar("health_status", { length: 20 }).notNull().default("healthy"),
+    requestedBy: varchar("requested_by", { length: 32 }).notNull(),
+    reviewedBy: varchar("reviewed_by", { length: 32 }),
+    reviewNote: text("review_note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (t) => ({ appIdx: index("app_deployments_app_idx").on(t.appId, t.createdAt) }),
+);
+
+export const appLogs = pgTable(
+  "app_logs",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    appId: varchar("app_id", { length: 32 }).notNull(),
+    deploymentId: varchar("deployment_id", { length: 32 }),
+    level: varchar("level", { length: 12 }).notNull().default("info"),
+    event: varchar("event", { length: 80 }).notNull(),
+    message: text("message").notNull().default(""),
+    metaJson: jsonb("meta_json").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ appIdx: index("app_logs_app_idx").on(t.appId, t.createdAt) }),
+);
+
+export const prRooms = pgTable(
+  "pr_rooms",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    conversationId: varchar("conversation_id", { length: 32 }).notNull(),
+    connectorId: varchar("connector_id", { length: 32 }),
+    provider: varchar("provider", { length: 20 }).notNull(),
+    repository: varchar("repository", { length: 240 }).notNull(),
+    prNumber: integer("pr_number").notNull(),
+    title: varchar("title", { length: 240 }).notNull().default(""),
+    url: text("url").notNull().default(""),
+    state: varchar("state", { length: 20 }).notNull().default("open"),
+    headRef: varchar("head_ref", { length: 160 }).notNull().default(""),
+    baseRef: varchar("base_ref", { length: 160 }).notNull().default(""),
+    diffJson: jsonb("diff_json").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    checksJson: jsonb("checks_json").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    reviewsJson: jsonb("reviews_json").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    protectionJson: jsonb("protection_json").$type<Record<string, unknown>>().notNull().default({}),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("pr_rooms_unique").on(t.workspaceId, t.provider, t.repository, t.prNumber),
+    convIdx: index("pr_rooms_conv_idx").on(t.conversationId),
+  }),
+);
+
+export const boardStages = pgTable(
+  "board_stages",
+  {
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    stage: varchar("stage", { length: 20 }).notNull(),
+    title: varchar("title", { length: 80 }).notNull(),
+    position: integer("position").notNull().default(0),
+    instructions: text("instructions").notNull().default(""),
+    entryRulesJson: jsonb("entry_rules_json").$type<Record<string, unknown>>().notNull().default({}),
+    exitRulesJson: jsonb("exit_rules_json").$type<Record<string, unknown>>().notNull().default({}),
+    agentId: varchar("agent_id", { length: 32 }),
+    skill: varchar("skill", { length: 120 }),
+    verification: varchar("verification", { length: 20 }).notNull().default("none"),
+    escalationMemberId: varchar("escalation_member_id", { length: 32 }),
+    nextStage: varchar("next_stage", { length: 20 }),
+    updatedBy: varchar("updated_by", { length: 32 }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.workspaceId, t.stage] }) }),
+);
+
+export type TeamBlueprintDefinition = {
+  agents: Array<Record<string, unknown>>;
+  relationships: Array<Record<string, unknown>>;
+  skills: Array<Record<string, unknown>>;
+  channels: Array<Record<string, unknown>>;
+  workflows: Array<Record<string, unknown>>;
+};
+
+export const teamBlueprints = pgTable(
+  "team_blueprints",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    name: varchar("name", { length: 140 }).notNull(),
+    description: text("description").notNull().default(""),
+    version: integer("version").notNull().default(1),
+    definitionJson: jsonb("definition_json").$type<TeamBlueprintDefinition>().notNull(),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ uniq: uniqueIndex("team_blueprints_ws_name_ver_key").on(t.workspaceId, t.name, t.version) }),
+);
+
+export const workspaceRoles = pgTable(
+  "workspace_roles",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    key: varchar("key", { length: 40 }).notNull(),
+    name: varchar("name", { length: 80 }).notNull(),
+    permissionsJson: jsonb("permissions_json").$type<string[]>().notNull().default([]),
+    isSystem: boolean("is_system").notNull().default(false),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ uniq: uniqueIndex("workspace_roles_ws_key").on(t.workspaceId, t.key) }),
+);
+
+export const serviceAccounts = pgTable(
+  "service_accounts",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    scopesJson: jsonb("scopes_json").$type<string[]>().notNull().default([]),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    tokenKey: uniqueIndex("service_accounts_token_key").on(t.tokenHash),
+    wsIdx: index("service_accounts_ws_idx").on(t.workspaceId, t.revokedAt),
+  }),
+);
+
+export const ssoConnections = pgTable(
+  "sso_connections",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    issuer: text("issuer").notNull(),
+    clientId: varchar("client_id", { length: 240 }).notNull(),
+    clientSecretCiphertext: text("client_secret_ciphertext").notNull(),
+    domainsJson: jsonb("domains_json").$type<string[]>().notNull().default([]),
+    defaultRole: varchar("default_role", { length: 40 }).notNull().default("member"),
+    enabled: boolean("enabled").notNull().default(true),
+    createdBy: varchar("created_by", { length: 32 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ wsKey: uniqueIndex("sso_connections_ws_key").on(t.workspaceId) }),
+);
+
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: varchar("id", { length: 32 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 32 }).notNull(),
+    actorType: varchar("actor_type", { length: 20 }).notNull(),
+    actorId: varchar("actor_id", { length: 32 }).notNull(),
+    action: varchar("action", { length: 100 }).notNull(),
+    targetType: varchar("target_type", { length: 40 }).notNull(),
+    targetId: varchar("target_id", { length: 64 }),
+    metaJson: jsonb("meta_json").$type<Record<string, unknown>>().notNull().default({}),
+    ipHash: varchar("ip_hash", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ wsTimeIdx: index("audit_events_ws_time_idx").on(t.workspaceId, t.createdAt) }),
+);

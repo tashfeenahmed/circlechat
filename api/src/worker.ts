@@ -12,6 +12,7 @@ import {
   tasks,
   taskComments,
   taskAssignees,
+  boardStages,
 } from "./db/schema.js";
 import { buildContext } from "./agents/context.js";
 import { callAgent } from "./agents/adapters/dispatch.js";
@@ -86,6 +87,16 @@ async function detectAndFlagStuck(agentId: string): Promise<boolean> {
 import { redactSecrets, redactLines } from "./lib/redaction.js";
 import { startGoalPlanWorker } from "./agents/goal-planner-worker.js";
 import { scheduleGoalSweep, scheduleMissionSweep } from "./lib/goal-queue.js";
+import {
+  modelRecommendation,
+  recordModelUsage,
+  refreshAgentRunUsage,
+} from "./lib/model-usage-store.js";
+import {
+  resumeWorkflowFromAgent,
+  startWorkflowWorker,
+  workflowAgentContext,
+} from "./lib/workflow-engine.js";
 
 const worker = new Worker<AgentJobPayload>(
   AGENT_QUEUE,
@@ -110,6 +121,15 @@ const worker = new Worker<AgentJobPayload>(
           .where(eq(agentRuns.id, payload.runId));
         await emitFinished(payload.agentId, payload.runId, "failed", payload.conversationId);
       }
+      if (payload.workflowRunId && payload.workflowStepId) {
+        await resumeWorkflowFromAgent({
+          workflowRunId: payload.workflowRunId,
+          workflowStepId: payload.workflowStepId,
+          success: false,
+          output: {},
+          errorText: "agent_missing",
+        });
+      }
       return;
     }
 
@@ -117,12 +137,38 @@ const worker = new Worker<AgentJobPayload>(
     let runId = payload.runId;
     if (payload.trigger === "scheduled" && !runId) runId = await materialiseScheduledRun(payload.agentId);
 
+    const [controlAtStart] = await db.select({
+      status: agentRuns.status,
+      cancelRequestedAt: agentRuns.cancelRequestedAt,
+      timeoutAt: agentRuns.timeoutAt,
+    }).from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
+    if (
+      !controlAtStart || controlAtStart.status === "cancelled" || controlAtStart.cancelRequestedAt ||
+      (controlAtStart.timeoutAt && controlAtStart.timeoutAt <= new Date())
+    ) {
+      if (controlAtStart && controlAtStart.status !== "cancelled") {
+        await db.update(agentRuns).set({ status: "cancelled", errorText: "run_timeout", finishedAt: new Date() }).where(eq(agentRuns.id, runId));
+      }
+      await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
+      await emitFinished(agent.id, runId, "cancelled", payload.conversationId);
+      return;
+    }
+
     if (agent.status === "paused") {
       await db
         .update(agentRuns)
         .set({ status: "ok", resultJson: { skipped: "paused" }, finishedAt: new Date() })
         .where(eq(agentRuns.id, runId));
       await emitFinished(agent.id, runId, "ok", payload.conversationId);
+      if (payload.workflowRunId && payload.workflowStepId) {
+        await resumeWorkflowFromAgent({
+          workflowRunId: payload.workflowRunId,
+          workflowStepId: payload.workflowStepId,
+          success: false,
+          output: { skipped: "paused" },
+          errorText: "agent_paused",
+        });
+      }
       return;
     }
 
@@ -203,6 +249,15 @@ const worker = new Worker<AgentJobPayload>(
         await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
       }
       await emitFinished(agent.id, runId, "ok", payload.conversationId);
+      if (payload.workflowRunId && payload.workflowStepId) {
+        await resumeWorkflowFromAgent({
+          workflowRunId: payload.workflowRunId,
+          workflowStepId: payload.workflowStepId,
+          success: false,
+          output: { skipped: gate.reason },
+          errorText: gate.reason,
+        });
+      }
       return;
     }
 
@@ -230,7 +285,36 @@ const worker = new Worker<AgentJobPayload>(
           : null,
       stuckBreak,
       lastCodeResult,
+      steering: payload.status ?? null,
     });
+    packet.modelRoute = await modelRecommendation({
+      workspaceId: agent.workspaceId,
+      trigger: payload.trigger,
+      text: payload.status ?? "",
+    });
+    if (payload.workflowRunId) {
+      const workflow = await workflowAgentContext(payload.workflowRunId);
+      if (workflow) packet.workflow = workflow;
+    }
+    const [runControls] = await db.select({ steer: agentRuns.steerJson, followUps: agentRuns.followupJson, timeoutAt: agentRuns.timeoutAt })
+      .from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
+    if (runControls) packet.runControls = runControls;
+    if (payload.stageExecution) {
+      packet.stageExecution = payload.stageExecution;
+    } else if (payload.taskId) {
+      const [taskStage] = await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, payload.taskId)).limit(1);
+      if (taskStage) {
+        const [stage] = await db.select().from(boardStages).where(and(eq(boardStages.workspaceId, agent.workspaceId), eq(boardStages.stage, taskStage.status))).limit(1);
+        if (stage) packet.stageExecution = {
+          stage: stage.stage,
+          title: stage.title,
+          instructions: stage.instructions,
+          skill: stage.skill,
+          verification: stage.verification,
+          nextStage: stage.nextStage,
+        };
+      }
+    }
     await db.update(agentRuns).set({ contextJson: packet as never }).where(eq(agentRuns.id, runId));
 
     const kind: "heartbeat" | "event" =
@@ -247,6 +331,21 @@ const worker = new Worker<AgentJobPayload>(
       response = await callAgent(agent, kind, packet);
     } catch (e) {
       const { tokensEst, costUsd } = estimateRunCost(promptChars, 0);
+      await recordModelUsage({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        runId,
+        routeTier: packet.modelRoute?.tier,
+        usage: {
+          provider: packet.modelRoute?.provider ?? undefined,
+          model: (packet.modelRoute?.model ?? agent.model) || undefined,
+          inputTokens: tokensEst,
+          outputTokens: 0,
+          costUsd,
+        },
+        source: "estimated",
+        eventKey: "worker",
+      }).catch((usageError) => console.error("[worker] usage record failed", usageError));
       await db
         .update(agentRuns)
         .set({
@@ -257,8 +356,24 @@ const worker = new Worker<AgentJobPayload>(
           finishedAt: new Date(),
         })
         .where(eq(agentRuns.id, runId));
+      // A gateway can report actual usage asynchronously before this retry
+      // finishes. Re-apply reported aggregates after writing the fallback so
+      // the late worker estimate never overwrites provider-grade accounting.
+      await refreshAgentRunUsage(runId).catch((usageError) =>
+        console.error("[worker] usage refresh failed", usageError),
+      );
       await db.update(agents).set({ status: "error" }).where(eq(agents.id, agent.id));
       await emitFinished(agent.id, runId, "failed", payload.conversationId);
+      const finalAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+      if (finalAttempt && payload.workflowRunId && payload.workflowStepId) {
+        await resumeWorkflowFromAgent({
+          workflowRunId: payload.workflowRunId,
+          workflowStepId: payload.workflowStepId,
+          success: false,
+          output: {},
+          errorText: redactSecrets((e as Error).message),
+        });
+      }
       throw e;
     }
 
@@ -269,6 +384,34 @@ const worker = new Worker<AgentJobPayload>(
     } else {
       actions = (response.actions as AgentAction[]) ?? [];
       trace = response.trace ?? [];
+    }
+
+    // A cancel/timeout that landed while the remote model was working is a
+    // hard action boundary: retain the remote response nowhere and never apply
+    // its side effects. This is the enforceable interrupt point for webhook and
+    // socket runtimes that cannot be synchronously aborted mid-request.
+    const [controlBeforeApply] = await db.select({
+      status: agentRuns.status,
+      cancelRequestedAt: agentRuns.cancelRequestedAt,
+      timeoutAt: agentRuns.timeoutAt,
+    }).from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
+    if (
+      !controlBeforeApply || controlBeforeApply.status === "cancelled" || controlBeforeApply.cancelRequestedAt ||
+      (controlBeforeApply.timeoutAt && controlBeforeApply.timeoutAt <= new Date())
+    ) {
+      await db.update(agentRuns).set({
+        status: "cancelled", errorText: controlBeforeApply?.cancelRequestedAt ? "cancelled_by_user" : "run_timeout",
+        resultJson: { skipped: "cancelled_before_actions" }, finishedAt: new Date(),
+      }).where(eq(agentRuns.id, runId));
+      await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
+      await emitFinished(agent.id, runId, "cancelled", payload.conversationId);
+      if (payload.workflowRunId && payload.workflowStepId) {
+        await resumeWorkflowFromAgent({
+          workflowRunId: payload.workflowRunId, workflowStepId: payload.workflowStepId,
+          success: false, output: { skipped: "cancelled_before_actions" }, errorText: "agent_run_cancelled",
+        });
+      }
+      return;
     }
 
     const outcome = await applyActions({
@@ -282,7 +425,43 @@ const worker = new Worker<AgentJobPayload>(
       response === "HEARTBEAT_OK"
         ? 0
         : JSON.stringify(actions).length + trace.join("\n").length;
-    const { tokensEst, costUsd } = estimateRunCost(promptChars, completionChars);
+    const estimated = estimateRunCost(promptChars, completionChars);
+    let tokensEst = estimated.tokensEst;
+    let costUsd = estimated.costUsd;
+    if (response !== "HEARTBEAT_OK" && response.usage) {
+      try {
+        const actual = await recordModelUsage({
+          workspaceId: agent.workspaceId,
+          agentId: agent.id,
+          runId,
+          routeTier: packet.modelRoute?.tier,
+          usage: response.usage,
+          source: "reported",
+          eventKey: "worker",
+        });
+        tokensEst = actual.tokens;
+        costUsd = actual.costUsd;
+      } catch (usageError) {
+        // Metering must not cause already-applied agent actions to retry.
+        console.error("[worker] reported usage record failed", usageError);
+      }
+    } else {
+      await recordModelUsage({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        runId,
+        routeTier: packet.modelRoute?.tier,
+        usage: {
+          provider: packet.modelRoute?.provider ?? undefined,
+          model: (packet.modelRoute?.model ?? agent.model) || undefined,
+          inputTokens: estimated.tokensEst,
+          outputTokens: 0,
+          costUsd: estimated.costUsd,
+        },
+        source: "estimated",
+        eventKey: "worker",
+      }).catch((usageError) => console.error("[worker] usage record failed", usageError));
+    }
 
     await db
       .update(agentRuns)
@@ -295,12 +474,46 @@ const worker = new Worker<AgentJobPayload>(
         finishedAt: new Date(),
       })
       .where(eq(agentRuns.id, runId));
+    await refreshAgentRunUsage(runId).catch((usageError) =>
+      console.error("[worker] usage refresh failed", usageError),
+    );
     await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
     await emitFinished(agent.id, runId, "ok", payload.conversationId, {
       agentName: agent.name,
       agentHandle: agent.handle,
       errors: outcome.errors,
     });
+
+    const [completedControls] = await db.select({ followUps: agentRuns.followupJson }).from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
+    if (completedControls?.followUps.length) {
+      const followupText = completedControls.followUps
+        .map((entry) => typeof entry.text === "string" ? entry.text : "")
+        .filter(Boolean)
+        .join("\n\n");
+      if (followupText) {
+        await enqueueAgentEvent(agent.id, {
+          trigger: "continuation",
+          conversationId: payload.conversationId ?? null,
+          taskId: payload.taskId,
+          status: `Human follow-up:\n${followupText}`,
+          chainDepth: 0,
+        }).catch((e) => console.error("[worker] queued follow-up failed", e));
+      }
+    }
+
+    if (payload.workflowRunId && payload.workflowStepId) {
+      await resumeWorkflowFromAgent({
+        workflowRunId: payload.workflowRunId,
+        workflowStepId: payload.workflowStepId,
+        success: outcome.errors.length === 0,
+        output: {
+          actionsApplied: outcome.actionsApplied,
+          errors: redactLines(outcome.errors),
+          trace: redactLines([...trace, ...outcome.trace]),
+        },
+        ...(outcome.errors.length ? { errorText: outcome.errors.join("; ").slice(0, 500) } : {}),
+      });
+    }
 
     // Loop guard: detect a run-level behavioral loop and, if found, leave a
     // one-shot break directive for the next run AND suppress the continuation
@@ -312,7 +525,7 @@ const worker = new Worker<AgentJobPayload>(
     // Budget is re-checked at the top of the next run, so a continuation can't
     // outrun a hard stop.
     const ranCode = actions.some((x) => x.type === "run_code");
-    if (!stuck && continuationEnabled() && response !== "HEARTBEAT_OK") {
+    if (payload.trigger !== "workflow" && !stuck && continuationEnabled() && response !== "HEARTBEAT_OK") {
       const chainDepth = payload.chainDepth ?? 0;
       if ((outcome.actionsApplied > 0 && shouldContinue(actions, chainDepth)) || (ranCode && chainDepth < 2)) {
         await enqueueAgentEvent(agent.id, {
@@ -461,3 +674,12 @@ scheduleGoalSweep().catch((e) => console.error("[goal-planner] sweep schedule fa
 // Daily mission → goals pass: proposes the next goals from the workspace
 // mission and files them under projects (see lib/mission-planner.ts).
 scheduleMissionSweep().catch((e) => console.error("[mission-planner] schedule failed", e));
+
+// Workflow wakes share the worker process but use a separate queue/concurrency
+// pool, so a large timer or poll workload cannot starve ordinary chat turns.
+const workflowWorker = startWorkflowWorker();
+workflowWorker.on("error", (e) => console.error("[workflow-worker] error", e));
+workflowWorker.on("failed", (job, err) =>
+  console.error("[workflow-worker] job failed", job?.id, err?.message),
+);
+console.log(`[worker] circlechat workflow-runs worker up, concurrency=10`);

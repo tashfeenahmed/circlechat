@@ -15,6 +15,7 @@ import {
   taskLabels,
   taskComments,
   workspaces,
+  decisionMemories,
 } from "../db/schema.js";
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
 import { listGoals, getGoalAncestry } from "../lib/goals-core.js";
@@ -104,6 +105,39 @@ export interface ContextPacket {
   trigger: string;
   triggerConversationId?: string | null;
   triggerMessageId?: string;
+  steering?: string | null;
+  // Platform recommendation only: the external runtime remains free to use a
+  // pinned model, but capable runtimes can route this turn to the selected
+  // tier/model and report exact usage back with their response.
+  modelRoute?: {
+    tier: string;
+    provider: string | null;
+    model: string | null;
+    contextWindow: number | null;
+  };
+  workflow?: {
+    runId: string;
+    workflowId: string;
+    name: string;
+    stateId: string | null;
+    input: Record<string, unknown>;
+    priorStepOutputs: Record<string, unknown>;
+    steer: Array<Record<string, unknown>>;
+    followUps: Array<Record<string, unknown>>;
+  };
+  runControls?: {
+    steer: Array<Record<string, unknown>>;
+    followUps: Array<Record<string, unknown>>;
+    timeoutAt: Date | null;
+  };
+  stageExecution?: {
+    stage: string;
+    title: string;
+    instructions: string;
+    skill: string | null;
+    verification: string;
+    nextStage: string | null;
+  };
   // Set when the agent's PREVIOUS run ended in failure (crash, gateway error,
   // reaped after a worker death). Continuity: without this the agent has
   // amnesia about its own dead run and silently drops whatever it was doing.
@@ -167,6 +201,18 @@ export interface ContextPacket {
     byConversation: Record<string, Record<string, unknown>>;
     byTask: Record<string, Record<string, unknown>>;
   };
+  // Typed human-correctable decisions and precedents. This complements fact
+  // retrieval with the reasoning and exceptions behind workspace choices.
+  decisionMemory: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    decision: string;
+    rationale: string;
+    alternatives: string[];
+    provenance: Record<string, unknown>;
+    createdAt: string;
+  }>;
   // Letta-style in-context memory blocks (always shown, self-edited). `team` is
   // shared across the workspace; `notes` is private. See lib/memory-blocks.ts.
   memoryBlocks: Array<{
@@ -263,6 +309,7 @@ export async function buildContext(opts: {
   previousRunFailure?: { errorText: string; finishedAt: string | null } | null;
   stuckBreak?: string | null;
   lastCodeResult?: string | null;
+  steering?: string | null;
 }): Promise<ContextPacket> {
   const [a] = await db.select().from(agents).where(eq(agents.id, opts.agentId)).limit(1);
   if (!a) throw new Error("agent_not_found");
@@ -918,6 +965,12 @@ export async function buildContext(opts: {
   // file bodies (both budget-bounded, fail-safe → empty). Same triggerText the
   // knowledge layer uses, so a run "about" a project pulls that project's files.
   const projectCtx = await buildProjectContext(triggerText);
+  const decisions = await db
+    .select()
+    .from(decisionMemories)
+    .where(and(eq(decisionMemories.workspaceId, a.workspaceId), eq(decisionMemories.status, "active")))
+    .orderBy(desc(decisionMemories.createdAt))
+    .limit(30);
 
   return {
     agent: {
@@ -943,6 +996,7 @@ export async function buildContext(opts: {
     trigger: opts.trigger,
     triggerConversationId: opts.conversationId ?? null,
     triggerMessageId: opts.messageId,
+    steering: opts.steering ?? null,
     previousRunFailure: opts.previousRunFailure ?? null,
     stuckBreak: opts.stuckBreak ?? null,
     lastCodeResult: opts.lastCodeResult ?? null,
@@ -970,6 +1024,16 @@ export async function buildContext(opts: {
         ...(taskCtx ? [taskCtx.id] : []),
       ]),
     },
+    decisionMemory: decisions.map((memory) => ({
+      id: memory.id,
+      kind: memory.kind,
+      title: memory.title,
+      decision: memory.decision,
+      rationale: memory.rationale,
+      alternatives: memory.alternativesJson,
+      provenance: memory.provenanceJson,
+      createdAt: memory.createdAt.toISOString(),
+    })),
     memoryBlocks,
     reporting,
     goals: activeGoals,

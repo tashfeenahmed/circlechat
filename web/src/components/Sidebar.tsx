@@ -1,7 +1,7 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Hash, Plus, FolderOpen, Network, BookOpen, ShieldAlert, LayoutGrid, Target, BarChart3, MoreHorizontal } from "lucide-react";
-import { useConversations, useMe, useMembersDirectory, useApprovals, useTasks, useSpectator } from "../lib/hooks";
+import { Hash, Plus, FolderOpen, Network, BookOpen, Inbox, LayoutGrid, Target, BarChart3, MoreHorizontal, Workflow, Boxes } from "lucide-react";
+import { useConversations, useMe, useMembersDirectory, useNeedsYou, useTasks, useSpectator } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBus } from "../state/store";
@@ -11,7 +11,7 @@ export default function Sidebar() {
   const dir = useMembersDirectory();
   const me = useMe();
   const spectator = useSpectator();
-  const approvalsQ = useApprovals();
+  const needsYouQ = useNeedsYou();
   const location = useLocation();
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -21,7 +21,7 @@ export default function Sidebar() {
   // Collapsed on every load; expands for the session when asked.
   const [moreOpen, setMoreOpen] = useState(false);
   const presence = useBus((s) => s.presence);
-  const pendingApprovals = approvalsQ.data?.approvals.length ?? 0;
+  const pendingNeeds = needsYouQ.data?.counts.total ?? 0;
 
   // Board unread: count tasks updated since the user last opened /board.
   // Stored per-workspace in localStorage so it survives refreshes but stays
@@ -150,16 +150,30 @@ export default function Sidebar() {
           <span className="sb-name">Files</span>
         </Link>
         <Link
-          to="/approvals"
-          className={`sb-item ${location.pathname === "/approvals" ? "active" : ""} ${pendingApprovals > 0 ? "unread" : ""}`}
+          to="/needs-you"
+          className={`sb-item ${location.pathname === "/needs-you" ? "active" : ""} ${pendingNeeds > 0 ? "unread" : ""}`}
         >
           <span className="sb-glyph">
-            <ShieldAlert size={14} strokeWidth={2} />
+            <Inbox size={14} strokeWidth={2} />
           </span>
-          <span className="sb-name">Approvals</span>
-          {pendingApprovals > 0 && (
-            <span className="sb-badge mention">{pendingApprovals}</span>
+          <span className="sb-name">Needs you</span>
+          {pendingNeeds > 0 && (
+            <span className="sb-badge mention">{pendingNeeds}</span>
           )}
+        </Link>
+        <Link
+          to="/automation"
+          className={`sb-item ${location.pathname === "/automation" ? "active" : ""}`}
+        >
+          <span className="sb-glyph"><Workflow size={14} strokeWidth={2} /></span>
+          <span className="sb-name">Automation</span>
+        </Link>
+        <Link
+          to="/platform"
+          className={`sb-item ${location.pathname === "/platform" ? "active" : ""}`}
+        >
+          <span className="sb-glyph"><Boxes size={14} strokeWidth={2} /></span>
+          <span className="sb-name">Platform</span>
         </Link>
         {moreOpen && (
           <>

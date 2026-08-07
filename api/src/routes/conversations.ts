@@ -12,6 +12,7 @@ import {
   messages,
   reactions,
   presence,
+  workspaceMembers,
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
@@ -176,13 +177,19 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
       ]);
       // Auto-join every member of THIS workspace to public channels.
       if (!(body.isPrivate ?? false)) {
-        const wsMembers = await db
+        const [wsMembers, guestUsers] = await Promise.all([db
           .select({ id: members.id })
           .from(members)
-          .where(eq(members.workspaceId, workspaceId!));
+          .where(eq(members.workspaceId, workspaceId!)),
+        db.select({ userId: workspaceMembers.userId }).from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, workspaceId!), eq(workspaceMembers.role, "guest")))]);
+        const guestMemberRows = guestUsers.length
+          ? await db.select({ id: members.id }).from(members).where(and(eq(members.workspaceId, workspaceId!), eq(members.kind, "user"), inArray(members.refId, guestUsers.map((row) => row.userId))))
+          : [];
+        const guestMemberIds = new Set(guestMemberRows.map((row) => row.id));
         const toAdd = wsMembers
           .map((m) => m.id)
-          .filter((m) => m !== memberId && !extra.includes(m));
+          .filter((m) => m !== memberId && !extra.includes(m) && !guestMemberIds.has(m));
         if (toAdd.length) {
           await db.insert(conversationMembers).values(
             toAdd.map((m) => ({ conversationId: convId, memberId: m, role: "member" as const })),

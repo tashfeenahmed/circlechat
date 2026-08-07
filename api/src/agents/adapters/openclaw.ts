@@ -1,11 +1,12 @@
 import type { ContextPacket } from "../context.js";
+import type { AgentCallResponse } from "./dispatch.js";
 
 export async function callOpenClawWebhook(params: {
   callbackUrl: string;
   botToken: string;
   kind: "heartbeat" | "event";
   packet: ContextPacket;
-}): Promise<{ actions: unknown[]; trace?: string[] } | "HEARTBEAT_OK"> {
+}): Promise<AgentCallResponse | "HEARTBEAT_OK"> {
   const url = new URL(params.callbackUrl);
   url.pathname = url.pathname.replace(/\/+$/, "") + (params.kind === "heartbeat" ? "/heartbeat" : "/event");
 
@@ -33,7 +34,7 @@ export async function callOpenClawWebhook(params: {
   try {
     const parsed = JSON.parse(text);
     if (parsed === "HEARTBEAT_OK" || parsed?.status === "HEARTBEAT_OK") return "HEARTBEAT_OK";
-    if (Array.isArray(parsed?.actions)) return { actions: parsed.actions, trace: parsed.trace };
+    if (Array.isArray(parsed?.actions)) return { actions: parsed.actions, trace: parsed.trace, usage: parsed.usage };
     return { actions: [] };
   } catch {
     if (text.trim() === "HEARTBEAT_OK") return "HEARTBEAT_OK";

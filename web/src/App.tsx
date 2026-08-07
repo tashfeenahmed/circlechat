@@ -19,6 +19,9 @@ import AnalyticsPage from "./pages/Analytics";
 import BoardPage from "./pages/Board";
 import GoalsPage from "./pages/Goals";
 import SettingsPage from "./pages/Settings";
+import AutomationPage from "./pages/Automation";
+import PlatformPage from "./pages/Platform";
+import NeedsYouPage from "./pages/NeedsYou";
 import HomeRedirect from "./pages/HomeRedirect";
 
 const qc = new QueryClient({
@@ -100,7 +103,10 @@ function Shell() {
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/agents/:id" element={<AgentPage />} />
         <Route path="/approvals" element={<ApprovalsPage />} />
+        <Route path="/needs-you" element={<NeedsYouPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/automation" element={<AutomationPage />} />
+        <Route path="/platform" element={<PlatformPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
     </Routes>

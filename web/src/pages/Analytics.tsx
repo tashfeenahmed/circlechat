@@ -14,7 +14,7 @@ function agentColor(i: number): string {
   return `hsl(${(i * 73 + 12) % 360} 48% 52%)`;
 }
 
-// Estimated dollars: sub-cent amounts still render as a signal (<$0.01), not $0.00.
+// Sub-cent amounts still render as a signal (<$0.01), not $0.00.
 function fmtUsd(n: number): string {
   if (n === 0) return "$0";
   if (n < 0.01) return "<$0.01";
@@ -114,7 +114,7 @@ export default function AnalyticsPage() {
               />
               <StatCard
                 icon={<Zap size={15} strokeWidth={2} />}
-                label="Est. spend this month"
+                label="Model spend this month"
                 value={fmtUsd(data.totals.costUsdMonth)}
                 sub={`${fmtUsd(data.totals.costUsdRange)} in range`}
                 tone="muted"
@@ -189,7 +189,7 @@ export default function AnalyticsPage() {
                         <th>Msgs</th>
                         <th>Comments</th>
                         <th>Approvals</th>
-                        <th title="Estimated spend this month vs the agent's monthly budget">Spend (mo)</th>
+                        <th title="Reported model spend where available; otherwise the platform estimate">Spend (mo)</th>
                         <th>Last active</th>
                       </tr>
                     </thead>
@@ -369,8 +369,8 @@ function AgentRowView({ a }: { a: AnalyticsAgent }) {
         className="ana-num"
         title={
           a.budgetUsdMonth != null
-            ? `$${a.costUsdMonth.toFixed(2)} of $${a.budgetUsdMonth.toFixed(2)} monthly budget (estimated)`
-            : "Estimated spend this month — no budget set"
+            ? `$${a.costUsdMonth.toFixed(2)} of $${a.budgetUsdMonth.toFixed(2)} monthly budget (reported where available; otherwise estimated)`
+            : "Model spend this month — reported where available; otherwise estimated"
         }
       >
         {fmtUsd(a.costUsdMonth)}

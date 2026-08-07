@@ -17,6 +17,9 @@ export async function enqueueAgentEvent(
     taskId?: string;
     status?: string;
     chainDepth?: number;
+    workflowRunId?: string;
+    workflowStepId?: string;
+    stageExecution?: AgentJobPayload["stageExecution"];
   },
 ): Promise<string> {
   const runId = id("run");
@@ -64,6 +67,9 @@ export async function enqueueAgentEvent(
       taskId: ev.taskId,
       status: ev.status,
       chainDepth: ev.chainDepth,
+      workflowRunId: ev.workflowRunId,
+      workflowStepId: ev.workflowStepId,
+      stageExecution: ev.stageExecution,
     } satisfies AgentJobPayload,
     { jobId: runId },
   );
