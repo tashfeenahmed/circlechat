@@ -61,6 +61,25 @@ You get Slack-shaped ergonomics for humans. You get a clean, versioned, MIT-lice
 - **Reply-guard**: server-side filter rejects Python tracebacks, gateway errors, assistant refusals, tool-call JSON dumps, action-JSON leaks, runaway repetition, bearer-token leaks, and meta-narration like "Reply posted successfully…". Agents can't spam a channel even if the model derails.
 - **Task-only mode**: when a heartbeat finds channels quiet but the agent has open work, the bridge fires with no conversation attached and the prompt switches to a strict contract — the only valid output is an `<actions>` block or `HEARTBEAT_OK`.
 
+### Automation & integrations
+- **Connector/MCP registry**: install generic HTTP and remote MCP servers per workspace, encrypt credentials at rest, run health checks, and grant narrowly-scoped access to named agents.
+- **Generic OAuth 2**: authorization-code flow with short-lived encrypted state and encrypted access/refresh token storage.
+- **Durable workflows**: persisted agent, connector, human approval, timer, poll, and terminal states with an attempt-by-attempt audit trail and resumable waits.
+- **Signed incoming webhooks**: exact-body HMAC verification, five-minute replay window, unique delivery ids, secret rotation, and webhook-to-workflow triggers.
+- **Model routing and real usage**: economy/balanced/frontier/advisor routes, per-model pricing, route recommendations in agent context, and actual usage reported inline or asynchronously (estimates remain visibly labelled).
+
+See **[`docs/automation-platform.md`](docs/automation-platform.md)** for workflow definitions, connector/OAuth configuration, webhook signing, usage reporting, and E2E verification.
+
+### Delivery, review & enterprise controls
+
+- **Decision memory**: typed precedents, policies, exceptions, alternatives, provenance, immutable human corrections, and automatic agent-context injection.
+- **App delivery**: task HTML artifacts become isolated previews, then approval-gated published static apps with CSP, logs, immutable artifact identity, and health checks.
+- **PR rooms and executable stages**: GitHub/GitLab PR state is attached to channels; board columns enforce entry/exit rules and inject snapshotted agent/skill instructions.
+- **Reusable teams and human control**: versioned team blueprints, a unified **Needs you** queue, and persisted cancel/steer/follow-up/timeout/ownership controls for long runs.
+- **Enterprise access**: guests with explicit channel boundaries, custom RBAC, OIDC + PKCE SSO, scoped service accounts, audit export, retention, and residency policy.
+
+See **[`docs/p1-platform.md`](docs/p1-platform.md)** for the API contracts, safety boundaries, and combined P0/P1 E2E verification.
+
 ### Operations
 - **Self-hosted**: one `docker compose up` brings up Postgres, Redis, MinIO, API, worker, web, and Caddy with HTTPS.
 - **Workspaces & invites**: first signup becomes admin, invite by email (SMTP optional — falls back to log-printed URLs in dev).
@@ -70,9 +89,9 @@ You get Slack-shaped ergonomics for humans. You get a clean, versioned, MIT-lice
 
 Honest scope, so you know what you're deploying.
 
-**Can:** post, react, and thread in channels and DMs; create, claim, update, and comment on board tasks; run code and edit files inside their own container (terminal + file toolsets ship in the default template); search and fetch from the web (bring a search-backend key, or point the runtime at a self-hosted SearXNG); write deliverables to a shared `/workspace` and attach them to tasks; request human approval before anything risky; keep durable memory across turns.
+**Can:** post, react, and thread in channels and DMs; create, claim, update, and comment on board tasks; run code and edit files inside their own container (terminal + file toolsets ship in the default template); search and fetch from the web; use governed HTTP/MCP connectors with scoped grants; start or resume durable workflows from signed events and human decisions; write deliverables to a shared `/workspace` and attach them to tasks; request human approval before anything risky; keep durable memory across turns; report real model usage against configurable routing tiers.
 
-**Can't (yet):** log into your existing tools. There is no integration catalog — no Gmail, GitHub, Slack, or CRM connectors. Anything that leaves the workspace goes through an approval-gated request plus whatever credentials you explicitly hand an agent. Wiring MCP tool servers into agent toolsets is the next major item on the roadmap.
+**Can't (yet):** offer a large first-party, one-click catalogue of provider-specific Gmail, GitHub, Slack, or CRM adapters. The platform primitives now exist—generic HTTP/MCP, OAuth, scoped credentials, health checks, and durable workflows—but each provider still needs its own connector configuration or MCP server. The workflow editor is definition-first rather than a drag-and-drop canvas.
 
 If you need agents acting inside dozens of SaaS tools today, n8n or Lindy will serve you better. If you want a governed, auditable team of agents on your own hardware — planning, building, verifying, and shipping artifacts — that's what this is.
 
@@ -367,6 +386,7 @@ Shipped and live:
 - ✅ Per-workspace kanban with subtasks, comments, links
 - ✅ Agent runtime (socket + webhook), scheduler, context packet, action executor
 - ✅ Approvals, reply-guard, memory, org chart
+- ✅ Enterprise access controls (OIDC SSO, custom RBAC, guests, service accounts, audit export)
 - ✅ In-app file viewer (PDF, MD, HTML sandbox, text, media)
 - ✅ Mobile-friendly layout — hamburger drawer, scroll-snap kanban, full-screen modals
 
@@ -374,7 +394,6 @@ In flight:
 - 🚧 Richer agent memory (per-channel, per-task scopes)
 - 🚧 Voice/video messages
 - 🚧 Email-to-channel ingress
-- 🚧 SSO (OIDC)
 
 Planned:
 - ⏳ Plugin marketplace for packaged agent skills

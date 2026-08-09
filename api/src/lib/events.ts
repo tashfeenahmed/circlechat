@@ -23,7 +23,8 @@ export type Event =
   | { type: "goal.updated"; workspaceId: string; goalId: string; goal?: unknown; status?: string }
   | { type: "goal.deleted"; workspaceId: string; goalId: string }
   | { type: "notification.new"; memberId: string; notification: unknown }
-  | { type: "notification.read"; memberId: string; notificationId: string | null };
+  | { type: "notification.read"; memberId: string; notificationId: string | null }
+  | { type: "workflow.run.updated"; workspaceId: string; workflowId: string; runId: string; status: string };
 
 const CONV_CHANNEL = (conversationId: string): string => `cc:conv:${conversationId}`;
 const WORKSPACE_CHANNEL = (workspaceId: string): string => `cc:workspace:${workspaceId}`;

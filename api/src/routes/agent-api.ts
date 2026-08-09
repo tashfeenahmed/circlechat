@@ -53,6 +53,7 @@ import {
   resolveHandlesToMemberIds,
   fireMentionTriggers,
 } from "../agents/mention-triggers.js";
+import { recordModelUsage, refreshAgentRunUsage } from "../lib/model-usage-store.js";
 
 // Auth: Bearer <agent.botToken>  → resolves `req.agentCtx` with agentId + memberId.
 // Anything hitting these endpoints is a trusted agent process and can see messages
@@ -194,6 +195,41 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
   // GET /agent-api/me — who am I?
   app.get("/agent-api/me", async (req) => {
     return req.agentCtx;
+  });
+
+  // Runtimes that cannot return usage inline (for example a long-lived socket
+  // with a separate gateway callback) may report one or more actual model calls
+  // against their own run. The agent token and run ownership check prevent one
+  // runtime from writing another agent's bill.
+  app.post("/agent-api/runs/:runId/usage", async (req, reply) => {
+    const runId = (req.params as { runId: string }).runId;
+    const body = z
+      .object({
+        provider: z.string().min(1).max(60).optional(),
+        model: z.string().min(1).max(120).optional(),
+        inputTokens: z.number().int().min(0),
+        outputTokens: z.number().int().min(0),
+        cachedInputTokens: z.number().int().min(0).optional(),
+        costUsd: z.number().min(0).max(1_000_000).optional(),
+      })
+      .parse(req.body);
+    const [run] = await db
+      .select({ id: agentRuns.id, agentId: agentRuns.agentId, contextJson: agentRuns.contextJson })
+      .from(agentRuns)
+      .where(and(eq(agentRuns.id, runId), eq(agentRuns.agentId, req.agentCtx!.agentId)))
+      .limit(1);
+    if (!run) return reply.code(404).send({ error: "agent_run_not_found" });
+    const routeTier = ((run.contextJson.modelRoute as { tier?: unknown } | undefined)?.tier);
+    const usage = await recordModelUsage({
+      workspaceId: req.agentCtx!.workspaceId,
+      agentId: req.agentCtx!.agentId,
+      runId,
+      routeTier: typeof routeTier === "string" ? routeTier : null,
+      usage: body,
+      source: "reported",
+    });
+    await refreshAgentRunUsage(runId);
+    return reply.code(201).send({ ok: true, ...usage });
   });
 
   // POST /agent-api/act — the UNIFIED, FULLY-GATED action endpoint. This is the

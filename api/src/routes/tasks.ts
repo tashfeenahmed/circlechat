@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { and, eq, asc } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { tasks, taskAssignees } from "../db/schema.js";
+import { tasks, taskAssignees, boardStages } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import {
   STATUSES,
@@ -19,6 +19,7 @@ import {
   addComment,
   deleteComment,
   hydrateTasks,
+  loadTask,
 } from "../lib/tasks-core.js";
 
 const CreateBody = z.object({
@@ -71,7 +72,10 @@ const ERR_CODE: Record<string, number> = {
 };
 
 function send(reply: import("fastify").FastifyReply, result: { error?: string; [k: string]: unknown }) {
-  if (result.error) return reply.code(ERR_CODE[result.error] ?? 400).send({ error: result.error });
+  if (result.error) {
+    const { error, ...details } = result;
+    return reply.code(ERR_CODE[error] ?? 400).send({ error, ...details });
+  }
   return result;
 }
 
@@ -99,6 +103,18 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
     const body = UpdateBody.parse(req.body);
     const r = await updateTask(taskId, body, req.auth!.memberId!, req.auth!.workspaceId!);
     return send(reply, r);
+  });
+
+  app.post("/tasks/:id/advance", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const task = await loadTask(taskId);
+    if (!task || task.workspaceId !== req.auth!.workspaceId!) return reply.code(404).send({ error: "not_found" });
+    const [stage] = await db.select({ nextStage: boardStages.nextStage }).from(boardStages)
+      .where(and(eq(boardStages.workspaceId, req.auth!.workspaceId!), eq(boardStages.stage, task.status))).limit(1);
+    const next = stage?.nextStage ?? ({ backlog: "in_progress", in_progress: "review", blocked: "in_progress", review: "done", done: null } as Record<string, string | null>)[task.status];
+    if (!next || !STATUSES.includes(next as (typeof STATUSES)[number])) return reply.code(409).send({ error: "no_next_stage" });
+    const result = await updateTask(taskId, { status: next as (typeof STATUSES)[number] }, req.auth!.memberId!, req.auth!.workspaceId!);
+    return send(reply, result);
   });
 
   app.delete("/tasks/:id", async (req, reply) => {

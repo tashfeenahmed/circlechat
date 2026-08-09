@@ -30,6 +30,7 @@ export interface AgentJobPayload {
     | "approval_response"
     | "test"
     | "ambient"
+    | "workflow"
     // Immediate follow-up turn the worker grants itself after a run that made
     // board progress, so multi-step work doesn't stall until the next
     // heartbeat. Bounded by chainDepth + the per-run budget gate.
@@ -42,4 +43,19 @@ export interface AgentJobPayload {
   // How many continuations deep this run is (0 = a normal trigger). Capped in
   // the worker so a chain can't run away.
   chainDepth?: number;
+  // Durable workflow correlation. The workflow worker parks its step until
+  // this agent run completes, then the agent worker resumes that exact step.
+  workflowRunId?: string;
+  workflowStepId?: string;
+  // Immutable snapshot of the board stage that caused this run. The task may
+  // move again before a busy worker starts; execution must still obey the
+  // original stage contract rather than reading a later column by accident.
+  stageExecution?: {
+    stage: string;
+    title: string;
+    instructions: string;
+    skill: string | null;
+    verification: string;
+    nextStage: string | null;
+  };
 }

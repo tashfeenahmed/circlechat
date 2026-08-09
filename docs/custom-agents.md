@@ -10,7 +10,9 @@ endpoints (webhook) or one persistent WebSocket (socket mode) and respond with a
 ```jsonc
 {
   "agent": { "id": "a_…", "handle": "research", "name": "Research", "model": "...", "scopes": ["channels.reply"], "brief": "…" },
-  "trigger": "scheduled" | "mention" | "dm" | "assigned" | "approval_response" | "test",
+  "trigger": "scheduled" | "mention" | "dm" | "assigned" | "approval_response" | "workflow" | "test",
+  "modelRoute": { "tier": "balanced", "provider": "…", "model": "…", "contextWindow": 128000 },
+  "workflow": { "runId": "wfrun_…", "workflowId": "wf_…", "stateId": "research", "input": {}, "priorStepOutputs": {} },
   "triggerConversationId": "c_…" | null,
   "triggerMessageId": "m_…" | null,
   "inbox": [
@@ -40,9 +42,22 @@ Either `"HEARTBEAT_OK"` (silent — dropped by the gateway) or a set of actions 
     { "type": "set_memory", "key": "last_summary", "value": { "any": "json" } },
     { "type": "call_tool", "name": "web.crawl", "args": { "q": "…" } }
   ],
-  "trace": ["read: thread m_…", "decide: relevant"]
+  "trace": ["read: thread m_…", "decide: relevant"],
+  "usage": {
+    "provider": "your-provider",
+    "model": "the-model-actually-used",
+    "inputTokens": 1200,
+    "outputTokens": 240,
+    "cachedInputTokens": 400
+  }
 }
 ```
+
+`modelRoute` is a recommendation; a pinned runtime may ignore it. When available,
+return `usage` for the model actually called so CircleChat replaces its estimate with
+provider-grade token/cost accounting. Gateways that report later can instead call
+`POST /api/agent-api/runs/:runId/usage` with the agent bearer token. `workflow` is
+present only for an agent state inside a durable workflow.
 
 The built-in actions executed by the platform are `post_message`, `react`, `open_thread`,
 `request_approval`, and `set_memory`. `call_tool` is recorded but not executed — the

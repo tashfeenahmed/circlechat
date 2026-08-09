@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   users,
@@ -11,6 +11,7 @@ import {
   workspaces,
   workspaceMembers,
   sessions,
+  workspaceRoles,
 } from "../db/schema.js";
 import {
   hashPassword,
@@ -27,6 +28,7 @@ import {
 import { id, rawToken } from "../lib/ids.js";
 import { config } from "../lib/config.js";
 import { deriveUniqueWorkspaceHandle } from "../lib/workspace-handle.js";
+import { workspaceAccess } from "../lib/access-control.js";
 
 const SignupBody = z.object({
   email: z.string().email(),
@@ -45,7 +47,11 @@ const LoginBody = z.object({
   password: z.string().min(1),
 });
 
-const InviteBody = z.object({ email: z.string().email() });
+const InviteBody = z.object({
+  email: z.string().email(),
+  role: z.string().min(2).max(40).regex(/^[a-z][a-z0-9_-]*$/).default("member"),
+  channelIds: z.array(z.string()).max(100).default([]),
+});
 
 const UpdateMeBody = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -279,6 +285,19 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     const body = InviteBody.parse(req.body);
     const { memberId, workspaceId } = req.auth!;
     if (!workspaceId || !memberId) return reply.code(409).send({ error: "no_workspace" });
+    const access = await workspaceAccess(workspaceId, req.auth!.userId);
+    if (!access?.permissions.includes("*")) return reply.code(403).send({ error: "admin_only" });
+    if (!["admin", "member", "guest"].includes(body.role)) {
+      const [custom] = await db.select({ id: workspaceRoles.id }).from(workspaceRoles)
+        .where(and(eq(workspaceRoles.workspaceId, workspaceId), eq(workspaceRoles.key, body.role))).limit(1);
+      if (!custom) return reply.code(400).send({ error: "role_not_found" });
+    }
+    if (body.channelIds.length) {
+      const valid = await db.select({ id: conversations.id }).from(conversations)
+        .where(and(eq(conversations.workspaceId, workspaceId), eq(conversations.kind, "channel")));
+      const validIds = new Set(valid.map((channel) => channel.id));
+      if (body.channelIds.some((channelId) => !validIds.has(channelId))) return reply.code(400).send({ error: "channel_not_found" });
+    }
     const token = rawToken(40);
     const invId = id("inv");
     await db.insert(invites).values({
@@ -287,6 +306,8 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       email: body.email,
       token,
       invitedBy: memberId,
+      role: body.role,
+      channelIds: body.channelIds,
     });
     const url = `${config.publicBaseUrl}/invite/${token}`;
     if (!config.smtpUrl) {
@@ -308,6 +329,8 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         invitedBy: invites.invitedBy,
         createdAt: invites.createdAt,
         acceptedAt: invites.acceptedAt,
+        role: invites.role,
+        channelIds: invites.channelIds,
       })
       .from(invites)
       .where(eq(invites.workspaceId, workspaceId));
@@ -318,6 +341,8 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         email: r.email,
         invitedBy: r.invitedBy,
         createdAt: r.createdAt,
+        role: r.role,
+        channelIds: r.channelIds,
         inviteUrl: `${config.publicBaseUrl}/invite/${r.token}`,
       })),
     };
@@ -383,7 +408,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         };
       }
     }
-    return { email: inv.email, workspace: ws, viewer };
+    return { email: inv.email, workspace: ws, role: inv.role, channelIds: inv.channelIds, viewer };
   });
 
   // One-click join for already-authenticated users. Auto-add to the
@@ -401,32 +426,11 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
 
     await db
       .insert(workspaceMembers)
-      .values({ workspaceId: inv.workspaceId, userId: user.id, role: "member" })
+      .values({ workspaceId: inv.workspaceId, userId: user.id, role: inv.role })
       .onConflictDoNothing();
     const memberId = await ensureUserMember(inv.workspaceId, user.id);
 
-    const publicChannels = await db
-      .select({ id: conversations.id })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.workspaceId, inv.workspaceId),
-          eq(conversations.kind, "channel"),
-          eq(conversations.isPrivate, false),
-        ),
-      );
-    if (publicChannels.length) {
-      await db
-        .insert(conversationMembers)
-        .values(
-          publicChannels.map((c) => ({
-            conversationId: c.id,
-            memberId,
-            role: "member" as const,
-          })),
-        )
-        .onConflictDoNothing();
-    }
+    await joinInviteChannels(inv.workspaceId, memberId, inv.role, inv.channelIds);
 
     await db.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, inv.id));
     // Switch them into the newly-joined workspace so the UI lands there.
@@ -471,32 +475,11 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
 
     await db
       .insert(workspaceMembers)
-      .values({ workspaceId: inv.workspaceId, userId: uid, role: "member" })
+      .values({ workspaceId: inv.workspaceId, userId: uid, role: inv.role })
       .onConflictDoNothing();
     const memberId = await ensureUserMember(inv.workspaceId, uid);
 
-    const publicChannels = await db
-      .select({ id: conversations.id })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.workspaceId, inv.workspaceId),
-          eq(conversations.kind, "channel"),
-          eq(conversations.isPrivate, false),
-        ),
-      );
-    if (publicChannels.length) {
-      await db
-        .insert(conversationMembers)
-        .values(
-          publicChannels.map((c) => ({
-            conversationId: c.id,
-            memberId,
-            role: "member" as const,
-          })),
-        )
-        .onConflictDoNothing();
-    }
+    await joinInviteChannels(inv.workspaceId, memberId, inv.role, inv.channelIds);
 
     await db.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, inv.id));
 
@@ -504,6 +487,14 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     setSessionCookie(reply, sid);
     return { ok: true, memberId, workspaceId: inv.workspaceId };
   });
+}
+
+async function joinInviteChannels(workspaceId: string, memberId: string, role: string, invitedChannelIds: string[]): Promise<void> {
+  const channels = role === "guest"
+    ? await db.select({ id: conversations.id }).from(conversations).where(and(eq(conversations.workspaceId, workspaceId), inArray(conversations.id, invitedChannelIds)))
+    : await db.select({ id: conversations.id }).from(conversations).where(and(eq(conversations.workspaceId, workspaceId), eq(conversations.kind, "channel"), eq(conversations.isPrivate, false)));
+  if (!channels.length) return;
+  await db.insert(conversationMembers).values(channels.map((channel) => ({ conversationId: channel.id, memberId, role: "member" as const }))).onConflictDoNothing();
 }
 
 function publicUser(u: {

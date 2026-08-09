@@ -377,6 +377,14 @@ export function useApprovals() {
   return q;
 }
 
+export function useNeedsYou() {
+  return useQuery<{ items: unknown[]; counts: { total: number; critical: number; high: number } }>({
+    queryKey: ["needs-you"],
+    queryFn: () => api.get("/needs-you"),
+    refetchInterval: 5_000,
+  });
+}
+
 export function useAnalytics(days: number) {
   const qc = useQueryClient();
   const q = useQuery<AnalyticsData>({

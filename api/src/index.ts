@@ -25,6 +25,13 @@ import agentAttachRoutes from "./routes/agent-attach.js";
 import agentSkillsRoutes from "./routes/agent-skills.js";
 import searchRoutes from "./routes/search.js";
 import notificationRoutes from "./routes/notifications.js";
+import connectorRoutes from "./routes/connectors.js";
+import workflowRoutes from "./routes/workflows.js";
+import modelRoutingRoutes from "./routes/model-routing.js";
+import platformRoutes, { appServeRoutes } from "./routes/platform.js";
+import runControlRoutes from "./routes/run-controls.js";
+import needsYouRoutes from "./routes/needs-you.js";
+import enterpriseRoutes, { enterprisePublicRoutes, serviceApiRoutes } from "./routes/enterprise.js";
 import { fileServeRoutes, fileDirectoryRoutes } from "./routes/files.js";
 import eventsWs from "./ws/events.js";
 import agentSocketWs from "./ws/agent-socket.js";
@@ -86,10 +93,20 @@ await app.register(analyticsRoutes, { prefix: "/api" });
 await app.register(agentApiRoutes, { prefix: "/api" });
 await app.register(searchRoutes, { prefix: "/api" });
 await app.register(notificationRoutes, { prefix: "/api" });
+await app.register(connectorRoutes, { prefix: "/api" });
+await app.register(workflowRoutes, { prefix: "/api" });
+await app.register(modelRoutingRoutes, { prefix: "/api" });
+await app.register(platformRoutes, { prefix: "/api" });
+await app.register(runControlRoutes, { prefix: "/api" });
+await app.register(needsYouRoutes, { prefix: "/api" });
+await app.register(enterpriseRoutes, { prefix: "/api" });
+await app.register(enterprisePublicRoutes, { prefix: "/api" });
+await app.register(serviceApiRoutes, { prefix: "/api" });
 await app.register(fileDirectoryRoutes, { prefix: "/api" });
 // Auth-checked file serving — registered at root so URLs are /files/<key>
 // and not /api/files/<key>. Must run before fastifyStatic so the route matches.
 await app.register(fileServeRoutes);
+await app.register(appServeRoutes);
 await app.register(eventsWs);
 await app.register(agentSocketWs);
 
