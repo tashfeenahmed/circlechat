@@ -43,6 +43,7 @@ import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
 import { notifyForMessage } from "../lib/notifications.js";
 import { writeProjectFile } from "../lib/project-files.js";
+import { safePublicFetch } from "../lib/safe-fetch.js";
 
 export interface AgentAttachment {
   key: string;
@@ -1610,15 +1611,20 @@ async function fetchAgentAttachments(
         }
         const controller = new AbortController();
         const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-        const res = await fetch(rawUrl, { signal: controller.signal, redirect: "follow" });
-        clearTimeout(t);
+        let res: Response;
+        let finalUrl: URL;
+        try {
+          ({ response: res, finalUrl } = await safePublicFetch(rawUrl, { signal: controller.signal }));
+        } finally {
+          clearTimeout(t);
+        }
         if (!res.ok) {
           trace.push(`${actionLabel} skip ${rawUrl}: HTTP ${res.status}`);
           continue;
         }
         buf = Buffer.from(await res.arrayBuffer());
         contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim() || contentType;
-        try { nameHint = new URL(rawUrl).pathname.split("/").pop() ?? ""; } catch { nameHint = ""; }
+        nameHint = finalUrl.pathname.split("/").pop() ?? "";
       } else {
         // Local path. The agent runs INSIDE a hermes container whose HERMES_HOME
         // is mounted at /opt/data, so it reports paths like

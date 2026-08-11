@@ -197,6 +197,13 @@
       "when": 1778200000000,
       "tag": "0027_p1_platform",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1786406400000,
+      "tag": "0028_security_hardening",
+      "breakpoints": true
     }
   ]
 }

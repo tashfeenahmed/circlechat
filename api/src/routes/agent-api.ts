@@ -54,6 +54,7 @@ import {
   fireMentionTriggers,
 } from "../agents/mention-triggers.js";
 import { recordModelUsage, refreshAgentRunUsage } from "../lib/model-usage-store.js";
+import { safePublicFetch } from "../lib/safe-fetch.js";
 
 // Auth: Bearer <agent.botToken>  → resolves `req.agentCtx` with agentId + memberId.
 // Anything hitting these endpoints is a trusted agent process and can see messages
@@ -1127,8 +1128,9 @@ async function resolveArtifactInput(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
     let res: Response;
+    let finalUrl: URL;
     try {
-      res = await fetch(Body.url, { signal: controller.signal, redirect: "follow" });
+      ({ response: res, finalUrl } = await safePublicFetch(Body.url, { signal: controller.signal }));
     } catch {
       clearTimeout(timer);
       reply.code(400).send({ error: "fetch_failed" });
@@ -1143,7 +1145,7 @@ async function resolveArtifactInput(
     const contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim() || "application/octet-stream";
     let nameHint = "";
     try {
-      nameHint = new URL(Body.url).pathname.split("/").pop() ?? "";
+      nameHint = finalUrl.pathname.split("/").pop() ?? "";
     } catch {
       nameHint = "";
     }

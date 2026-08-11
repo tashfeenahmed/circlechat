@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Trash2, ShieldCheck, UserMinus, Copy, Check, Sun, Moon, Monitor } from "lucide-react";
+import { Trash2, ShieldCheck, UserMinus, Sun, Moon, Monitor } from "lucide-react";
 import { useMe, useWorkspaceMembers, useInvites, useMembersDirectory } from "../lib/hooks";
 import { api } from "../api/client";
 import Segmented from "../components/Segmented";
@@ -397,7 +397,6 @@ function MembersAdminSection({
   const dir = useMembersDirectory();
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
 
   // Resolve a userId → display name/handle via the directory (which is keyed by
   // memberId, so build a userId index from its `id` field).
@@ -444,16 +443,6 @@ function MembersAdminSection({
     } finally {
       setBusy(null);
     }
-  }
-
-  function copyLink(url: string, id: string) {
-    navigator.clipboard?.writeText(url).then(
-      () => {
-        setCopied(id);
-        setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500);
-      },
-      () => {},
-    );
   }
 
   const memberRows = members.data?.members ?? [];
@@ -526,24 +515,9 @@ function MembersAdminSection({
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] truncate">{inv.email}</div>
                 <div className="text-[11px] font-mono text-[var(--color-muted)] truncate">
-                  invited {new Date(inv.createdAt).toLocaleDateString()}
+                  invited {new Date(inv.createdAt).toLocaleDateString()} · expires {new Date(inv.expiresAt).toLocaleDateString()}
                 </div>
               </div>
-              <button
-                onClick={() => copyLink(inv.inviteUrl, inv.id)}
-                className="btn sm ghost inline-flex items-center gap-1"
-                title="Copy invite link"
-              >
-                {copied === inv.id ? (
-                  <>
-                    <Check size={13} strokeWidth={2} /> Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy size={13} strokeWidth={2} /> Link
-                  </>
-                )}
-              </button>
               <button
                 onClick={() => revokeInvite(inv.id)}
                 disabled={busy === inv.id}
@@ -566,6 +540,7 @@ function humanize(code: string): string {
     admin_only: "Only admins can do that.",
     member_not_found: "That member isn't in this workspace.",
     already_accepted: "That invite was already accepted.",
+    invite_expired: "That invite has expired.",
     not_found: "Not found.",
     email_in_use: "That email is already taken.",
     handle_in_use: "That handle is already taken.",
