@@ -578,7 +578,8 @@ export interface PendingInvite {
   email: string;
   invitedBy: string;
   createdAt: string;
-  inviteUrl: string;
+  expiresAt: string;
+  role: string;
 }
 
 export function useInvites() {

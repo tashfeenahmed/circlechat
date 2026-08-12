@@ -1,6 +1,8 @@
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
 import multipart from "@fastify/multipart";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
@@ -47,10 +49,39 @@ const app = Fastify({
         : undefined,
   },
   bodyLimit: 20 * 1024 * 1024,
+  // Production traffic arrives through exactly one Caddy hop. Trusting only
+  // that hop lets the rate limiter use the real client IP without accepting a
+  // spoofed X-Forwarded-For chain.
+  trustProxy: 1,
 });
 
+await app.register(helmet, {
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
+      connectSrc: ["'self'", "wss:"],
+      mediaSrc: ["'self'", "blob:", "https:"],
+      frameSrc: ["'self'", "blob:", "data:"],
+      workerSrc: ["'self'", "blob:"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+});
+await app.register(rateLimit, {
+  global: true,
+  max: 300,
+  timeWindow: "1 minute",
+});
 await app.register(cors, {
-  origin: (origin, cb) => cb(null, true),
+  origin: config.publicOrigin,
   credentials: true,
 });
 await app.register(cookie, { secret: config.sessionSecret });

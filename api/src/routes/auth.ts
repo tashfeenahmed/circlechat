@@ -30,10 +30,17 @@ import { config } from "../lib/config.js";
 import { deriveUniqueWorkspaceHandle } from "../lib/workspace-handle.js";
 import { workspaceAccess } from "../lib/access-control.js";
 
+const DisplayName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .refine((value) => !/[<>\u0000-\u001f\u007f]/.test(value), "invalid_display_name");
+
 const SignupBody = z.object({
   email: z.string().email(),
   password: z.string().min(8),
-  name: z.string().min(1).max(100),
+  name: DisplayName,
   handle: z
     .string()
     .min(2)
@@ -54,7 +61,7 @@ const InviteBody = z.object({
 });
 
 const UpdateMeBody = z.object({
-  name: z.string().min(1).max(100).optional(),
+  name: DisplayName.optional(),
   handle: z
     .string()
     .min(2)
@@ -71,7 +78,8 @@ const ChangePasswordBody = z.object({
 
 const AcceptInviteBody = z.object({
   token: z.string().min(10),
-  name: z.string().min(1).max(100),
+  email: z.string().email(),
+  name: DisplayName,
   handle: z
     .string()
     .min(2)
@@ -90,7 +98,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ─────────── signup: creates a user + a brand-new workspace ───────────
-  app.post("/auth/signup", async (req, reply) => {
+  app.post("/auth/signup", { config: { rateLimit: { max: 5, timeWindow: "1 hour" } } }, async (req, reply) => {
     const body = SignupBody.parse(req.body);
 
     // Single-admin platform: only the very first user may sign up (the admin).
@@ -180,7 +188,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ─────────── login: picks a default workspace if the user has any ──────
-  app.post("/auth/login", async (req, reply) => {
+  app.post("/auth/login", { config: { rateLimit: { max: 5, timeWindow: "15 minutes" } } }, async (req, reply) => {
     const body = LoginBody.parse(req.body);
     const [u] = await db.select().from(users).where(eq(users.email, body.email)).limit(1);
     if (!u) return reply.code(401).send({ error: "invalid_credentials" });
@@ -300,6 +308,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     }
     const token = rawToken(40);
     const invId = id("inv");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     await db.insert(invites).values({
       id: invId,
       workspaceId,
@@ -308,26 +317,30 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       invitedBy: memberId,
       role: body.role,
       channelIds: body.channelIds,
+      expiresAt,
     });
     const url = `${config.publicBaseUrl}/invite/${token}`;
     if (!config.smtpUrl) {
       req.log.info({ email: body.email, url }, "invite generated (no SMTP, URL in log)");
     }
-    return { ok: true, inviteUrl: url, email: body.email };
+    return { ok: true, inviteUrl: url, email: body.email, expiresAt };
   });
 
   // List pending (not-yet-accepted) invites for the caller's current workspace.
-  // Any member can view; the management UI uses this to show who's outstanding.
+  // Admin-only. Tokens are deliberately omitted: a pending-invite list is not
+  // a capability-token distribution endpoint.
   app.get("/auth/invites", { preHandler: requireAuth }, async (req, reply) => {
     const { workspaceId } = req.auth!;
     if (!workspaceId) return reply.code(409).send({ error: "no_workspace" });
+    const access = await workspaceAccess(workspaceId, req.auth!.userId);
+    if (!access?.permissions.includes("*")) return reply.code(403).send({ error: "admin_only" });
     const rows = await db
       .select({
         id: invites.id,
         email: invites.email,
-        token: invites.token,
         invitedBy: invites.invitedBy,
         createdAt: invites.createdAt,
+        expiresAt: invites.expiresAt,
         acceptedAt: invites.acceptedAt,
         role: invites.role,
         channelIds: invites.channelIds,
@@ -341,9 +354,9 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         email: r.email,
         invitedBy: r.invitedBy,
         createdAt: r.createdAt,
+        expiresAt: r.expiresAt,
         role: r.role,
         channelIds: r.channelIds,
-        inviteUrl: `${config.publicBaseUrl}/invite/${r.token}`,
       })),
     };
   });
@@ -377,6 +390,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     const [inv] = await db.select().from(invites).where(eq(invites.token, token)).limit(1);
     if (!inv) return reply.code(404).send({ error: "not_found" });
     if (inv.acceptedAt) return reply.code(410).send({ error: "already_accepted" });
+    if (inv.expiresAt <= new Date()) return reply.code(410).send({ error: "invite_expired" });
     const [ws] = await db
       .select({ id: workspaces.id, name: workspaces.name, handle: workspaces.handle })
       .from(workspaces)
@@ -387,7 +401,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     // one-click-join (yes if already a member of the ws, or if their email
     // matches the invite).
     const sid = req.cookies[COOKIE_NAME];
-    let viewer: { userId: string; email: string; alreadyMember: boolean } | null = null;
+    let viewer: { userId: string; email: string; alreadyMember: boolean; emailMatches: boolean } | null = null;
     if (sid) {
       const s = await loadSession(sid);
       if (s) {
@@ -405,16 +419,24 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
           userId: s.userId,
           email: s.user.email,
           alreadyMember: !!existingWm,
+          emailMatches: normalizeEmail(s.user.email) === normalizeEmail(inv.email),
         };
       }
     }
-    return { email: inv.email, workspace: ws, role: inv.role, channelIds: inv.channelIds, viewer };
+    return {
+      emailHint: maskEmail(inv.email),
+      workspace: ws,
+      role: inv.role,
+      channelIds: inv.channelIds,
+      expiresAt: inv.expiresAt,
+      viewer,
+    };
   });
 
   // One-click join for already-authenticated users. Auto-add to the
   // workspace + every public channel. The user only sees this path from the
   // UI when they're logged in and don't yet belong to the workspace.
-  app.post("/auth/accept-invite-as-self", { preHandler: requireAuth }, async (req, reply) => {
+  app.post("/auth/accept-invite-as-self", { preHandler: requireAuth, config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (req, reply) => {
     const body = z.object({ token: z.string().min(10) }).parse(req.body);
     const { user } = req.auth!;
     const sid = req.cookies[COOKIE_NAME];
@@ -423,6 +445,10 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     const [inv] = await db.select().from(invites).where(eq(invites.token, body.token)).limit(1);
     if (!inv) return reply.code(404).send({ error: "not_found" });
     if (inv.acceptedAt) return reply.code(410).send({ error: "already_accepted" });
+    if (inv.expiresAt <= new Date()) return reply.code(410).send({ error: "invite_expired" });
+    if (normalizeEmail(user.email) !== normalizeEmail(inv.email)) {
+      return reply.code(403).send({ error: "invite_email_mismatch" });
+    }
 
     await db
       .insert(workspaceMembers)
@@ -444,16 +470,23 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
 
   // Accepting an invite — creates the user if new, adds them to the workspace,
   // and bootstraps membership in every public channel in that workspace.
-  app.post("/auth/accept-invite", async (req, reply) => {
+  app.post("/auth/accept-invite", { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (req, reply) => {
     const body = AcceptInviteBody.parse(req.body);
     const [inv] = await db.select().from(invites).where(eq(invites.token, body.token)).limit(1);
     if (!inv) return reply.code(404).send({ error: "not_found" });
     if (inv.acceptedAt) return reply.code(410).send({ error: "already_accepted" });
+    if (inv.expiresAt <= new Date()) return reply.code(410).send({ error: "invite_expired" });
+    if (normalizeEmail(body.email) !== normalizeEmail(inv.email)) {
+      return reply.code(403).send({ error: "invite_email_mismatch" });
+    }
 
     // Reuse an existing user if the email already signed up elsewhere; else create.
     let uid: string;
     const [existE] = await db.select().from(users).where(eq(users.email, inv.email)).limit(1);
     if (existE) {
+      if (!(await verifyPassword(body.password, existE.passwordHash))) {
+        return reply.code(401).send({ error: "invalid_credentials" });
+      }
       uid = existE.id;
     } else {
       const [existH] = await db
@@ -487,6 +520,16 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     setSessionCookie(reply, sid);
     return { ok: true, memberId, workspaceId: inv.workspaceId };
   });
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function maskEmail(email: string): string {
+  const [local, domain = ""] = email.split("@", 2);
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}${"*".repeat(Math.max(3, local.length - visible.length))}@${domain}`;
 }
 
 async function joinInviteChannels(workspaceId: string, memberId: string, role: string, invitedChannelIds: string[]): Promise<void> {

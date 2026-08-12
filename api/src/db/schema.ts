@@ -11,6 +11,7 @@ import {
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ───────────────── workspaces ─────────────────
 export const workspaces = pgTable(
@@ -285,6 +286,9 @@ export const invites = pgTable(
     token: varchar("token", { length: 64 }).notNull(),
     invitedBy: varchar("invited_by", { length: 32 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true })
+      .default(sql`now() + interval '7 days'`)
+      .notNull(),
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
     role: varchar("role", { length: 40 }).notNull().default("member"),
     channelIds: jsonb("channel_ids").$type<string[]>().notNull().default([]),

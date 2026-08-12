@@ -5,9 +5,9 @@ import { humanizeError } from "../api/errors";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface InviteInfo {
-  email: string;
+  emailHint: string;
   workspace: { id: string; name: string; handle: string } | null;
-  viewer: { userId: string; email: string; alreadyMember: boolean } | null;
+  viewer: { userId: string; email: string; alreadyMember: boolean; emailMatches: boolean } | null;
 }
 
 export default function InvitePage() {
@@ -15,6 +15,7 @@ export default function InvitePage() {
   const [info, setInfo] = useState<InviteInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,7 +35,7 @@ export default function InvitePage() {
     setErr(null);
     setBusy(true);
     try {
-      await api.post("/auth/accept-invite", { token, name, handle, password });
+      await api.post("/auth/accept-invite", { token, email, name, handle, password });
       await qc.invalidateQueries({ queryKey: ["me"] });
       nav("/", { replace: true });
     } catch (e) {
@@ -71,7 +72,7 @@ export default function InvitePage() {
         </h1>
         {info && (
           <p className="text-[13px] text-[var(--color-muted)] mb-4">
-            Invitation for <b className="text-[var(--color-ink)]">{info.email}</b>
+            Invitation for <b className="text-[var(--color-ink)]">{info.emailHint}</b>
             {ws && (
               <> · workspace <span className="font-mono">@{ws.handle}</span></>
             )}
@@ -94,13 +95,10 @@ export default function InvitePage() {
             </Link>
           </div>
         )}
-        {viewer && !viewer.alreadyMember && (
+        {viewer && !viewer.alreadyMember && viewer.emailMatches && (
           <div className="space-y-3">
             <p className="text-[13px] text-[var(--color-muted)]">
               Signed in as <b className="text-[var(--color-ink)]">{viewer.email}</b>.
-              {viewer.email !== info?.email && (
-                <> The invite was addressed to <b>{info?.email}</b>, but you can join with this account.</>
-              )}
             </p>
             <button
               onClick={joinAsSelf}
@@ -126,9 +124,37 @@ export default function InvitePage() {
           </div>
         )}
 
+        {viewer && !viewer.alreadyMember && !viewer.emailMatches && (
+          <div className="space-y-3">
+            <p className="text-[13px] text-[var(--color-muted)]">
+              This invite was sent to {info?.emailHint}. Sign in with that email address to accept it.
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                await api.post("/auth/logout");
+                await qc.invalidateQueries({ queryKey: ["me"] });
+                nav("/login", { replace: true });
+              }}
+              className="w-full bg-[var(--color-ink)] text-paper rounded py-2 text-[13px] font-medium"
+            >
+              Sign in with invited email
+            </button>
+          </div>
+        )}
+
         {/* ── Not logged in — classic signup path ── */}
         {info && !viewer && (
           <form onSubmit={submitSignup} className="space-y-3">
+            <input
+              type="email"
+              autoComplete="email"
+              placeholder={`Invited email (${info.emailHint})`}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2"
+            />
             <input
               placeholder="Full name"
               value={name}

@@ -10,6 +10,8 @@ const MESSAGES: Record<string, string> = {
   no_workspace_selected: "Pick a workspace first.",
   no_workspace: "You aren't in a workspace yet.",
   already_accepted: "That invite has already been used.",
+  invite_expired: "That invite has expired. Ask a workspace admin for a new one.",
+  invite_email_mismatch: "Sign in with, or enter, the email address this invite was sent to.",
   not_found: "Not found.",
   validation: "Some fields are missing or invalid.",
   freeapi_base_url_required: "FreeLLMAPI needs a base URL (e.g. http://your-server:3200/v1).",

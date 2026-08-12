@@ -14,4 +14,7 @@ export const config = {
   apiInternalUrl: process.env.API_INTERNAL_URL ?? `http://localhost:${Number(process.env.PORT ?? 3000)}`,
   storageDir: process.env.STORAGE_DIR ?? "./storage",
   smtpUrl: process.env.SMTP_URL ?? "",
+  // CORS compares origins, not full URLs (PUBLIC_BASE_URL may include a path
+  // or a trailing slash in operator-managed deployments).
+  publicOrigin: new URL(required("PUBLIC_BASE_URL", "http://localhost:5173")).origin,
 } as const;
