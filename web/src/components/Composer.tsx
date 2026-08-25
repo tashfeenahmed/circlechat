@@ -218,7 +218,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
           <span className="shrink-0">
             <a href="https://github.com/tashfeenahmed/circlechat" className="underline underline-offset-2 hover:text-[var(--color-ink)]">Self-host free</a>
             <span className="mx-1.5">·</span>
-            <a href="https://cloud.circlechat.co" className="underline underline-offset-2 hover:text-[var(--color-ink)]">Get your own team</a>
+            <a href="https://cloud.circlechat.co/?utm_source=app&utm_medium=in_app&utm_campaign=cloud_trial&utm_content=composer" className="underline underline-offset-2 hover:text-[var(--color-ink)]">Get your own team</a>
           </span>
         </div>
       </div>
