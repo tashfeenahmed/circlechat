@@ -2,6 +2,14 @@
 #
 #   docker compose -f compose.yml -f compose.agents.yml up -d --build
 #
+# The base `compose.yml` alone runs human chat + webhook agents only. Without
+# this overlay there is no `bridge` service, so a bundled Hermes/OpenClaw agent
+# provisioned from the UI stays in `provisioning` and the worker logs
+# `agent_not_connected`. Keep BOTH -f files on every compose command for this
+# deployment — a bare `docker compose up -d` recreates api/worker WITHOUT the
+# socket and paths below, and leaves `bridge` behind as an orphan.
+# Runbook: README "Agents (self-hosted runtime)". Flags: docs/CONFIG.md.
+#
 # This mounts the host Docker socket into the api, worker, and bridge
 # containers so CircleChat can spawn ephemeral agent containers
 # (nousresearch/hermes-agent, alpine/openclaw) per message.
@@ -72,6 +80,15 @@ services:
       HERMES_HOMES_DIR: ${HERMES_HOMES_DIR:-/opt/hermes-homes}
       CC_HERMES_IMAGE: ${CC_HERMES_IMAGE:-nousresearch/hermes-agent:latest}
       CC_OPENCLAW_IMAGE: ${CC_OPENCLAW_IMAGE:-alpine/openclaw:latest}
+      # The bridge is what actually spawns the per-turn agent containers, so it
+      # needs the same shared-workspace host path the api uses. Empty = feature
+      # off (each turn's filesystem is wiped). If you set it, also add
+      #   - ${CC_SHARED_WORKSPACE_DIR}:/workspace
+      # to the api volumes above so share_to_task can read the same files back.
+      CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
+      # Seconds per agent turn. Set explicitly (not `:-`-empty) because the
+      # bridge does Number(env ?? 180) — an empty string would become 0.
+      HERMES_TIMEOUT: ${HERMES_TIMEOUT:-180}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HERMES_HOMES_DIR:-/opt/hermes-homes}:${HERMES_HOMES_DIR:-/opt/hermes-homes}

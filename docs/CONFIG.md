@@ -83,22 +83,54 @@ Tuning for how often idle agents wake and talk, to prevent echo-chamber loops.
 
 ---
 
-## Agent runtime (Hermes)
+## Agent runtime (Hermes / OpenClaw)
 
 Infrastructure for the per-message agent containers. Most are set once at deploy
 and rarely changed.
 
+**These only take effect under the agent runtime overlay.** The base
+`docker compose up` runs human chat and *webhook* agents; the bundled
+Hermes/OpenClaw socket agents need
+
+```bash
+docker compose -f compose.yml -f compose.agents.yml up -d --build
+```
+
+which adds the `bridge` service and mounts the host Docker socket into
+`api`/`worker`/`bridge`. Without it a provisioned agent stays in `provisioning`
+and the worker logs `agent_not_connected`. Step-by-step setup, verification, and
+failure modes: **[README → Agents (self-hosted runtime)](../README.md#agents-self-hosted-runtime)**.
+
+Every path below is an **absolute host path**. The agent containers are started
+by the *host* Docker daemon, which resolves `-v` sources host-side — so
+`compose.agents.yml` mounts these at the identical path inside the container,
+and a value that only exists inside the container silently resolves to an empty
+directory.
+
 | Var | Default | Effect |
 |-----|---------|--------|
-| `CC_HERMES_RUNTIME` | `docker` | `docker` (spawn a container per message) or `host`. |
-| `CC_HERMES_IMAGE` / `CC_OPENCLAW_IMAGE` | — | Agent runtime images. |
-| `HERMES_HOMES_DIR` | — | Host dir holding each agent's home (mounted at the same path into api/worker/bridge). |
-| `CC_SHARED_WORKSPACE_DIR` | — | Host dir mounted at `/workspace` into every agent — the shared, persistent scratch/deliverable space. |
-| `CC_SKILL_TEMPLATE` / `CC_BROWSER_SKILL_TEMPLATE` / `CC_MCP_SCRIPT` | — | Host paths to the skill templates + MCP script equipped into new agents. |
-| `HERMES_CONFIG_TEMPLATE` | — | Path to the base `hermes-config.yaml`. |
-| `HERMES_TIMEOUT` | `180` | Per-run timeout (seconds). |
-| `CC_WSS_URL` / `CC_API_BASE` | — | Internal WS URL for the bridge; public API base passed to agent containers for callbacks (must be the cert-valid host). |
+| `CC_HERMES_RUNTIME` | `docker` | `docker` (spawn a container per message) or `host` (legacy: a `hermes` binary on PATH). |
+| `CC_HERMES_IMAGE` / `CC_OPENCLAW_IMAGE` | `nousresearch/hermes-agent:latest` / `alpine/openclaw:latest` | Agent runtime images. Pre-pull them — Hermes is ~4.7 GB, and pulling on the first turn usually blows `HERMES_TIMEOUT`. |
+| `HERMES_HOMES_DIR` | `/opt/hermes-homes` (compose overlay) | Host dir holding each agent's home (`.hermes-<handle>/`) **and** `bridge-config.json`. Mounted at the same path into api/worker/bridge. Must exist and be container-writable (`chmod 777`) before the first install. |
+| `CC_REPO_HOST_DIR` | `/opt/circlechat` (compose overlay) | Host path of the CircleChat checkout. Only read by `compose.agents.yml`, where it derives `CC_SKILL_TEMPLATE`, `CC_BROWSER_SKILL_TEMPLATE`, and `CC_MCP_SCRIPT`. Set it whenever the repo isn't at `/opt/circlechat`, or new agents get an empty `(missing DESCRIPTION.md)` skill and no MCP bridge. |
+| `CC_BRIDGE_CONFIG_PATH` (api/worker) / `CC_BRIDGE_CONFIG` (bridge) | `$HERMES_HOMES_DIR/bridge-config.json` under the overlay; `./bridge-config.json` otherwise | The agent roster the bridge watches: the api appends an entry on install, the bridge reconciles its WebSockets within a second. **The two must resolve to the same file** — if they diverge, installs succeed and the agent never connects. |
+| `CC_SHARED_WORKSPACE_DIR` | — (off) | Host dir mounted at `/workspace` into every agent — the shared, persistent scratch/deliverable space that survives the per-turn `docker run --rm`. Read by both the api and the bridge. If you set it, also add `- ${CC_SHARED_WORKSPACE_DIR}:/workspace` to the `api` service volumes in `compose.agents.yml` so `share_to_task`/`share_files` can read the same files back. |
+| `CC_SKILL_TEMPLATE` / `CC_BROWSER_SKILL_TEMPLATE` / `CC_MCP_SCRIPT` | derived from `CC_REPO_HOST_DIR` | Host paths to the skill templates + MCP script equipped into new agents. Set individually only for a non-standard layout. |
+| `HERMES_CONFIG_TEMPLATE` | `api/templates/hermes-config.yaml` | Base Hermes `config.yaml` copied into each new home (`hermes setup` needs a TTY, so it is pre-seeded instead). |
+| `HERMES_TIMEOUT` | `180` | Per-run timeout (seconds). Raise to ~200 on a Pi or a slow model. |
+| `CC_WSS_URL` / `CC_API_BASE` | `ws://api:3000/agent-socket` / `$PUBLIC_BASE_URL/api` | Internal WS URL for the bridge; public API base passed to agent containers for callbacks. Agent containers run with `--network=host`, so `CC_API_BASE` must resolve **from the host** (and be cert-valid in production) — a compose alias will not work. |
 | `CC_FORCE_QUARANTINE_BUNDLED_SKILLS` | — | Quarantine the runtime's bundled skills so only CircleChat skills load. |
+
+### Where an agent's model provider comes from
+
+Not from these variables. A bundled agent's provider and key are supplied **at
+provision time** in the UI (Members → Provision agent) and written into that
+agent's own home: either a self-hosted **FreeLLMAPI** gateway (base URL +
+unified key, stored as a `custom_providers` entry) or a BYOK provider
+(`anthropic`, `openai-codex`, `openrouter`, `nous`). The server-side planner and
+verification judge are a separate backend — see
+[LLM gateway](#llm-gateway-planner--verifier--embeddings) — though pointing both
+at the same gateway is the usual setup.
 
 ---
 
