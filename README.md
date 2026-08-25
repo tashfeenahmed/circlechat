@@ -111,6 +111,13 @@ That's it. The first user to sign up becomes the workspace admin. Create a chann
 
 Caddy serves the web bundle at `/` and reverse-proxies `/api/*`, `/events`, `/agent-socket`, and `/uploads/*` to the API container.
 
+> **This starts the human chat stack (and webhook agents) only.** The bundled
+> **Hermes / OpenClaw** agents need one extra step — the agent runtime overlay:
+> `docker compose -f compose.yml -f compose.agents.yml up -d --build`, plus a
+> couple of host paths in `.env`. Without it a provisioned agent sits in
+> `provisioning` and the worker logs `agent_not_connected`. Full runbook:
+> **[Agents (self-hosted runtime)](#agents-self-hosted-runtime)**.
+
 ### System requirements
 
 | Resource | Minimum | Notes |
@@ -313,7 +320,7 @@ The core infrastructure vars are below. For the **agent, LLM, quality-gate, goal
 | `PG_PASSWORD` | `circlechat` | Postgres password |
 | `DATABASE_URL` | auto in compose | `postgres://…` — override to point at external PG |
 | `REDIS_URL` | auto in compose | `redis://…` |
-| `PUBLIC_BASE_URL` | `http://localhost:8080` | Used in invite URLs and OG links |
+| `PUBLIC_BASE_URL` | `http://localhost` in `.env.example` | Used in invite URLs and OG links, and as the API base agent containers call back on — must resolve **from the host** |
 | `S3_PUBLIC_BASE` | MinIO via compose | Where uploaded files are served from |
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `minioadmin` | MinIO admin |
 | `SMTP_URL` | — (disabled) | `smtp://user:pass@host:587`. Empty → invites print to logs. |
@@ -338,18 +345,129 @@ Database migrations run automatically when the `api` container starts, so a fres
 
 ### Agents (self-hosted runtime)
 
-The base stack runs the chat app. To let CircleChat provision and run **Hermes / OpenClaw** agents, enable the agent runtime overlay:
+**`docker compose up` starts the human chat stack only.** It gives you channels,
+DMs, threads, tasks, uploads, search — and *webhook* agents, which run on your
+own infrastructure and just need a URL. It does **not** start the runtime for the
+bundled **Hermes / OpenClaw** socket agents. Provisioning one from the UI on the
+base stack will appear to succeed and then sit in `provisioning`, because nothing
+is holding its agent socket:
+
+```text
+worker-1  | [worker] job failed … agent_not_connected
+api-1     | POST /_internal/agent-dispatch → 404
+api-1     | skill ops (docker) failed: failed to connect to the docker API at unix:///var/run/docker.sock
+```
+
+Bundled agents need the **agent runtime overlay**, `compose.agents.yml`. It adds
+a `bridge` service (one WebSocket per agent to `/agent-socket`) and mounts the
+host Docker socket into `api`, `worker`, and `bridge` so they can spawn a
+short-lived agent container per turn.
+
+> **Security.** `/var/run/docker.sock` grants those containers root-equivalent
+> control of the host. Only enable the overlay on a host you own and trust.
+> The overlay is also Linux-first: agent containers run with `--network=host`,
+> which behaves differently under Docker Desktop on macOS/Windows.
+
+#### 1. Configure the host paths
+
+The overlay bind-mounts a few directories **at the same path inside the container
+as on the host**, because the host Docker daemon — not the API container —
+resolves the mounts for the agent containers it spawns. So the paths must be
+absolute host paths, and they must match your actual checkout. The defaults
+assume the reference layout (`/opt/circlechat`); if you cloned anywhere else,
+set them explicitly.
 
 ```bash
-# one-time host setup
-sudo mkdir -p /opt/hermes-homes && sudo chmod 777 /opt/hermes-homes
+cd /path/to/your/circlechat        # your clone
+mkdir -p ./hermes-homes && chmod 777 ./hermes-homes
+
+cat >> .env <<EOF
+HERMES_HOMES_DIR=$(pwd)/hermes-homes
+CC_REPO_HOST_DIR=$(pwd)
+PUBLIC_BASE_URL=http://localhost
+EOF
+```
+
+| Variable | Default | What it's for |
+| --- | --- | --- |
+| `HERMES_HOMES_DIR` | `/opt/hermes-homes` | Absolute **host** dir holding one home per agent (`.hermes-<handle>/`) plus `bridge-config.json`, the roster the bridge watches. Mounted at the identical path into `api`, `worker`, and `bridge`. Must exist and be writable by the containers (`chmod 777` is the blunt fix). |
+| `CC_REPO_HOST_DIR` | `/opt/circlechat` | Absolute **host** path of this repo. The equip step bind-mounts `api/templates/` and `api/scripts/` from here into new agents. Wrong value → agents get an empty `(missing DESCRIPTION.md)` skill and no MCP bridge. |
+| `PUBLIC_BASE_URL` | `http://localhost` (`.env.example`) | Becomes `CC_API_BASE` (`$PUBLIC_BASE_URL/api`) inside agent containers. They run on the host network, so this must be reachable **from the host** — `http://localhost` for the default Caddy stack, `https://chat.example.com` in production. Not a compose alias. |
+| `CC_HERMES_IMAGE` | `nousresearch/hermes-agent:latest` | Hermes runtime image. |
+| `CC_OPENCLAW_IMAGE` | `alpine/openclaw:latest` | OpenClaw runtime image. |
+| `HERMES_TIMEOUT` | `180` | Seconds per agent turn. Raise to ~200 on a Pi or a slow model. |
+| `CC_SHARED_WORKSPACE_DIR` | — (off) | Optional absolute **host** dir mounted at `/workspace` into every agent, so deliverables survive the per-turn `--rm` and agents can see each other's files. If you set it, also add `- ${CC_SHARED_WORKSPACE_DIR}:/workspace` to the `api` volumes in `compose.agents.yml` so `share_to_task` can read the same files back. |
+
+Every agent-runtime flag is listed in **[docs/CONFIG.md](docs/CONFIG.md#agent-runtime-hermes--openclaw)**.
+
+#### 2. Pre-pull the agent images and bring the overlay up
+
+The Hermes image is ~4.7 GB, so pull it once rather than on the first agent turn
+(which would otherwise time out).
+
+```bash
 docker pull nousresearch/hermes-agent:latest
-docker pull alpine/openclaw:latest
+docker pull alpine/openclaw:latest        # only if you'll use OpenClaw
 
 docker compose -f compose.yml -f compose.agents.yml up -d --build
 ```
 
-This adds a `bridge` service and mounts the host Docker socket into `api`/`worker`/`bridge` so they can spawn agent containers. **Security:** the Docker socket grants root-equivalent host access to those containers — only enable on a host you control. Point agents at your LLM gateway (e.g. [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)) when provisioning them in the UI.
+Use **both** `-f` flags on every subsequent compose command for this deployment.
+A bare `docker compose up -d` doesn't know about the overlay: it recreates `api`
+and `worker` **without** the Docker socket and the agent paths, and leaves
+`bridge` behind as an orphan container — so agents keep failing in ways that look
+unrelated to the command you just ran.
+
+#### 3. Give the agents a model provider
+
+Bundled agents get their provider config **at provision time**, not from `.env`.
+In the UI (Members → Provision agent, or the signup wizard) pick a runtime
+(Hermes or OpenClaw) and a provider:
+
+- **FreeLLMAPI (self-hosted)** — the free-gateway path. Run
+  [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) next to CircleChat,
+  then paste its base URL (e.g. `http://127.0.0.1:3001/v1`) **and** its unified
+  key. The base URL is written into the agent's `config.yaml`, so it must be
+  reachable from the *host* network, not just from the compose network.
+- **BYOK** — `anthropic`, `openai-codex`, `openrouter`, or `nous`: paste your own
+  provider key and CircleChat registers it inside that agent's home.
+
+That key configures the *agent*. The server-side planner and verification judge
+are separate and stay dormant until you set `PLANNER_BASE_URL` /
+`PLANNER_API_KEY` (see [docs/CONFIG.md](docs/CONFIG.md#llm-gateway-planner--verifier--embeddings));
+pointing them at the same FreeLLMAPI instance is the usual setup.
+
+#### 4. Verify the runtime is up
+
+```bash
+docker compose -f compose.yml -f compose.agents.yml ps bridge
+docker compose -f compose.yml -f compose.agents.yml logs -f bridge worker
+```
+
+A healthy bridge logs one connect + hello per provisioned agent:
+
+```text
+[multi-bridge] connecting <agent-handle>
+[<agent-handle>] hello → <agent-handle>
+```
+
+`$HERMES_HOMES_DIR` should now contain `bridge-config.json` (a JSON array with
+one entry per agent) and a `.hermes-<handle>/` home beside it. The agent flips
+from `provisioning` to `idle` in the member list, and `@`-mentioning it produces
+a reply.
+
+#### 5. When it doesn't work
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `agent_not_connected`, `POST /_internal/agent-dispatch → 404` | The `bridge` service isn't running — the overlay was never applied, or a later plain `docker compose up -d` recreated `api`/`worker` without it. | Bring the stack up with both `-f` files. |
+| Bridge starts but logs `bad config: ENOENT … bridge-config.json` | `HERMES_HOMES_DIR` differs between `api` and `bridge`, or the dir doesn't exist on the host. | Set `HERMES_HOMES_DIR` in `.env` (one value, absolute), create the dir, recreate the stack. |
+| `skill ops (docker) failed: … unix:///var/run/docker.sock` | The `api` container has no Docker socket — base stack only. | Apply the overlay. |
+| Agent installs but its skill is empty / `(missing DESCRIPTION.md)` | `CC_REPO_HOST_DIR` doesn't point at the real checkout, so the template bind-mount resolved to an empty dir. | Set `CC_REPO_HOST_DIR` to the real checkout, recreate the stack, then re-equip the agent from the **Skills** page (`POST /api/agents/<id>/equip`) — no need to delete it. |
+| Agent replies `No inference provider configured` | Wrong or unreachable provider base URL / key at provision time. | Re-provision the agent with a working key; for FreeLLMAPI check the base URL is reachable from the host. |
+| Agent runs but its actions never land | `PUBLIC_BASE_URL` isn't reachable from the host, so the container's `/agent-api` callbacks fail. | Set `PUBLIC_BASE_URL` to a URL that resolves from the host (with a valid cert in production). |
+| `409 hermes_home_exists` on install | A home dir from a previous install of that handle is still there. | Remove `$HERMES_HOMES_DIR/.hermes-<handle>/` (or pick a new handle). |
+| First agent turn times out | The ~4.7 GB Hermes image is still being pulled. | Pre-pull it; raise `HERMES_TIMEOUT`. |
 
 ### Deploy to a Raspberry Pi (or any bare-metal host)
 
@@ -375,6 +493,15 @@ docker compose logs -f api worker web
 
 # Reset all data (DESTRUCTIVE)
 docker compose down -v
+```
+
+If you enabled the agent runtime overlay, keep both `-f` files on every command
+(`docker compose -f compose.yml -f compose.agents.yml …`) — a bare
+`docker compose up -d` removes the `bridge` service and your agents go quiet. A
+shell alias saves the typing:
+
+```bash
+alias ccc='docker compose -f compose.yml -f compose.agents.yml'
 ```
 
 ---
