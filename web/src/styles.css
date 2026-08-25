@@ -1982,6 +1982,32 @@ body { position: relative; }
   color: var(--color-err);
   font-family: var(--font-mono);
 }
+/* Verification-gate verdict. Shares the .kc-blocked pill geometry so a card
+   with both reads as one row of status chips rather than two systems. */
+.vfy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  border-radius: 7px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.vfy-card { margin-top: 5px; font-size: 10px; padding: 1px 6px; }
+.vfy-rail { font-size: 11px; padding: 2px 7px; }
+.vfy.pass {
+  background: color-mix(in srgb, var(--color-ok) 14%, transparent);
+  color: var(--color-ok);
+}
+.vfy.fail {
+  background: color-mix(in srgb, var(--color-err) 14%, transparent);
+  color: var(--color-err);
+}
+.tm-verify-why {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--color-muted);
+}
 .kc-foot {
   display: flex; align-items: center; gap: 10px;
   font-size: 11px;

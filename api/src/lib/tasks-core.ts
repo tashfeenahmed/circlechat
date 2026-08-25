@@ -41,6 +41,34 @@ function guard(t: TaskRow | null, workspaceId: string): { ok: boolean; error?: "
   return { ok: true };
 }
 
+// The latest verification verdict as clients see it. `score` is null for the
+// non-rubric methods (e.g. the deterministic headless-render gate).
+export interface TaskVerificationSummary {
+  verdict: string;
+  score: number | null;
+  rationale: string;
+  createdAt: Date;
+}
+
+// Pure rule for turning the newest `task_verifications` row into what the board
+// shows. Split out from the query so it can be tested without a database, and
+// so the API and the reviewer agent's `latestVerdictSummary` apply the SAME
+// rule: `error` is the judge's FAIL-OPEN outcome (gateway down, unparseable
+// reply). It means "we don't know", not "it failed" — surfacing it as a red
+// badge would tell a human a deliverable was rejected when nothing was ever
+// judged, which is exactly the misread the fail-open design exists to avoid.
+export function summariseVerdict(
+  row: { verdict: string; score: number | null; rationale: string; createdAt: Date } | null | undefined,
+): TaskVerificationSummary | null {
+  if (!row || row.verdict === "error") return null;
+  return {
+    verdict: row.verdict,
+    score: row.score == null ? null : Number(row.score),
+    rationale: row.rationale || "",
+    createdAt: row.createdAt,
+  };
+}
+
 export async function hydrateTasks(
   rows: TaskRow[],
 ): Promise<
@@ -54,12 +82,22 @@ export async function hydrateTasks(
       // Ids of unconditional `blocks` prerequisites that aren't `done` yet. A
       // non-empty array means the task is workflow-blocked and shouldn't start.
       blockedBy: string[];
+      // Latest verification-gate verdict, or null when the task has never been
+      // judged (the gate is opt-in, so this is null on most deployments) or
+      // when the newest verdict is `error` — a fail-open judge outage carries
+      // no signal and must not render as a failure. Same rule as the reviewer
+      // agent's `latestVerdictSummary`, so the board and the agent see one
+      // story.
+      verification: TaskVerificationSummary | null;
+      // Convenience mirror of `verification?.verdict === "pass"`, matching the
+      // board-stage rule of the same name in `stageContext`.
+      verificationPassed: boolean;
     }
   >
 > {
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
-  const [as, ls, subs, coms, lks, blockerLinks] = await Promise.all([
+  const [as, ls, subs, coms, lks, blockerLinks, verdicts] = await Promise.all([
     db.select().from(taskAssignees).where(inArray(taskAssignees.taskId, ids)),
     db.select().from(taskLabels).where(inArray(taskLabels.taskId, ids)),
     db
@@ -87,6 +125,21 @@ export async function hydrateTasks(
       })
       .from(taskLinks)
       .where(and(inArray(taskLinks.linkedTaskId, ids), eq(taskLinks.kind, "blocks"))),
+    // Newest verdict per task in ONE round-trip. DISTINCT ON keeps this at a
+    // single query for a whole board instead of one per card — the board list
+    // is the hot path, and a per-task lookup here would be an N+1 that scales
+    // with column length.
+    db
+      .selectDistinctOn([taskVerifications.taskId], {
+        taskId: taskVerifications.taskId,
+        verdict: taskVerifications.verdict,
+        score: taskVerifications.score,
+        rationale: taskVerifications.rationale,
+        createdAt: taskVerifications.createdAt,
+      })
+      .from(taskVerifications)
+      .where(inArray(taskVerifications.taskId, ids))
+      .orderBy(taskVerifications.taskId, desc(taskVerifications.createdAt)),
   ]);
   // Resolve the status of every prerequisite so we know which are still open.
   const sourceIds = Array.from(new Set(blockerLinks.map((l) => l.source)));
@@ -119,6 +172,11 @@ export async function hydrateTasks(
     arr.push(r.label);
     lMap.set(r.taskId, arr);
   }
+  const vMap = new Map<string, TaskVerificationSummary>();
+  for (const r of verdicts) {
+    const v = summariseVerdict(r);
+    if (v) vMap.set(r.taskId, v);
+  }
   const sMap = new Map(subs.map((r) => [r.parentId ?? "", Number(r.c) || 0]));
   const cMap = new Map(coms.map((r) => [r.taskId, Number(r.c) || 0]));
   const kMap = new Map(lks.map((r) => [r.taskId, Number(r.c) || 0]));
@@ -130,6 +188,8 @@ export async function hydrateTasks(
     commentCount: cMap.get(r.id) ?? 0,
     linkCount: kMap.get(r.id) ?? 0,
     blockedBy: blockedMap.get(r.id) ?? [],
+    verification: vMap.get(r.id) ?? null,
+    verificationPassed: vMap.get(r.id)?.verdict === "pass",
   }));
 }
 

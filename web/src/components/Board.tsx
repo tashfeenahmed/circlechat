@@ -6,6 +6,7 @@ import { useTasks, useMembersDirectory, useMe, useSpectator } from "../lib/hooks
 import { api, type Task, type TaskStatus } from "../api/client";
 import Avatar from "./Avatar";
 import TaskModal from "./TaskModal";
+import VerificationBadge from "./VerificationBadge";
 
 const COLUMNS: Array<{ id: TaskStatus; title: string; glyph: string }> = [
   { id: "backlog", title: "Backlog", glyph: "◦" },
@@ -271,6 +272,7 @@ export default function Board() {
                         Blocked
                       </div>
                     )}
+                    <VerificationBadge verification={c.verification} />
                     {c.labels.length > 0 && (
                       <div className="kc-labels">
                         {c.labels.map((l) => (

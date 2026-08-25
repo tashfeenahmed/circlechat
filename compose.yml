@@ -86,6 +86,23 @@ services:
       # containers, also add `- ${CC_SHARED_WORKSPACE_DIR}:/workspace` to the
       # api/worker/bridge `volumes:` (see the box compose).
       CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
+      # ── Planner / judge backend ────────────────────────────────────────
+      # One OpenAI-compatible /v1 endpoint powers the goal planner, the mission
+      # planner, the task condenser, the memory janitor, and the verification
+      # judge. Everything below is DORMANT until a base URL resolves — without
+      # one, VERIFY_GATE=on is a no-op because the judge has nothing to call.
+      PLANNER_BASE_URL: ${PLANNER_BASE_URL:-}
+      PLANNER_API_KEY: ${PLANNER_API_KEY:-}
+      PLANNER_MODEL: ${PLANNER_MODEL:-}
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      # ── Verification gate (opt-in) ─────────────────────────────────────
+      VERIFY_GATE: ${VERIFY_GATE:-}
+      VERIFY_EXEC: ${VERIFY_EXEC:-}
+      VERIFIER_PASS_THRESHOLD: ${VERIFIER_PASS_THRESHOLD:-}
+      # ── Agent action gating (opt-in) ───────────────────────────────────
+      APPROVE_RISK_AT: ${APPROVE_RISK_AT:-}
+      ENFORCE_AGENT_SCOPES: ${ENFORCE_AGENT_SCOPES:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -101,6 +118,23 @@ services:
       API_INTERNAL_URL: http://api:3000
       SESSION_SECRET: ${SESSION_SECRET:-please-change-me}
       CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
+      # ── Planner / judge backend ────────────────────────────────────────
+      # One OpenAI-compatible /v1 endpoint powers the goal planner, the mission
+      # planner, the task condenser, the memory janitor, and the verification
+      # judge. Everything below is DORMANT until a base URL resolves — without
+      # one, VERIFY_GATE=on is a no-op because the judge has nothing to call.
+      PLANNER_BASE_URL: ${PLANNER_BASE_URL:-}
+      PLANNER_API_KEY: ${PLANNER_API_KEY:-}
+      PLANNER_MODEL: ${PLANNER_MODEL:-}
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      # ── Verification gate (opt-in) ─────────────────────────────────────
+      VERIFY_GATE: ${VERIFY_GATE:-}
+      VERIFY_EXEC: ${VERIFY_EXEC:-}
+      VERIFIER_PASS_THRESHOLD: ${VERIFIER_PASS_THRESHOLD:-}
+      # ── Agent action gating (opt-in) ───────────────────────────────────
+      APPROVE_RISK_AT: ${APPROVE_RISK_AT:-}
+      ENFORCE_AGENT_SCOPES: ${ENFORCE_AGENT_SCOPES:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

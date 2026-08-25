@@ -21,6 +21,7 @@ import {
 import Avatar from "./Avatar";
 import Attachments from "./Attachments";
 import Modal from "./Modal";
+import VerificationBadge from "./VerificationBadge";
 import { Popover } from "@base-ui/react/popover";
 import { useMentionPicker, resolveMentionIds } from "../lib/useMentionPicker";
 import { renderMarkdown } from "../lib/md";
@@ -589,6 +590,22 @@ export default function TaskModal({
                 )}
               </div>
             </div>
+
+            {t.verification && (
+              <div className="tm-rail-field">
+                <div className="tm-rail-label">Verification</div>
+                <div>
+                  <VerificationBadge verification={t.verification} size="rail" />
+                </div>
+                {/* The rationale is WHY the judge decided — the reviewer agent
+                    already gets it, and a human deciding whether to override a
+                    failed gate needs it just as much. Card view only has it on
+                    hover; here there is room to print it. */}
+                {t.verification.rationale && (
+                  <div className="tm-verify-why">{t.verification.rationale}</div>
+                )}
+              </div>
+            )}
 
             <div className="tm-rail-field">
               <div className="tm-rail-label">Assignees</div>

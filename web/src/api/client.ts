@@ -241,6 +241,20 @@ export interface Task {
   // Ids of unconditional `blocks` prerequisites that aren't done yet. Non-empty
   // = the task is workflow-blocked (shouldn't start until they complete).
   blockedBy: string[];
+  // Latest verdict from the opt-in verification gate, or null when the task was
+  // never judged (the usual case — the gate is off by default) or when the
+  // newest verdict was the judge's fail-open `error`.
+  verification: TaskVerification | null;
+  verificationPassed: boolean;
+}
+
+// One judgement from the verification gate. `score` is null for the
+// non-rubric methods (e.g. the deterministic headless-render check).
+export interface TaskVerification {
+  verdict: string;
+  score: number | null;
+  rationale: string;
+  createdAt: string;
 }
 
 export interface TaskLink {
