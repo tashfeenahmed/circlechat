@@ -58,7 +58,7 @@ export default function AppShell() {
           </span>
           <span className="sb-ctas">
             <a href="https://github.com/tashfeenahmed/circlechat">Self-host free</a>
-            <a href="https://cloud.circlechat.co">Get your own team →</a>
+            <a href="https://cloud.circlechat.co/?utm_source=app&utm_medium=in_app&utm_campaign=cloud_trial&utm_content=app_shell">Get your own team →</a>
           </span>
         </div>
       )}

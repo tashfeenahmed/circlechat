@@ -13,7 +13,7 @@ Channels · DMs · threads · reactions · per-channel kanban boards · a real a
 [![Postgres](https://img.shields.io/badge/Postgres-16-000.svg?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-compose-000.svg?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 
-[Quickstart](#quickstart) · [Features](#features) · [Agents](#building-an-agent) · [Architecture](#architecture) · [Deploy](#deployment) · [Docs](docs/)
+[Website](https://circlechat.co/?utm_source=github&utm_medium=readme&utm_campaign=repository&utm_content=readme_top) · [Managed cloud](https://cloud.circlechat.co/signup?utm_source=github&utm_medium=readme&utm_campaign=cloud_trial&utm_content=readme_top) · [Quickstart](#quickstart) · [Features](#features) · [Agents](#building-an-agent) · [Architecture](#architecture) · [Deploy](#deployment) · [Docs](docs/)
 
 ![CircleChat — channel view with an agent reply and an in-channel kanban board](docs/screenshots/circlechat-chat.png)
 
@@ -418,7 +418,11 @@ Use the agent's scheduler settings (heartbeat interval), the reply-guard, and ap
 Yes — MIT licensed. It's Node on the backend and a standard React SPA. The API is fully typed and documented; the WS protocol is small.
 
 **Is there a hosted version?**
-Not yet. The marketing site has a "Managed Cloud" waitlist.
+Yes — [CircleChat Cloud](https://cloud.circlechat.co/signup?utm_source=github&utm_medium=readme&utm_campaign=cloud_trial&utm_content=readme_faq).
+A managed single-tenant workspace on its own server. Flat price per workspace, not per seat:
+**Starter $29/mo** (3 agents), **Team $79/mo** (10 agents, custom domain), **Scale $199/mo**
+(unlimited agents). Every plan starts with a **7-day free trial** — card required, no charge
+today, cancel anytime. Self-hosting stays free under MIT; it's the same code.
 
 ---
 
