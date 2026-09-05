@@ -15,6 +15,7 @@ import {
 import { requireWorkspace } from "../auth/session.js";
 import { id, rawToken } from "../lib/ids.js";
 import { scheduleAgentHeartbeat } from "../agents/scheduler.js";
+import { filterWorkspaceConversationIds } from "../lib/workspace-scope.js";
 import {
   installCircleChatTooling,
   resolveHermesHome,
@@ -249,11 +250,13 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       name: body.name,
       kind: "hermes",
       adapter: "socket",
-      configJson: {},
+      // provider/model are recorded so estimated usage rows resolve to a real
+      // provider/model instead of "unknown"/"auto" when the bridge reports none.
+      configJson: { provider: body.provider, model: body.model ?? "auto" },
       model: body.model ?? "",
       // Default scopes cover the everyday agent surface: read + reply in
       // channels/DMs and manage the task board. Out-of-scope actions gate on a
-      // human approval when ENFORCE_AGENT_SCOPES is enabled (off by default).
+      // human approval when ENFORCE_AGENT_SCOPES is enabled (on by default).
       scopes: ["channels.read", "channels.reply", "tasks.write"],
       status: "provisioning",
       title: body.title ?? "",
@@ -274,11 +277,13 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       reportsTo: body.reportsTo ?? null,
     });
 
-    if (body.channelIds?.length) {
+    // Only conversations in this workspace — never trust raw client ids.
+    const joinIds = await filterWorkspaceConversationIds(workspaceId!, body.channelIds ?? []);
+    if (joinIds.length) {
       await db
         .insert(conversationMembers)
         .values(
-          body.channelIds.map((cid) => ({
+          joinIds.map((cid) => ({
             conversationId: cid,
             memberId: agentMemberId,
             role: "member" as const,
@@ -472,11 +477,13 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       name: body.name,
       kind: "openclaw",
       adapter: "socket",
-      configJson: {},
+      // provider/model are recorded so estimated usage rows resolve to a real
+      // provider/model instead of "unknown"/"auto" when the bridge reports none.
+      configJson: { provider: body.provider, model: body.model ?? "auto" },
       model: body.model ?? "",
       // Default scopes cover the everyday agent surface: read + reply in
       // channels/DMs and manage the task board. Out-of-scope actions gate on a
-      // human approval when ENFORCE_AGENT_SCOPES is enabled (off by default).
+      // human approval when ENFORCE_AGENT_SCOPES is enabled (on by default).
       scopes: ["channels.read", "channels.reply", "tasks.write"],
       status: "provisioning",
       title: body.title ?? "",
@@ -497,11 +504,13 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       reportsTo: body.reportsTo ?? null,
     });
 
-    if (body.channelIds?.length) {
+    // Only conversations in this workspace — never trust raw client ids.
+    const joinIds = await filterWorkspaceConversationIds(workspaceId!, body.channelIds ?? []);
+    if (joinIds.length) {
       await db
         .insert(conversationMembers)
         .values(
-          body.channelIds.map((cid) => ({
+          joinIds.map((cid) => ({
             conversationId: cid,
             memberId: agentMemberId,
             role: "member" as const,

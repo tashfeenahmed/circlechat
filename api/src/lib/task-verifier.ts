@@ -5,13 +5,15 @@
 // harnesses gate "done" on a verifiable final state (Anthropic's LLM-judge
 // rubric, Devin's verifiable merges) rather than a reviewer's rubber-stamp.
 //
-// Reuses the planner's server-side LLM client (chatJson → the FreeLLMAPI
-// gateway), so it needs no new infra and is provider-agnostic. Dormant unless a
-// planner/embeddings base URL is configured, and FAIL-OPEN on any judge outage:
-// a gateway hiccup must never freeze the board, so an unreachable/unparseable
-// judge returns "allow" and the heuristic gate stands on its own.
+// Reuses the server-side OpenAI-compatible chat client (chatJson), so it needs
+// no new infra and is provider-agnostic. The judge needs an EXPLICIT
+// chat-capable endpoint (VERIFY_JUDGE_BASE_URL or PLANNER_BASE_URL) — an
+// embeddings-only deployment leaves it NOT CONFIGURED (logged once), never
+// "unreachable" on every flip. What happens on a judge OUTAGE is configurable
+// via VERIFY_FAIL_MODE (open = allow the flip, closed = block, hold = block and
+// post one comment so a human reviews); the default stays fail-OPEN.
 import { z } from "zod";
-import { chatJson, plannerEnabled } from "./completion.js";
+import { chatJson, judgeConfigured, resolveJudgeTarget } from "./completion.js";
 import { liveArtifactRows, isSubstantiveArtifact, isTextualContentType } from "./task-artifacts.js";
 import { readObject } from "./storage.js";
 import { renderWebDeliverable, type RenderObservation } from "./deliverable-render.js";
@@ -32,10 +34,59 @@ type Verdict = z.infer<typeof VerdictSchema>;
 // OPT-IN by default. This gate makes an extra LLM call and can block a
 // done-flip, so it must never surprise a user who has a weak/idiosyncratic
 // model wired or didn't ask for it — they enable it explicitly with
-// VERIFY_GATE=on. Still requires a planner/embeddings backend to be configured
-// (it reuses that client), and fails OPEN on any judge outage.
+// VERIFY_GATE=on. Still requires a chat-capable judge endpoint; when VERIFY_GATE
+// is on but no judge URL resolves, say so ONCE and stay dormant (the old code
+// fell back to EMBEDDINGS_BASE_URL and then logged an "outage" per flip).
+let warnedUnconfigured = false;
 export function verifierEnabled(): boolean {
-  return process.env.VERIFY_GATE === "on" && plannerEnabled();
+  if (process.env.VERIFY_GATE !== "on") return false;
+  if (judgeConfigured()) return true;
+  if (!warnedUnconfigured) {
+    warnedUnconfigured = true;
+    console.error(
+      "[verifier] VERIFY_GATE=on but the judge is NOT CONFIGURED: no chat-capable endpoint. " +
+        "Set PLANNER_BASE_URL (+ PLANNER_MODEL / PLANNER_API_KEY) or VERIFY_JUDGE_BASE_URL (+ VERIFY_JUDGE_MODEL / VERIFY_JUDGE_API_KEY). " +
+        "EMBEDDINGS_BASE_URL alone is NOT used for the judge. The verification gate is OFF until this is fixed.",
+    );
+  }
+  return false;
+}
+
+// What to do when the judge is configured but unreachable/unparseable.
+//   open   — allow the flip (heuristic gate stands alone). DEFAULT.
+//   closed — block the flip silently (recorded as an error verdict).
+//   hold   — block the flip AND post one comment on the task so a human
+//            knows it is waiting on them, not on the agent.
+export type VerifyFailMode = "open" | "closed" | "hold";
+export function resolveFailMode(raw: string | undefined = process.env.VERIFY_FAIL_MODE): VerifyFailMode {
+  const v = (raw || "").trim().toLowerCase();
+  return v === "closed" || v === "hold" ? v : "open";
+}
+// Pure decision for the done-flip caller: does a judge outage block, and
+// should a hold comment be posted? Exported for tests.
+export function decideOnJudgeOutage(mode: VerifyFailMode): { block: boolean; comment: boolean } {
+  if (mode === "closed") return { block: true, comment: false };
+  if (mode === "hold") return { block: true, comment: true };
+  return { block: false, comment: false };
+}
+
+// Re-judging the SAME deliverable within this window reuses the last verdict.
+// Agents retry a rejected done-flip on every heartbeat (147 retries on one card
+// were observed); each retry cost a 60s judge call against a rate-limited
+// gateway, which is how the judge ended up "unreachable" most of the time.
+function rejudgeMinMs(): number {
+  const n = Number(process.env.VERIFY_REJUDGE_MIN_MS);
+  return Number.isFinite(n) && n >= 0 ? n : 10 * 60 * 1000;
+}
+export function shouldReuseVerdict(
+  last: { artifactId: string | null; verdict: string; createdAt: Date } | null | undefined,
+  artifactId: string,
+  now: number = Date.now(),
+  minMs: number = rejudgeMinMs(),
+): boolean {
+  if (!last || !last.artifactId || last.artifactId !== artifactId) return false;
+  if (last.verdict !== "pass" && last.verdict !== "fail") return false; // never reuse an outage
+  return now - last.createdAt.getTime() < minMs;
 }
 function passThreshold(): number {
   const n = Number(process.env.VERIFIER_PASS_THRESHOLD);
@@ -126,11 +177,16 @@ export function classifyRenderForGate(
   };
 }
 
-// Tier 2 — LLM-as-judge, fail-OPEN. Returns null = pass/allow (let the done
-// flip proceed); a string = block with that error code. Only meant to be
-// called once a candidate substantive artifact has been found by the heuristic
-// gate and the deterministic tier has not already blocked. `preRendered` is the
-// observation from the deterministic tier, reused so chromium runs only once.
+// Tier 2 — LLM-as-judge. Returns null = pass/allow (let the done flip
+// proceed); "verification_failed" = the judge rejected the deliverable;
+// "judge_unavailable" = the judge could not be reached/parsed — the CALLER
+// applies VERIFY_FAIL_MODE (see decideOnJudgeOutage), because only the
+// done-flip path should hold/comment; the review-entry pre-check just ignores
+// it. Only meant to be called once a candidate substantive artifact has been
+// found by the heuristic gate and the deterministic tier has not already
+// blocked. `preRendered` is the observation from the deterministic tier,
+// reused so chromium runs only once.
+export type VerifyOutcome = "verification_failed" | "judge_unavailable" | null;
 export async function verifyTaskForDone(
   opts: {
     taskId: string;
@@ -140,7 +196,7 @@ export async function verifyTaskForDone(
     decidedBy: string | null;
   },
   preRendered?: RenderObservation | null,
-): Promise<"verification_failed" | null> {
+): Promise<VerifyOutcome> {
   if (!verifierEnabled()) return null; // dormant → heuristic gate stands alone
 
   // Pick the latest readable, substantive deliverable to judge.
@@ -165,6 +221,13 @@ export async function verifyTaskForDone(
 
   const taskType = inferType(chosen.name, chosen.contentType);
 
+  // Same deliverable, recent real verdict → reuse it instead of re-calling the
+  // judge. The agent retrying the flip did not change the work product.
+  const last = await latestVerificationRow(opts.taskId);
+  if (shouldReuseVerdict(last, chosen.id)) {
+    return last!.verdict === "pass" ? null : "verification_failed";
+  }
+
   // EXECUTION CHECK: feed what ACTUALLY loaded to the judge so it scores an
   // observed final state, not source that merely looks complete. The render
   // already happened in the deterministic tier (deterministicGateForDone) and
@@ -180,6 +243,7 @@ export async function verifyTaskForDone(
       `- console_errors: ${obs.consoleErrors.length ? obs.consoleErrors.slice(0, 5).join(" | ") : "none"}\n`;
   }
 
+  const target = resolveJudgeTarget();
   const raw = await chatJson<unknown>(
     [
       {
@@ -206,31 +270,65 @@ export async function verifyTaskForDone(
           renderBlock,
       },
     ],
-    { temperature: 0, maxTokens: 800, timeoutMs: 60_000 },
+    { temperature: 0, maxTokens: 800, timeoutMs: 60_000, target },
   );
 
   const method = obs ? "render" : taskType === "code" ? "test" : "rubric";
   const parsed = VerdictSchema.safeParse(raw);
   if (!parsed.success) {
-    // Fail-open: a judge we can't reach/parse must not freeze the board. But
-    // fail-open must not be SILENT either — a broken judge once went unnoticed
-    // for 11 days because every outage just recorded an error row and allowed
-    // the flip. Log loudly, and escalate the log level once outages repeat.
+    // A judge we can't reach/parse must not be SILENT — a broken judge once
+    // went unnoticed for 11 days because every outage just recorded an error
+    // row and allowed the flip. Log loudly (escalating once outages repeat)
+    // and hand the decision to the caller via VERIFY_FAIL_MODE.
     consecutiveJudgeOutages++;
-    const msg = `[verifier] judge unreachable/unparseable for task ${opts.taskId} — failing open (${consecutiveJudgeOutages} consecutive outage${consecutiveJudgeOutages === 1 ? "" : "s"})`;
-    if (consecutiveJudgeOutages >= JUDGE_OUTAGE_ALERT_AFTER) {
-      console.error(`${msg}. The verification gate has been effectively OFF for the last ${consecutiveJudgeOutages} flips — check the planner gateway/model.`);
+    const mode = resolveFailMode();
+    const effect = mode === "open" ? "failing open" : mode === "hold" ? "holding in review" : "failing closed";
+    const where = target ? `${target.baseUrl} model=${target.model}` : "no target";
+    const msg = `[verifier] judge unreachable/unparseable for task ${opts.taskId} — ${effect} (VERIFY_FAIL_MODE=${mode}; ${consecutiveJudgeOutages} consecutive outage${consecutiveJudgeOutages === 1 ? "" : "s"}; ${where})`;
+    if (consecutiveJudgeOutages >= JUDGE_OUTAGE_ALERT_AFTER && mode === "open") {
+      console.error(`${msg}. The verification gate has been effectively OFF for the last ${consecutiveJudgeOutages} flips — check the judge gateway/model.`);
+    } else if (consecutiveJudgeOutages >= JUDGE_OUTAGE_ALERT_AFTER) {
+      console.error(`${msg}. Done-flips are being held/blocked until the judge recovers.`);
     } else {
       console.warn(msg);
     }
-    await record(opts, taskType, chosen.id, "error", null, obs ? { render: obs } : {}, "judge unreachable or unparseable — failing open", method);
-    return null;
+    await record(
+      opts,
+      taskType,
+      chosen.id,
+      "error",
+      null,
+      obs ? { render: obs, failMode: mode } : { failMode: mode },
+      `judge unreachable or unparseable — ${effect} (VERIFY_FAIL_MODE=${mode})`,
+      method,
+    );
+    return "judge_unavailable";
   }
   consecutiveJudgeOutages = 0;
   const v: Verdict = parsed.data;
   const pass = v.verdict === "pass" && v.not_fabricated && v.score >= passThreshold();
   await record(opts, taskType, chosen.id, pass ? "pass" : "fail", v.score, obs ? { ...v, render: obs } : v, v.rationale, method);
   return pass ? null : "verification_failed";
+}
+
+async function latestVerificationRow(
+  taskId: string,
+): Promise<{ artifactId: string | null; verdict: string; createdAt: Date } | null> {
+  try {
+    const [row] = await db
+      .select({
+        artifactId: taskVerifications.artifactId,
+        verdict: taskVerifications.verdict,
+        createdAt: taskVerifications.createdAt,
+      })
+      .from(taskVerifications)
+      .where(eqTask(taskId))
+      .orderBy(descCreated())
+      .limit(1);
+    return row ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // The latest recorded verdict for a task, summarized for the reviewer's task

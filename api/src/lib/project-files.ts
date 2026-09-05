@@ -1,5 +1,6 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { embed, cosine, embeddingsEnabled } from "./embeddings.js";
+import { findNearDuplicate } from "./text-similarity.js";
 
 // ─────────────────────────── Shared project memory ───────────────────────────
 // A file-based "blackboard" the agents form and manage themselves: multiple
@@ -136,6 +137,60 @@ export function serializeProjectFile(meta: ProjectFileMeta, body: string): strin
   return `${head}${body.trim()}\n`;
 }
 
+// ─────────────────────────── entries (append log) ───────────────────────────
+// Every append writes `## <date> · @handle\n<note>`. Split a body into the
+// free-form head (anything before the first provenance header — e.g. a brief
+// written via mode:"replace") and the dated entries, oldest first.
+const ENTRY_HEADER_RE = /^## [^\n]*? · @[a-z0-9][a-z0-9._-]*[ \t]*$/im;
+const ENTRY_SPLIT_RE = /(?=^## [^\n]*? · @[a-z0-9][a-z0-9._-]*[ \t]*$)/im;
+
+export function splitEntries(body: string): { head: string; entries: string[] } {
+  const text = (body || "").trim();
+  if (!text) return { head: "", entries: [] };
+  const first = ENTRY_HEADER_RE.exec(text);
+  if (!first) return { head: text, entries: [] };
+  const head = text.slice(0, first.index).trim();
+  const rest = text.slice(first.index);
+  // Split on every header (the lookahead keeps the header with its entry).
+  const parts = rest.split(new RegExp(ENTRY_SPLIT_RE.source, "gim")).map((e) => e.trim()).filter(Boolean);
+  return { head, entries: parts };
+}
+
+// The note text of an entry (header line dropped) — what dedupe compares.
+function entryNote(entry: string): string {
+  return entry.replace(/^## [^\n]*\n?/, "").trim();
+}
+
+// Append dedupe: an incoming note ≥ this similar to one of the last
+// DEDUPE_WINDOW entries is a restatement, not new state. Live status.md had
+// "Self-hosted HLS relay verified live" appended four times by two agents in
+// three hours.
+export const APPEND_DEDUPE_THRESHOLD = 0.85;
+const DEDUPE_WINDOW = 12;
+
+// Rolling compaction so an append-only status log can't grow without bound
+// (live: 20 KB / 308 lines / 90 dated entries, re-injected into every prompt).
+// After an append, when the log has more than KEEP_ENTRIES entries OR the body
+// is over COMPACT_AT_CHARS, the OLDEST entries are moved out to
+// <project>/archive/<file> until it fits (never below MIN_KEEP entries). The
+// head (brief text) is always kept.
+export const KEEP_ENTRIES = 25;
+export const COMPACT_AT_CHARS = 8000;
+const MIN_KEEP = 8;
+
+export function compactEntries(
+  head: string,
+  entries: string[],
+): { body: string; archived: string[] } {
+  const kept = [...entries];
+  const archived: string[] = [];
+  const render = () => [head, ...kept].filter(Boolean).join("\n\n");
+  while (kept.length > MIN_KEEP && (kept.length > KEEP_ENTRIES || render().length > COMPACT_AT_CHARS)) {
+    archived.push(kept.shift() as string);
+  }
+  return { body: render(), archived };
+}
+
 // ─────────────────────────── pure write logic ───────────────────────────
 
 export type ProjectWriteMode = "append" | "replace";
@@ -158,7 +213,7 @@ export function applyProjectWrite(
     actorHandle: string;
     dateLabel: string;
   },
-): { content: string } | { error: string } {
+): { content: string; archived?: string[] } | { error: string } {
   const note = (p.note ?? "").trim();
   if (!note) return { error: "project_note: note is empty — nothing to record." };
   const handle = (p.actorHandle || "agent").replace(/^@/, "");
@@ -187,11 +242,41 @@ export function applyProjectWrite(
   if (typeof p.always === "boolean") meta.always = p.always;
   meta.updatedBy = handle;
 
-  const body =
-    p.mode === "replace"
-      ? note
-      : `${(existing?.body ?? "").trim()}${existing?.body ? "\n\n" : ""}## ${p.dateLabel} · @${handle}\n${note}`;
+  if (p.mode === "replace") {
+    if (note.length > PROJECT_FILE_MAX_CHARS) {
+      return {
+        error:
+          `project_note: this file would exceed its ${PROJECT_FILE_MAX_CHARS}-char limit (${note.length}). ` +
+          `Rewrite it concisely keeping only what still matters.`,
+      };
+    }
+    return { content: serializeProjectFile(meta, note) };
+  }
 
+  // ── append ──
+  const { head, entries } = splitEntries(existing?.body ?? "");
+  // Near-duplicate of a recent entry → refuse (teaching error). Compare the
+  // note against the last DEDUPE_WINDOW entries regardless of author: two
+  // agents recording the same fact is still one fact.
+  const recent = entries.slice(-DEDUPE_WINDOW).reverse().map((e) => ({ bodyMd: entryNote(e), entry: e }));
+  const dup = findNearDuplicate(note, recent, APPEND_DEDUPE_THRESHOLD);
+  if (dup) {
+    const who = /· @([a-z0-9._-]+)/i.exec(dup.candidate.entry)?.[1];
+    return {
+      error:
+        `project_note skipped: this note is a near-duplicate (${Math.round(dup.score * 100)}%) of an entry already in the file` +
+        `${who ? ` (by @${who})` : ""}. The tracker records each fact ONCE — don't re-append a status that's already there. ` +
+        `Only write when something actually changed, and say what changed.`,
+    };
+  }
+  if (note.length > PROJECT_FILE_MAX_CHARS / 2) {
+    return {
+      error:
+        `project_note: a single entry can't exceed ${PROJECT_FILE_MAX_CHARS / 2} chars (${note.length}). ` +
+        `Record the durable fact in a few lines; put long-form material in a /workspace file and reference it.`,
+    };
+  }
+  const { body, archived } = compactEntries(head, [...entries, `## ${p.dateLabel} · @${handle}\n${note}`]);
   if (body.length > PROJECT_FILE_MAX_CHARS) {
     return {
       error:
@@ -199,7 +284,9 @@ export function applyProjectWrite(
         `Compact it with mode:"replace" — rewrite it concisely keeping only what still matters — instead of appending more.`,
     };
   }
-  return { content: serializeProjectFile(meta, body) };
+  return archived.length
+    ? { content: serializeProjectFile(meta, body), archived }
+    : { content: serializeProjectFile(meta, body) };
 }
 
 // ─────────────────────────── per-path write serialization ───────────────────
@@ -268,6 +355,14 @@ export async function writeProjectFile(params: {
     if ("error" in res) return res;
     try {
       await fsp.mkdir(dir, { recursive: true });
+      // Compacted-out entries go to <project>/archive/<file> (append-only).
+      // A subdirectory, so the index scan (files only) never picks it up and
+      // the archive is never re-injected into prompts — still `cat`-able.
+      if (res.archived && res.archived.length) {
+        const archDir = join(dir, "archive");
+        await fsp.mkdir(archDir, { recursive: true });
+        await fsp.appendFile(join(archDir, fileName), res.archived.join("\n\n") + "\n\n", "utf8");
+      }
       await fsp.writeFile(abs, res.content, "utf8");
     } catch (e) {
       return { error: `project_note: could not write the file (${(e as Error).message}).` };
@@ -504,6 +599,37 @@ export async function semanticMatchProjectFiles(
   );
 }
 
+// What to inject from a file body under a char cap. A plain document takes its
+// lead. An append LOG is newest-at-the-bottom, so a head slice would inject the
+// OLDEST entries and never the current status (the live bug: status.md was
+// 20 KB, the 1600-char lead never moved). Keep the head (brief text) plus as
+// many of the NEWEST entries as fit, and say how many were omitted.
+export function excerptForInjection(body: string, max: number): string {
+  const text = (body || "").trim();
+  if (text.length <= max) return text;
+  const { head, entries } = splitEntries(text);
+  if (!entries.length) return text.slice(0, max);
+  const headPart = head.length > Math.floor(max * 0.4) ? head.slice(0, Math.floor(max * 0.4)).trimEnd() + " …" : head;
+  const picked: string[] = [];
+  let used = headPart.length;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    const cost = e.length + 2;
+    if (picked.length && used + cost > max - 80) break;
+    if (!picked.length && used + cost > max - 80) {
+      // Even the newest entry doesn't fit — take its head so the latest state still shows.
+      picked.unshift(e.slice(0, Math.max(0, max - 80 - used)).trimEnd() + " …");
+      used = max;
+      break;
+    }
+    picked.unshift(e);
+    used += cost;
+  }
+  const omitted = entries.length - picked.length;
+  const marker = omitted > 0 ? `…(${omitted} older entr${omitted === 1 ? "y" : "ies"} omitted — cat the file for the full log)` : "";
+  return [headPart, marker, ...picked].filter(Boolean).join("\n\n");
+}
+
 // Read the bodies of the matched files within the injection budget.
 async function readProjectFileBodies(
   matched: ProjectFileInfo[],
@@ -518,7 +644,7 @@ async function readProjectFileBodies(
     if (!raw.trim()) continue;
     const { body } = parseProjectFile(raw);
     if (!body) continue;
-    const content = body.slice(0, FILE_INJECT_MAX_CHARS);
+    const content = excerptForInjection(body, FILE_INJECT_MAX_CHARS);
     if (total + content.length > FILES_TOTAL_MAX_CHARS) break;
     total += content.length;
     out.push({ project: basename(dirname(f.path)), name: f.name, content });

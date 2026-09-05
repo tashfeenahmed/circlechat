@@ -10,6 +10,7 @@ import { bumpStall, assessProgress, writeProgressAssessment } from "../lib/ledge
 import { notify } from "../lib/notifications.js";
 import { runProductivityReview } from "../lib/productivity.js";
 import { reapStuckRuns } from "../lib/run-reaper.js";
+import { expireStaleApprovals } from "../lib/approval-policy.js";
 import { runMemoryJanitor } from "../lib/memory-janitor.js";
 
 // Give up after this many failed planning attempts (the sweeper is the retry
@@ -123,6 +124,10 @@ async function handleSweep(): Promise<void> {
   // 6. Crash recovery: fail out runs stuck 'running' after a worker death and
   //    put their agents back to idle (clears permanent thinking pills too).
   await reapStuckRuns().catch((e) => console.error("[goal-planner] run-reaper error", e));
+
+  // 6b. Approval expiry: close pending cards older than APPROVAL_TTL_HOURS,
+  //     wake their agents to re-plan, and release tasks blocked on them.
+  await expireStaleApprovals().catch((e) => console.error("[goal-planner] approval-expiry error", e));
 
   // 7. Sleep-time memory janitor: refresh each workspace's shared team block
   //    from recent activity (opt-in CC_MEMORY_JANITOR=on; per-workspace cooldown).

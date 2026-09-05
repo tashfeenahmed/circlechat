@@ -13,8 +13,9 @@ import {
 import { requireWorkspace } from "../auth/session.js";
 import { id, rawToken } from "../lib/ids.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
-import { scheduleAgentHeartbeat, cancelAgentHeartbeat } from "../agents/scheduler.js";
+import { scheduleAgentHeartbeat, cancelAgentHeartbeat, clearHeartbeatBackoff } from "../agents/scheduler.js";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { filterWorkspaceConversationIds } from "../lib/workspace-scope.js";
 
 const CreateBody = z.object({
   name: z.string().min(1).max(100),
@@ -153,12 +154,14 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
       .insert(members)
       .values({ id: agentMemberId, workspaceId: workspaceId!, kind: "agent", refId: agentId });
 
-    // Auto-join agent to picked channels (admin-marked).
-    if (body.channelIds?.length) {
+    // Auto-join agent to picked channels (admin-marked) — only channels that
+    // belong to THIS workspace; the raw ids used to be inserted verbatim.
+    const joinIds = await filterWorkspaceConversationIds(workspaceId!, body.channelIds ?? []);
+    if (joinIds.length) {
       await db
         .insert(conversationMembers)
         .values(
-          body.channelIds.map((cid) => ({
+          joinIds.map((cid) => ({
             conversationId: cid,
             memberId: agentMemberId,
             role: "member" as const,
@@ -286,6 +289,8 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
     // Clears a budget pause too — if the cap wasn't raised, the next run's
     // budget gate re-pauses immediately, which is the honest behavior.
     await db.update(agents).set({ status: "idle", pauseReason: null }).where(eq(agents.id, aId));
+    // A manual resume is a fresh start: drop any non-productive-run backoff.
+    await clearHeartbeatBackoff(aId);
     await scheduleAgentHeartbeat(aId, a.heartbeatIntervalSec);
     return { ok: true };
   });

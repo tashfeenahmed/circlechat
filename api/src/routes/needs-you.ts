@@ -15,6 +15,7 @@ import {
   workspaces,
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
+import { approvalExpiresAt, isCredentialAsk } from "../lib/approval-policy.js";
 
 type ReviewItem = {
   id: string;
@@ -49,7 +50,28 @@ export default async function needsYouRoutes(app: FastifyInstance): Promise<void
     ]);
 
     const items: ReviewItem[] = [];
-    for (const row of approvalRows) items.push({ id: `approval:${row.approval.id}`, kind: "approval", priority: "high", title: `${row.agentName} needs approval`, detail: `${row.approval.scope}: ${row.approval.action}`, link: "/needs-you", targetId: row.approval.id, createdAt: row.approval.createdAt.toISOString(), actions: ["approve", "deny"] });
+    for (const row of approvalRows) {
+      const expiresAt = approvalExpiresAt(row.approval.createdAt);
+      const hoursLeft = expiresAt ? Math.max(0, Math.round((expiresAt.getTime() - Date.now()) / 3_600_000)) : null;
+      const credential = isCredentialAsk(row.approval.scope, row.approval.action);
+      const hints = [
+        credential ? "credential request — approving without attaching the secret delivers nothing (use the Approvals page to attach it)" : null,
+        hoursLeft != null ? (hoursLeft > 0 ? `expires in ${hoursLeft}h if undecided` : "expiring now") : null,
+      ].filter(Boolean);
+      items.push({
+        id: `approval:${row.approval.id}`,
+        kind: "approval",
+        // A card about to expire is the last chance to say yes/no before the
+        // agent is told to route around it.
+        priority: hoursLeft != null && hoursLeft <= 12 ? "critical" : "high",
+        title: `${row.agentName} needs approval`,
+        detail: `${row.approval.scope}: ${row.approval.action}${hints.length ? ` (${hints.join("; ")})` : ""}`,
+        link: credential ? "/approvals" : "/needs-you",
+        targetId: row.approval.id,
+        createdAt: row.approval.createdAt.toISOString(),
+        actions: ["approve", "deny"],
+      });
+    }
     for (const task of reviewTasks) items.push({ id: `task:${task.id}`, kind: "task_review", priority: "normal", title: task.title, detail: "Task is ready for human review.", link: `/board?task=${task.id}`, targetId: task.id, createdAt: task.updatedAt.toISOString(), actions: ["open"] });
     const latestFailed = new Map<string, (typeof failedVerdicts)[number]>();
     for (const row of failedVerdicts) if (!latestFailed.has(row.verification.taskId)) latestFailed.set(row.verification.taskId, row);

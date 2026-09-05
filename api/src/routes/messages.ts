@@ -11,14 +11,27 @@ import {
   reactions,
   agents,
   members,
-  users,
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation } from "../lib/events.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
-import { fireChannelPostTrigger } from "../agents/mention-triggers.js";
+import { fireChannelPostTrigger, resolveHandlesToMemberIds } from "../agents/mention-triggers.js";
 import { notifyForMessage } from "../lib/notifications.js";
+import { sanitizeAttachments } from "../agents/executor.js";
+
+// Query-string helpers: `Number("abc")` is NaN and `new Date("garbage")` is an
+// Invalid Date — both used to flow straight into the SQL builder and 500.
+function parseLimit(raw: unknown, fallback: number, max: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(1, Math.floor(n)));
+}
+function parseBefore(raw: unknown): Date | null {
+  if (typeof raw !== "string" || !raw) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 const PostBody = z.object({
   bodyMd: z.string().min(1).max(20_000),
@@ -58,7 +71,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       );
     if (!mm) return reply.code(403).send({ error: "not_a_member" });
 
-    const limit = Math.min(200, Math.max(1, Number(q.limit ?? 50)));
+    const limit = parseLimit(q.limit, 50, 200);
     const where = [eq(messages.conversationId, convId)];
     if (q.parent_id) where.push(eq(messages.parentId, q.parent_id));
     else where.push(isNull(messages.parentId));
@@ -67,7 +80,9 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
     // we always fetch in descending order and reverse for display. The old
     // `asc + limit` returned the first 200 messages ever sent, which meant a
     // busy channel never showed recent activity.
-    if (q.before) where.push(lt(messages.ts, new Date(q.before)));
+    const before = parseBefore(q.before);
+    if (q.before && !before) return reply.code(400).send({ error: "invalid_before" });
+    if (before) where.push(lt(messages.ts, before));
 
     const rows = await db
       .select()
@@ -129,9 +144,32 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       );
     if (!mm) return reply.code(403).send({ error: "not_a_member" });
 
+    // A thread reply must hang off a top-level message in THIS conversation.
+    // Otherwise a client could parent a message onto any message id (another
+    // conversation, or a reply) and the thread-continuation logic below would
+    // wake agents / count replies against the wrong root.
+    if (body.parentId) {
+      const [parent] = await db
+        .select({ conversationId: messages.conversationId, parentId: messages.parentId })
+        .from(messages)
+        .where(eq(messages.id, body.parentId))
+        .limit(1);
+      if (!parent || parent.conversationId !== convId) {
+        return reply.code(400).send({ error: "invalid_parent" });
+      }
+      if (parent.parentId) body.parentId = parent.parentId; // replies to a reply flatten onto the root
+    }
+
+    // Attachment descriptors are client-supplied. Restrict them to keys the
+    // server itself wrote (u/<rand>/<name>) exactly as the agent path does, so
+    // a hand-rolled descriptor can't point chat at an arbitrary URL or key.
+    const attachments = sanitizeAttachments(body.attachments);
+
     const mentions = extractMentions(body.bodyMd);
-    const directHandles = mentions.filter((h) => h !== "everyone" && h !== "channel");
-    const directMentionIds = await resolveMentionsToMemberIds(directHandles);
+    // Resolve @handles to member ids IN THIS WORKSPACE. The old resolver picked
+    // an arbitrary member row for the user, so someone in two workspaces got
+    // their mention (and notification) routed to the wrong workspace's member.
+    const directMentionIds = await resolveHandlesToMemberIds(mentions, req.auth!.workspaceId!);
     const isBroadcast = mentions.some((h) => h === "everyone" || h === "channel");
     const broadcastMentionIds = new Set<string>();
     if (isBroadcast) {
@@ -153,7 +191,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       memberId,
       parentId: body.parentId ?? null,
       bodyMd: body.bodyMd,
-      attachmentsJson: body.attachments ?? [],
+      attachmentsJson: attachments,
       mentions: resolvedMentionIds,
       ts: now,
     });
@@ -164,7 +202,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       memberId,
       parentId: body.parentId ?? null,
       bodyMd: body.bodyMd,
-      attachmentsJson: body.attachments ?? [],
+      attachmentsJson: attachments,
       mentions: resolvedMentionIds,
       ts: now.toISOString(),
       reactions: [],
@@ -389,6 +427,20 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
     const memberId = req.auth!.memberId!;
     const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
     if (!m) return reply.code(404).send({ error: "not_found" });
+    // Only conversation members may react — any authenticated member used to
+    // be able to toggle reactions on any message by id (and the event was
+    // broadcast into that conversation).
+    const [inConv] = await db
+      .select({ memberId: conversationMembers.memberId })
+      .from(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, m.conversationId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      )
+      .limit(1);
+    if (!inConv) return reply.code(403).send({ error: "not_a_member" });
 
     const [exist] = await db
       .select()
@@ -453,33 +505,6 @@ function extractMentions(body: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) out.add(m[1].toLowerCase());
   return Array.from(out);
-}
-
-async function resolveMentionsToMemberIds(handles: string[]): Promise<string[]> {
-  if (!handles.length) return [];
-  const out: string[] = [];
-  for (const h of handles) {
-    const [u] = await db.select({ id: users.id }).from(users).where(eq(users.handle, h)).limit(1);
-    if (u) {
-      const [m] = await db
-        .select({ id: members.id })
-        .from(members)
-        .where(and(eq(members.kind, "user"), eq(members.refId, u.id)))
-        .limit(1);
-      if (m) out.push(m.id);
-      continue;
-    }
-    const [a] = await db.select({ id: agents.id }).from(agents).where(eq(agents.handle, h)).limit(1);
-    if (a) {
-      const [m] = await db
-        .select({ id: members.id })
-        .from(members)
-        .where(and(eq(members.kind, "agent"), eq(members.refId, a.id)))
-        .limit(1);
-      if (m) out.push(m.id);
-    }
-  }
-  return out;
 }
 
 // Fisher–Yates shuffle. Used so @everyone doesn't always wake agents in the

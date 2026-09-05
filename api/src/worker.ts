@@ -17,7 +17,13 @@ import {
 import { buildContext } from "./agents/context.js";
 import { callAgent } from "./agents/adapters/dispatch.js";
 import { applyActions, type AgentAction } from "./agents/executor.js";
-import { materialiseScheduledRun, cancelAgentHeartbeat } from "./agents/scheduler.js";
+import {
+  materialiseScheduledRun,
+  cancelAgentHeartbeat,
+  noteHeartbeatOutcome,
+  heartbeatBackoffRemainingMs,
+} from "./agents/scheduler.js";
+import { classifyRunOutcome } from "./lib/run-outcome.js";
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 import { exportRunTrace } from "./lib/tracing.js";
 import { enforceBudgets, estimateRunCost } from "./lib/budgets.js";
@@ -59,10 +65,14 @@ async function consumeCodeResult(agentId: string): Promise<string | null> {
 // the runs newest-first then reverses to oldest→newest for the detector.
 async function detectAndFlagStuck(agentId: string): Promise<boolean> {
   try {
+    // Failed runs count too: a run that hit max-iterations or had every action
+    // rejected three times in a row IS the loop — excluding them (as the old
+    // status='ok' filter did once failures are recorded honestly) would blind
+    // the detector to exactly the runs it exists for.
     const recent = await db
-      .select({ resultJson: agentRuns.resultJson, traceJson: agentRuns.traceJson })
+      .select({ resultJson: agentRuns.resultJson, traceJson: agentRuns.traceJson, errorText: agentRuns.errorText })
       .from(agentRuns)
-      .where(and(eq(agentRuns.agentId, agentId), eq(agentRuns.status, "ok")))
+      .where(and(eq(agentRuns.agentId, agentId), inArray(agentRuns.status, ["ok", "failed"])))
       .orderBy(desc(agentRuns.startedAt))
       .limit(4);
     const signatures = recent
@@ -71,7 +81,10 @@ async function detectAndFlagStuck(agentId: string): Promise<boolean> {
       .map((r) =>
         normalizeRunSignature(
           (r.traceJson as string[]) ?? [],
-          ((r.resultJson as { errors?: string[] })?.errors as string[]) ?? [],
+          [
+            ...((((r.resultJson as { errors?: string[] })?.errors as string[]) ?? [])),
+            ...(r.errorText ? [r.errorText] : []),
+          ],
         ),
       );
     const verdict = detectStuck(signatures);
@@ -211,8 +224,8 @@ const worker = new Worker<AgentJobPayload>(
     // entirely. Most scheduled runs fire into a quiet workspace and produce
     // filler — this is the cheapest, highest-impact way to cut that noise.
     if (payload.trigger === "scheduled") {
-      const idle = await isWorkspaceIdleForAgent(agent.id, sinceTs);
-      if (idle) {
+      const wake = await wakeReasonForAgent(agent.id, sinceTs);
+      if (!wake) {
         await db
           .update(agentRuns)
           .set({
@@ -224,6 +237,24 @@ const worker = new Worker<AgentJobPayload>(
         await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
         await emitFinished(agent.id, runId, "ok", payload.conversationId);
         return;
+      }
+      // Non-productive-streak backoff. Only the self-generated "progress beat"
+      // reason is suppressed — a human message/comment/assignment always wakes.
+      if (wake === "stale_task") {
+        const remaining = await heartbeatBackoffRemainingMs(agent.id);
+        if (remaining > 0) {
+          await db
+            .update(agentRuns)
+            .set({
+              status: "ok",
+              resultJson: { skipped: "heartbeat_backoff", remainingMs: remaining },
+              finishedAt: new Date(),
+            })
+            .where(eq(agentRuns.id, runId));
+          await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
+          await emitFinished(agent.id, runId, "ok", payload.conversationId);
+          return;
+        }
       }
     }
 
@@ -283,6 +314,10 @@ const worker = new Worker<AgentJobPayload>(
               finishedAt: prevRuns[0].finishedAt?.toISOString() ?? null,
             }
           : null,
+      previousRunErrors: (() => {
+        const errs = (prevRuns[0]?.resultJson as { errors?: unknown } | null | undefined)?.errors;
+        return Array.isArray(errs) ? errs.filter((e): e is string => typeof e === "string" && e.length > 0) : null;
+      })(),
       stuckBreak,
       lastCodeResult,
       steering: payload.status ?? null,
@@ -426,6 +461,10 @@ const worker = new Worker<AgentJobPayload>(
         ? 0
         : JSON.stringify(actions).length + trace.join("\n").length;
     const estimated = estimateRunCost(promptChars, completionChars);
+    // Split the estimate so output tokens are not recorded as 0 on every
+    // estimated row (the runtime rarely reports usage inline).
+    const estimatedInput = estimateRunCost(promptChars, 0).tokensEst;
+    const estimatedOutput = Math.max(0, estimated.tokensEst - estimatedInput);
     let tokensEst = estimated.tokensEst;
     let costUsd = estimated.costUsd;
     if (response !== "HEARTBEAT_OK" && response.usage) {
@@ -453,9 +492,11 @@ const worker = new Worker<AgentJobPayload>(
         routeTier: packet.modelRoute?.tier,
         usage: {
           provider: packet.modelRoute?.provider ?? undefined,
-          model: (packet.modelRoute?.model ?? agent.model) || undefined,
-          inputTokens: estimated.tokensEst,
-          outputTokens: 0,
+          // Leave model undefined when only "auto" is known so the store can
+          // resolve a real name from the route / agent install config.
+          model: packet.modelRoute?.model ?? undefined,
+          inputTokens: estimatedInput,
+          outputTokens: estimatedOutput,
           costUsd: estimated.costUsd,
         },
         source: "estimated",
@@ -463,11 +504,24 @@ const worker = new Worker<AgentJobPayload>(
       }).catch((usageError) => console.error("[worker] usage record failed", usageError));
     }
 
+    // Honest run accounting: empty/crashed replies, bridge errors, runaway
+    // max-iterations banners and "every action rejected" are FAILED runs, not
+    // ok — the stuck detector, run reaper, previousRunFailure context and the
+    // heartbeat backoff all key on this.
+    const cls = classifyRunOutcome(response, outcome);
+    if (cls.status === "failed") {
+      console.warn(`[worker] run ${runId} agent=${agent.handle} trigger=${payload.trigger} failed: ${cls.errorText}`);
+    }
     await db
       .update(agentRuns)
       .set({
-        status: "ok",
-        resultJson: { applied: outcome.actionsApplied, errors: redactLines(outcome.errors) },
+        status: cls.status,
+        errorText: cls.errorText ? redactSecrets(cls.errorText) : null,
+        resultJson: {
+          applied: outcome.actionsApplied,
+          errors: redactLines(outcome.errors),
+          ...(cls.status === "ok" && !cls.productive ? { idle: true } : {}),
+        },
         traceJson: redactLines([...trace, ...outcome.trace]),
         tokensEst,
         costUsd,
@@ -478,11 +532,20 @@ const worker = new Worker<AgentJobPayload>(
       console.error("[worker] usage refresh failed", usageError),
     );
     await db.update(agents).set({ status: "idle" }).where(eq(agents.id, agent.id));
-    await emitFinished(agent.id, runId, "ok", payload.conversationId, {
+    await emitFinished(agent.id, runId, cls.status, payload.conversationId, {
       agentName: agent.name,
       agentHandle: agent.handle,
       errors: outcome.errors,
     });
+
+    // Heartbeat-kind runs feed the per-agent non-productive streak; a productive
+    // run of any kind resets it.
+    if (payload.trigger === "scheduled" || payload.trigger === "ambient" || cls.productive) {
+      const bo = await noteHeartbeatOutcome(agent.id, cls.productive, agent.heartbeatIntervalSec);
+      if (bo.backoffMs > 0) {
+        console.log(`[worker] agent=${agent.handle} non-productive streak=${bo.streak} → heartbeat backoff ${Math.round(bo.backoffMs / 60000)}m`);
+      }
+    }
 
     const [completedControls] = await db.select({ followUps: agentRuns.followupJson }).from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
     if (completedControls?.followUps.length) {
@@ -505,13 +568,17 @@ const worker = new Worker<AgentJobPayload>(
       await resumeWorkflowFromAgent({
         workflowRunId: payload.workflowRunId,
         workflowStepId: payload.workflowStepId,
-        success: outcome.errors.length === 0,
+        success: cls.status === "ok" && outcome.errors.length === 0,
         output: {
           actionsApplied: outcome.actionsApplied,
           errors: redactLines(outcome.errors),
           trace: redactLines([...trace, ...outcome.trace]),
         },
-        ...(outcome.errors.length ? { errorText: outcome.errors.join("; ").slice(0, 500) } : {}),
+        ...(cls.errorText
+          ? { errorText: cls.errorText.slice(0, 500) }
+          : outcome.errors.length
+            ? { errorText: outcome.errors.join("; ").slice(0, 500) }
+            : {}),
       });
     }
 
@@ -525,7 +592,7 @@ const worker = new Worker<AgentJobPayload>(
     // Budget is re-checked at the top of the next run, so a continuation can't
     // outrun a hard stop.
     const ranCode = actions.some((x) => x.type === "run_code");
-    if (payload.trigger !== "workflow" && !stuck && continuationEnabled() && response !== "HEARTBEAT_OK") {
+    if (payload.trigger !== "workflow" && !stuck && cls.status === "ok" && continuationEnabled() && response !== "HEARTBEAT_OK") {
       const chainDepth = payload.chainDepth ?? 0;
       if ((outcome.actionsApplied > 0 && shouldContinue(actions, chainDepth)) || (ranCode && chainDepth < 2)) {
         await enqueueAgentEvent(agent.id, {
@@ -576,15 +643,27 @@ async function emitFinished(
 // Open assigned tasks are work-in-progress and the whole point of heartbeats
 // is for agents to iterate on them proactively — never skip a heartbeat just
 // because no human pinged them, if they have a task that needs the next step.
-const STALE_TASK_MS = 10 * 60 * 1000; // 10 min: time without agent's own comment that re-qualifies the task as "needs a progress beat"
+// Time without the agent's own comment that re-qualifies an in-flight task as
+// "needs a progress beat". Configurable; 10 min default keeps existing cadence,
+// the non-productive backoff (scheduler.ts) is what stops it churning.
+const STALE_TASK_MS = Number(process.env.CC_STALE_TASK_MS ?? 10 * 60 * 1000);
 
-async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<boolean> {
+// Why a scheduled heartbeat should run, or null = nothing to do (skip).
+//   human_message   — a HUMAN posted in one of the agent's conversations
+//   human_comment   — a HUMAN commented on one of the agent's open tasks
+//   new_assignment  — the agent was assigned a task
+//   stale_task      — the agent owns an in-flight task it hasn't touched lately
+// Only stale_task is self-generated work; it is the one reason the
+// non-productive backoff may suppress.
+type WakeReason = "human_message" | "human_comment" | "new_assignment" | "stale_task";
+
+async function wakeReasonForAgent(agentId: string, sinceTs: Date): Promise<WakeReason | null> {
   const [agentMember] = await db
     .select({ id: members.id })
     .from(members)
     .where(and(eq(members.kind, "agent"), eq(members.refId, agentId)))
     .limit(1);
-  if (!agentMember) return false;
+  if (!agentMember) return "human_message"; // unknown membership: don't gate
 
   const memberConvs = await db
     .select({ conversationId: conversationMembers.conversationId })
@@ -593,11 +672,21 @@ async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<
   const convIds = memberConvs.map((c) => c.conversationId);
 
   if (convIds.length > 0) {
+    // HUMAN messages only. Counting agent posts (including the agent's own and
+    // other agents' ambient chatter) woke every agent's heartbeat after every
+    // agent post — an echo loop. Agent→agent asks arrive as `mention` triggers.
     const [{ n }] = await db
       .select({ n: sql<number>`count(*)::int` })
       .from(messages)
-      .where(and(inArray(messages.conversationId, convIds), gt(messages.ts, sinceTs)));
-    if (n > 0) return false;
+      .innerJoin(members, eq(members.id, messages.memberId))
+      .where(
+        and(
+          inArray(messages.conversationId, convIds),
+          gt(messages.ts, sinceTs),
+          eq(members.kind, "user"),
+        ),
+      );
+    if (n > 0) return "human_message";
   }
 
   // Open tasks assigned to me — these are the "proactive work" reason to fire.
@@ -632,15 +721,24 @@ async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<
           eq(members.kind, "user"),
         ),
       );
-    if (n > 0) return false;
+    if (n > 0) return "human_comment";
+
+    // New assignments to this agent (since last run) are activity worth waking for.
+    const [{ n: na }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(taskAssignees)
+      .where(and(eq(taskAssignees.memberId, agentMember.id), gt(taskAssignees.assignedAt, sinceTs)));
+    if (na > 0) return "new_assignment";
 
     // Any task I own where MY OWN last comment is older than STALE_TASK_MS
-    // (or I've never commented)? Wake — time to ship progress. Blocked tasks
-    // are exempt: a blocked card needs a human, not an hourly "still blocked"
-    // beat (the deploy-credential spiral was exactly this loop).
+    // (or I've never commented)? Wake — time to ship progress. Exempt:
+    //   • blocked — needs a human, not an hourly "still blocked" beat (the
+    //     deploy-credential spiral was exactly this loop);
+    //   • review  — the work is submitted and waiting on a REVIEWER; an
+    //     assignee beat here only produces "Proof package v23…v32" re-posts.
     const cutoff = new Date(Date.now() - STALE_TASK_MS);
     for (const t of myOpenTasks) {
-      if (t.status === "blocked") continue;
+      if (t.status === "blocked" || t.status === "review") continue;
       const [latestMine] = await db
         .select({ ts: taskComments.ts })
         .from(taskComments)
@@ -648,8 +746,9 @@ async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<
         .orderBy(desc(taskComments.ts))
         .limit(1);
       const lastTouch = latestMine?.ts ?? t.updatedAt;
-      if (lastTouch < cutoff) return false;
+      if (lastTouch < cutoff) return "stale_task";
     }
+    return null;
   }
 
   // New assignments to this agent (since last run) are activity worth waking for.
@@ -657,9 +756,9 @@ async function isWorkspaceIdleForAgent(agentId: string, sinceTs: Date): Promise<
     .select({ n: sql<number>`count(*)::int` })
     .from(taskAssignees)
     .where(and(eq(taskAssignees.memberId, agentMember.id), gt(taskAssignees.assignedAt, sinceTs)));
-  if (na > 0) return false;
+  if (na > 0) return "new_assignment";
 
-  return true;
+  return null;
 }
 
 worker.on("error", (e) => console.error("[worker] error", e));

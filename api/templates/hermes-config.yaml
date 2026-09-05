@@ -36,7 +36,7 @@ streaming:
 skills:
   creation_nudge_interval: 15
 agent:
-  max_turns: 60
+  max_turns: 100
   verbose: false
   reasoning_effort: medium
   personalities:

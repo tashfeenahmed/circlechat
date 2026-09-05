@@ -320,6 +320,8 @@ export interface ApprovalRow {
   decidedAt: string | null;
   decisionNote: string | null;
   createdAt: string;
+  // ISO deadline after which a pending card auto-expires (null = never).
+  expiresAt?: string | null;
 }
 
 export interface AnalyticsAgent {

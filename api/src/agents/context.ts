@@ -24,6 +24,7 @@ import { ensureAndLoadBlocks } from "../lib/memory-blocks.js";
 import { loadTaskSummary, maybeSummarizeTaskThread } from "../lib/task-condenser.js";
 import { latestVerdictSummary } from "../lib/task-verifier.js";
 import { buildProjectContext } from "../lib/project-files.js";
+import { approvalExpiresAt } from "../lib/approval-policy.js";
 
 export interface MemberInfo {
   memberId: string;
@@ -142,6 +143,10 @@ export interface ContextPacket {
   // reaped after a worker death). Continuity: without this the agent has
   // amnesia about its own dead run and silently drops whatever it was doing.
   previousRunFailure?: { errorText: string; finishedAt: string | null } | null;
+  // Server-side refusals recorded on the agent's previous (ok) run — dedupe
+  // drops, approval dedupe, denied-is-final, guard rejections. Fed back so the
+  // agent learns why a post vanished instead of retrying it verbatim.
+  previousRunErrors?: string[] | null;
   // One-shot directive set when the agent was detected in a run-level loop
   // (see lib/stuck-detector.ts), telling it to break the pattern this turn.
   stuckBreak?: string | null;
@@ -170,6 +175,8 @@ export interface ContextPacket {
     action: string;
     status: string;
     createdAt: string;
+    // ISO deadline after which the card auto-expires (null = never).
+    expiresAt: string | null;
     // Workspace-wide visibility: whose request this is, and whether it's the
     // packet-owner's own (mine=false ⇒ a teammate already asked — don't dupe).
     agentHandle: string;
@@ -307,6 +314,7 @@ export async function buildContext(opts: {
   taskId?: string;
   approvalId?: string;
   previousRunFailure?: { errorText: string; finishedAt: string | null } | null;
+  previousRunErrors?: string[] | null;
   stuckBreak?: string | null;
   lastCodeResult?: string | null;
   steering?: string | null;
@@ -998,6 +1006,7 @@ export async function buildContext(opts: {
     triggerMessageId: opts.messageId,
     steering: opts.steering ?? null,
     previousRunFailure: opts.previousRunFailure ?? null,
+    previousRunErrors: opts.previousRunErrors?.length ? opts.previousRunErrors.slice(0, 6) : null,
     stuckBreak: opts.stuckBreak ?? null,
     lastCodeResult: opts.lastCodeResult ?? null,
     members: memberDirectory,
@@ -1009,6 +1018,7 @@ export async function buildContext(opts: {
       action: o.action,
       status: o.status,
       createdAt: o.createdAt.toISOString(),
+      expiresAt: approvalExpiresAt(o.createdAt)?.toISOString() ?? null,
       agentHandle: o.agentHandle,
       mine: o.mine,
     })),

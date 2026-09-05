@@ -16,6 +16,7 @@ import {
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
+import { filterWorkspaceMemberIds } from "../lib/workspace-scope.js";
 
 function dmId(a: string, b: string): string {
   const sorted = [a, b].sort().join(":");
@@ -170,7 +171,11 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
         isPrivate: body.isPrivate ?? false,
         createdBy: memberId,
       });
-      const extra = (body.memberIds ?? []).filter((m) => m !== memberId);
+      // Only members of THIS workspace may be seeded into the channel — the
+      // client used to be able to pass any member id from any workspace.
+      const extra = (await filterWorkspaceMemberIds(workspaceId, body.memberIds ?? [])).filter(
+        (m) => m !== memberId,
+      );
       await db.insert(conversationMembers).values([
         { conversationId: convId, memberId: memberId!, role: "admin" },
         ...extra.map((m) => ({ conversationId: convId, memberId: m, role: "member" as const })),
@@ -286,13 +291,28 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
       .limit(1);
     if (!membership) return reply.code(403).send({ error: "not_a_member" });
 
-    for (const mid of body.memberIds) {
+    // The conversation must be in the caller's workspace and every added
+    // member must belong to it too. Without this, any member id (including
+    // one from another workspace) could be inserted and gain read access.
+    const [conv] = await db
+      .select({ workspaceId: conversations.workspaceId })
+      .from(conversations)
+      .where(eq(conversations.id, convId))
+      .limit(1);
+    if (!conv || conv.workspaceId !== req.auth!.workspaceId!) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    const valid = await filterWorkspaceMemberIds(conv.workspaceId, body.memberIds);
+    if (valid.length !== new Set(body.memberIds).size) {
+      return reply.code(400).send({ error: "member_not_in_workspace" });
+    }
+    if (valid.length) {
       await db
         .insert(conversationMembers)
-        .values({ conversationId: convId, memberId: mid, role: "member" })
+        .values(valid.map((mid) => ({ conversationId: convId, memberId: mid, role: "member" as const })))
         .onConflictDoNothing();
     }
-    return { ok: true };
+    return { ok: true, added: valid.length };
   });
 
   app.post("/conversations/:id/read", async (req) => {

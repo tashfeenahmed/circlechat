@@ -18,3 +18,46 @@ export const config = {
   // or a trailing slash in operator-managed deployments).
   publicOrigin: new URL(required("PUBLIC_BASE_URL", "http://localhost:5173")).origin,
 } as const;
+
+// ───────────────── approval policy (read at call time, so tests + hot env
+// changes work) ─────────────────
+//
+// Anything here changes how much a human must be in the loop, so every
+// default is the conservative one: cards expire (so nothing waits forever),
+// denials are remembered (so agents can't re-ask), and nothing is
+// auto-approved unless an operator lists it.
+
+const num = (name: string, fallback: number, min = 0): number => {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= min ? v : fallback;
+};
+
+// Hours a pending approval may wait for a human before it is marked
+// `expired`, the agent is woken with approval_response status "expired", and
+// tasks blocked on it are released. 0 = never expire (the legacy behaviour).
+// APPROVAL_DEFAULT_TTL is accepted as an alias.
+export function approvalTtlHours(): number {
+  if (process.env.APPROVAL_TTL_HOURS != null && process.env.APPROVAL_TTL_HOURS.trim() !== "") {
+    return num("APPROVAL_TTL_HOURS", 72);
+  }
+  return num("APPROVAL_DEFAULT_TTL", 72);
+}
+
+// Days a denied (or expired) approval keeps refusing equivalent re-requests.
+export function approvalDenialMemoryDays(): number {
+  return num("APPROVAL_DENIAL_MEMORY_DAYS", 7);
+}
+
+// Comma-separated approval scopes that are auto-approved (with an audit row)
+// for every agent in the deployment. Entries match an approval's scope
+// exactly (case-insensitive) or by prefix with a trailing `*`
+// (`tasks.*`, `risk:*`, `deploy*`). Credential requests are never
+// auto-approved — approving them produces no secret. Empty by default.
+export function autoApproveScopes(): string[] {
+  return (process.env.AUTO_APPROVE_SCOPES ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}

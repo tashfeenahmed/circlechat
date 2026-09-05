@@ -22,7 +22,18 @@ class EventBus {
   private subscribedConvs = new Set<string>();
 
   connect(): void {
-    if (this.ws || this.closed) return;
+    // `disconnect()` marks the bus closed so a pending reconnect timer won't
+    // resurrect a socket the app tore down. A later connect() is an explicit
+    // request to come back — clear the flag, or the bus stays dead for the
+    // rest of the session (this happened on every workspace switch: the /me
+    // effect cleans up with disconnect(), then re-runs connect(), which was a
+    // no-op, so live events silently stopped).
+    this.closed = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) return;
     const s = new WebSocket(wsUrl());
     this.ws = s;
 
@@ -52,7 +63,10 @@ class EventBus {
   }
 
   private scheduleReconnect(): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.closed) return;
       this.backoff = Math.min(10_000, this.backoff * 2);
       this.connect();
     }, this.backoff);
@@ -60,8 +74,26 @@ class EventBus {
 
   disconnect(): void {
     this.closed = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    if (this.ws) this.ws.close();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    // Conversation subscriptions belong to the identity that made them; a
+    // reconnect after a workspace switch re-subscribes from the new
+    // conversation list, not the old workspace's.
+    this.subscribedConvs.clear();
+    const ws = this.ws;
+    this.ws = null;
+    this.connected = false;
+    if (ws) {
+      // Detach handlers so the close of the OLD socket can't schedule a
+      // reconnect or clobber a NEW socket opened right after.
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.onopen = null;
+      try { ws.close(); } catch { /* ignore */ }
+    }
   }
 
   send(obj: Record<string, unknown>): void {

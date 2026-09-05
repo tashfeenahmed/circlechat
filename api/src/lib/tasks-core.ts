@@ -18,7 +18,12 @@ import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { notify } from "./notifications.js";
 import { liveArtifactRows, isSubstantiveArtifact, purgeArtifactsForTasks } from "./task-artifacts.js";
 import { forgetTaskKnowledge } from "./knowledge.js";
-import { verifyTaskForDone, deterministicGateForDone } from "./task-verifier.js";
+import {
+  verifyTaskForDone,
+  deterministicGateForDone,
+  decideOnJudgeOutage,
+  resolveFailMode,
+} from "./task-verifier.js";
 import { recordProgress } from "./ledger-core.js";
 import { evaluateStageRules, StageRulesSchema } from "./p1-platform.js";
 
@@ -1117,6 +1122,38 @@ export async function deleteComment(taskId: string, commentId: string, actorMemb
 // Note: a determined agent can still pad past the heuristic — the human-review
 // rules (2/3) and a future LLM-judge layer are the backstop. The point here is
 // that "done" now requires a real artifact in the store, not a placeholder.
+// VERIFY_FAIL_MODE=hold: the judge is down, the flip is refused, and the card
+// gets exactly ONE comment saying so (deduped on the prefix) — otherwise every
+// retried flip would add another "still waiting" line. Authored by the acting
+// agent (the one whose flip was held); there is no system member.
+export const VERIFICATION_HOLD_PREFIX = "⏸ Verification on hold";
+async function postVerificationHoldComment(
+  taskId: string,
+  actorMemberId: string,
+  workspaceId: string,
+): Promise<void> {
+  const [existing] = await db
+    .select({ id: taskComments.id })
+    .from(taskComments)
+    .where(
+      and(
+        eq(taskComments.taskId, taskId),
+        dsql`${taskComments.deletedAt} is null` as never,
+        dsql`${taskComments.bodyMd} like ${VERIFICATION_HOLD_PREFIX + "%"}` as never,
+      ),
+    )
+    .limit(1);
+  if (existing) return;
+  await addComment(
+    taskId,
+    `${VERIFICATION_HOLD_PREFIX} — the deliverable verifier (LLM judge) could not be reached, so this task stays in review ` +
+      `(VERIFY_FAIL_MODE=hold). A human can review the deliverable and mark it done, or the flip will be retried once the judge recovers.`,
+    [],
+    actorMemberId,
+    workspaceId,
+  );
+}
+
 async function assertDoneEvidence(
   taskId: string,
   actorMemberId: string,
@@ -1177,11 +1214,18 @@ async function assertDoneEvidence(
       // render observation so the judge below reuses it (chromium runs once).
       const det = await deterministicGateForDone(gateOpts).catch(() => ({ blocked: false, obs: null }));
       if (det.blocked) return "verification_failed";
-      // Tier 2 — LLM judge, fail-OPEN: proves the deliverable meets the criteria
-      // and isn't fabricated; a gateway outage never freezes the board.
+      // Tier 2 — LLM judge: proves the deliverable meets the criteria and isn't
+      // fabricated. A judge OUTAGE is handled per VERIFY_FAIL_MODE: open (default)
+      // allows the flip, closed blocks it, hold blocks it and leaves ONE comment
+      // on the card so a human knows the task is waiting on them.
       const verdict = await verifyTaskForDone(gateOpts, det.obs).catch(() => null);
+      if (verdict === "judge_unavailable") {
+        const decision = decideOnJudgeOutage(resolveFailMode());
+        if (decision.comment) await postVerificationHoldComment(taskId, actorMemberId, workspaceId).catch(() => {});
+        return decision.block ? "verification_failed" : null;
+      }
       if (verdict) return verdict; // judge said fail → block (reviewer gets the rationale)
-      return null; // both tiers passed (or judge dormant/failed-open) → allow
+      return null; // both tiers passed (or judge dormant) → allow
     }
   }
 

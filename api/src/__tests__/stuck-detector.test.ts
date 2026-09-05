@@ -26,6 +26,22 @@ describe("normalizeRunSignature", () => {
   });
 });
 
+describe("failed-run accounting feeds the detector", () => {
+  it("three runaway runs in a row (error_text as the only signal) are a repeat loop", () => {
+    // Worker passes agent_runs.error_text as an error line for failed runs; before
+    // failures were recorded, these were three status=ok runs with null signatures.
+    const sig = normalizeRunSignature([], ["runaway_max_iterations"]);
+    expect(sig).toBe("runaway_max_iterations");
+    const r = detectStuck([sig, sig, sig]);
+    expect(r.stuck).toBe(true);
+  });
+  it("all_actions_rejected with different ids still matches", () => {
+    const a = normalizeRunSignature([], ["all_actions_rejected: post_message rejected: duplicate_of_recent vs m_abc"]);
+    const b = normalizeRunSignature([], ["all_actions_rejected: post_message rejected: duplicate_of_recent vs m_xyz"]);
+    expect(a).toBe(b);
+  });
+});
+
 describe("detectStuck", () => {
   const S = (s: string) => s; // readability
 

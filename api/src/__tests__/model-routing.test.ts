@@ -45,4 +45,30 @@ describe("model routing", () => {
       cachedInputTokens: 0,
     });
   });
+
+  it("accepts OpenAI / Anthropic / camelCase usage key spellings", () => {
+    expect(normalizeUsage({ prompt_tokens: 120, completion_tokens: 30 })).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(normalizeUsage({ input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 20 })).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 30,
+      cachedInputTokens: 20,
+    });
+    expect(normalizeUsage({ promptTokens: 5, completionTokens: 7, cost_usd: 0.01 })).toMatchObject({
+      inputTokens: 5,
+      outputTokens: 7,
+      costUsd: 0.01,
+    });
+  });
+
+  it("derives output from total when only total + input are reported", () => {
+    expect(normalizeUsage({ prompt_tokens: 100, total_tokens: 140 })).toMatchObject({ inputTokens: 100, outputTokens: 40 });
+  });
+
+  it("canonical keys win over aliases and still clamp/floor", () => {
+    expect(normalizeUsage({ inputTokens: 10.9, outputTokens: -3, prompt_tokens: 999, cachedInputTokens: 50 })).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 0,
+      cachedInputTokens: 10,
+    });
+  });
 });

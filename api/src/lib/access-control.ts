@@ -8,7 +8,7 @@ import { config } from "./config.js";
 
 export const BUILTIN_PERMISSIONS: Record<string, string[]> = {
   admin: ["*"],
-  member: ["workspace.read", "workspace.write", "runs.control", "apps.request_publish"],
+  member: ["workspace.read", "workspace.write", "runs.control", "apps.request_publish", "approvals.decide"],
   guest: ["workspace.read", "channels.write"],
 };
 

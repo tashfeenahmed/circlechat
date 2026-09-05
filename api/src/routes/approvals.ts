@@ -1,12 +1,14 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { approvals, agents } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { applyApprovedActionPayload } from "../agents/executor.js";
-import { publishToConversation } from "../lib/events.js";
+import { publishToConversation, publishToWorkspace } from "../lib/events.js";
+import { requirePermission, writeAudit } from "../lib/access-control.js";
+import { approvalExpiresAt } from "../lib/approval-policy.js";
 import {
   deliverAgentSecrets,
   SECRET_NAME_RE,
@@ -32,44 +34,88 @@ const DecideBody = z
     message: "secrets_on_deny",
   });
 
+const ListQuery = z.object({
+  // pending (default, what the Approvals page shows) | decided | all
+  status: z.enum(["pending", "decided", "all"]).optional(),
+});
+const DECIDED = ["approved", "denied", "applied", "expired"];
+
 export default async function approvalRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireWorkspace);
 
   app.get("/approvals", async (req) => {
     const { workspaceId } = req.auth!;
+    const q = ListQuery.parse(req.query ?? {});
+    const statusFilter =
+      q.status === "all" ? undefined : q.status === "decided" ? inArray(approvals.status, DECIDED) : eq(approvals.status, "pending");
     const rows = await db
       .select({ approval: approvals })
       .from(approvals)
       .innerJoin(agents, eq(agents.id, approvals.agentId))
-      .where(and(eq(approvals.status, "pending"), eq(agents.workspaceId, workspaceId!)))
+      .where(and(eq(agents.workspaceId, workspaceId!), statusFilter))
       .orderBy(desc(approvals.createdAt))
       .limit(100);
-    return { approvals: rows.map((r) => r.approval) };
+    return {
+      approvals: rows.map((r) => ({
+        ...r.approval,
+        // When the card will auto-expire if nobody decides (null = never).
+        expiresAt: r.approval.status === "pending" ? approvalExpiresAt(r.approval.createdAt) : null,
+      })),
+    };
   });
 
   app.post("/approvals/:id", async (req, reply) => {
     const apId = (req.params as { id: string }).id;
     const body = DecideBody.parse(req.body);
-    const { memberId } = req.auth!;
-    const [a] = await db.select().from(approvals).where(eq(approvals.id, apId)).limit(1);
-    if (!a) return reply.code(404).send({ error: "not_found" });
-    if (a.status !== "pending") return reply.code(409).send({ error: "already_decided" });
+    const { memberId, workspaceId } = req.auth!;
+
+    // Deciding an approval is a governance action: admins and members, never
+    // guests (BUILTIN_PERMISSIONS) — custom roles need `approvals.decide`.
+    if (!(await requirePermission(req, "approvals.decide"))) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+
+    // Workspace scoping: the card must belong to an agent in the caller's
+    // current workspace. Previously any authenticated user could decide any
+    // approval by id, across workspaces.
+    const [found] = await db
+      .select({ approval: approvals, agent: agents })
+      .from(approvals)
+      .innerJoin(agents, eq(agents.id, approvals.agentId))
+      .where(and(eq(approvals.id, apId), eq(agents.workspaceId, workspaceId!)))
+      .limit(1);
+    if (!found) return reply.code(404).send({ error: "not_found" });
+    const a = found.approval;
+    const ag = found.agent;
+    if (a.status !== "pending") return reply.code(409).send({ error: "already_decided", status: a.status });
 
     const status = body.decision === "approve" ? "approved" : "denied";
     const note = body.note || null;
+    const now = new Date();
 
-    const [ag] = await db.select().from(agents).where(eq(agents.id, a.agentId)).limit(1);
+    // Claim the decision atomically (status-guarded UPDATE). Two humans
+    // clicking at once used to both pass the check above, both deliver
+    // secrets, and both replay the action — the loser now gets a 409.
+    const claimed = await db
+      .update(approvals)
+      .set({ status, decidedAt: now, decidedBy: memberId, decisionNote: note })
+      .where(and(eq(approvals.id, apId), eq(approvals.status, "pending")))
+      .returning({ id: approvals.id });
+    if (!claimed.length) return reply.code(409).send({ error: "already_decided" });
 
-    // Install attached credentials into the agent's env BEFORE marking the
-    // approval decided — if delivery fails the decision doesn't land, so the
-    // agent is never told "approved" about credentials it can't see.
+    // Install attached credentials into the agent's env. If delivery fails the
+    // claim is rolled back to pending, so the agent is never told "approved"
+    // about credentials it can't see and the human can retry.
     let deliveredSecrets: string[] | null = null;
     if (status === "approved" && body.secrets && Object.keys(body.secrets).length) {
-      if (!ag) return reply.code(404).send({ error: "agent_not_found" });
       try {
         deliveredSecrets = await deliverAgentSecrets(ag, body.secrets);
       } catch (e) {
         req.log.error({ err: e, approvalId: apId }, "secret delivery failed");
+        await db
+          .update(approvals)
+          .set({ status: "pending", decidedAt: null, decidedBy: null, decisionNote: null })
+          .where(eq(approvals.id, apId));
         return reply.code(500).send({ error: "secret_delivery_failed" });
       }
     }
@@ -92,37 +138,45 @@ export default async function approvalRoutes(app: FastifyInstance): Promise<void
     }
     const finalStatus = autoApplied ? "applied" : status;
 
-    await db
-      .update(approvals)
-      .set({
-        status: finalStatus,
-        decidedAt: new Date(),
-        decidedBy: memberId,
-        decisionNote: note,
-        ...(deliveredSecrets?.length ? { deliveredSecrets } : {}),
-      })
-      .where(eq(approvals.id, apId));
-
-    if (a.conversationId) {
-      await publishToConversation(a.conversationId, {
-        type: "approval.decided",
-        approvalId: apId,
-        status,
-        ...(note ? { note } : {}),
-        ...(deliveredSecrets?.length ? { deliveredSecrets } : {}),
-      });
+    if (finalStatus !== status || deliveredSecrets?.length) {
+      await db
+        .update(approvals)
+        .set({
+          status: finalStatus,
+          ...(deliveredSecrets?.length ? { deliveredSecrets } : {}),
+        })
+        .where(eq(approvals.id, apId));
     }
+
+    await writeAudit({
+      workspaceId: workspaceId!,
+      actorId: memberId!,
+      action: `approval.${status}`,
+      targetType: "approval",
+      targetId: apId,
+      // Names only — secret values never reach the DB, events, or logs.
+      meta: { scope: a.scope, agentId: a.agentId, autoApplied, ...(deliveredSecrets?.length ? { deliveredSecrets } : {}) },
+      ip: req.ip,
+    }).catch(() => {});
+
+    const frame = {
+      type: "approval.decided" as const,
+      approvalId: apId,
+      status: finalStatus,
+      ...(note ? { note } : {}),
+      ...(deliveredSecrets?.length ? { deliveredSecrets } : {}),
+    };
+    await publishToWorkspace(workspaceId!, frame).catch(() => {});
+    if (a.conversationId) await publishToConversation(a.conversationId, frame).catch(() => {});
 
     // Wake the agent with an approval_response trigger so it can act on it.
-    if (ag) {
-      await enqueueAgentEvent(a.agentId, {
-        trigger: "approval_response",
-        approvalId: apId,
-        status,
-        conversationId: a.conversationId ?? undefined,
-      });
-    }
+    await enqueueAgentEvent(a.agentId, {
+      trigger: "approval_response",
+      approvalId: apId,
+      status: finalStatus,
+      conversationId: a.conversationId ?? undefined,
+    });
 
-    return { ok: true, status, ...(deliveredSecrets?.length ? { deliveredSecrets } : {}) };
+    return { ok: true, status: finalStatus, ...(deliveredSecrets?.length ? { deliveredSecrets } : {}) };
   });
 }

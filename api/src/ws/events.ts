@@ -23,6 +23,8 @@ async function writePresence(memberId: string, status: string): Promise<void> {
   }
 }
 
+const PRESENCE_STATUSES = new Set<unknown>(["online", "away", "busy", "working", "idle", "offline"]);
+
 export default async function eventsWs(app: FastifyInstance): Promise<void> {
   app.get(
     "/events",
@@ -54,12 +56,32 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
       }
 
       const memberId = s.memberId!;
+
+      // Register teardown BEFORE the awaits below. The client can drop the
+      // socket while we're still querying Postgres; if `close` fired before the
+      // handler was attached, the ping interval and every bus subscription
+      // leaked for the life of the process (one orphaned set per reconnect).
+      let closed = false;
+      let ping: ReturnType<typeof setInterval> | null = null;
+      let announcedOnline = false;
+      socket.on("close", async () => {
+        closed = true;
+        if (ping) clearInterval(ping);
+        await unsubscribeAll(socket);
+        if (!isSpectator && announcedOnline) {
+          await writePresence(memberId, "offline");
+          await publishGlobal({ type: "presence.update", memberId, status: "offline" });
+        }
+      });
+      const isOpen = (): boolean => !closed && socket.readyState === 1;
+
       // Subscribe to per-member channel + all conversation channels.
       const myConvs = await db
         .select({ id: conversationMembers.conversationId })
         .from(conversationMembers)
         .where(eq(conversationMembers.memberId, memberId));
 
+      if (!isOpen()) return;
       await subscribe(socket, USER_CHANNEL(memberId));
       await subscribe(socket, GLOBAL_CHANNEL);
       if (s.workspaceId) await subscribe(socket, WORKSPACE_CHANNEL(s.workspaceId));
@@ -94,6 +116,10 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
             .where(
               and(
                 eq(agentRuns.status, "running"),
+                // Runs with no conversation (heartbeats) are scoped by the
+                // agent's workspace — without this every workspace's ambient
+                // runs were replayed to every socket.
+                ...(s.workspaceId ? [eq(agents.workspaceId, s.workspaceId)] : []),
                 or(
                   isNull(agentRuns.conversationId),
                   inArray(agentRuns.conversationId, visibleConvIds),
@@ -113,7 +139,13 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
             })
             .from(agentRuns)
             .innerJoin(agents, eq(agents.id, agentRuns.agentId))
-            .where(and(eq(agentRuns.status, "running"), isNull(agentRuns.conversationId)))
+            .where(
+              and(
+                eq(agentRuns.status, "running"),
+                isNull(agentRuns.conversationId),
+                ...(s.workspaceId ? [eq(agents.workspaceId, s.workspaceId)] : []),
+              ),
+            )
             .limit(100);
       if (runningRows.length) {
         socket.send(
@@ -132,7 +164,11 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
         );
       }
 
-      const ping = setInterval(() => {
+      if (!isOpen()) {
+        await unsubscribeAll(socket);
+        return;
+      }
+      ping = setInterval(() => {
         try {
           socket.send(JSON.stringify({ type: "ping" }));
         } catch {
@@ -161,7 +197,9 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
             if (m) await subscribe(socket, CONV_CHANNEL(data.conversationId));
           }
           if (data.type === "presence" && !isSpectator) {
-            const status = typeof data.status === "string" ? data.status : "online";
+            // The status lands in the presence table and is fanned out to
+            // every socket verbatim — keep it to the known vocabulary.
+            const status = PRESENCE_STATUSES.has(data.status) ? (data.status as string) : "online";
             await writePresence(memberId, status);
             await publishGlobal({
               type: "presence.update",
@@ -174,16 +212,8 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
         }
       });
 
-      socket.on("close", async () => {
-        clearInterval(ping);
-        await unsubscribeAll(socket);
-        if (!isSpectator) {
-          await writePresence(memberId, "offline");
-          await publishGlobal({ type: "presence.update", memberId, status: "offline" });
-        }
-      });
-
       if (!isSpectator) {
+        announcedOnline = true;
         await writePresence(memberId, "online");
         await publishGlobal({ type: "presence.update", memberId, status: "online" });
       }

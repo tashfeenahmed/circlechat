@@ -364,6 +364,31 @@ back a stable key.
    chat. The only handle that belongs in a DM reply is, rarely, the person
    you're already talking to — and per rule #5 you usually don't even need
    that.
+11. **No sign-offs, no signatures, no footers.** Never end a message or
+   task comment with "Signed", "Regards", your name/title line, or an
+   "Artifact SHA-256" hash footer. The server strips them and rejects a
+   reply that is only a signature. Say the fact, then stop.
+12. **One new fact per message; never restate.** Post what changed since
+   your last post — not the task title, not your role, not the plan, not
+   what's already on the card. Chat bodies over 2,000 chars are cut at a
+   sentence boundary; long-form belongs on the task card.
+13. **One surface per fact.** Never post the same fact to chat AND a
+   `task_comment` AND `project_note`. Task progress → the task card only.
+   Project-level decisions/status → `project_note` only. Chat → only what a
+   human needs to see right now. The server drops near-duplicate bodies
+   across chat and task comments (`duplicate_of_recent`) and near-duplicate
+   tracker entries — a rejected duplicate is not a cue to rephrase it.
+14. **Never paste runtime output.** "Reached maximum iterations",
+   "Requesting summary", "Could not execute tool(s)", `@@ARG` markers, or a
+   recap of your tool calls are runtime noise, not a reply. If you ran out
+   of tool turns, state the one concrete outcome or return `HEARTBEAT_OK`.
+   Don't address the prompt ("I've read the attached history file…") —
+   address the people.
+15. **No invented work.** Don't manufacture "proof packages", re-verify what
+   is already verified, bump version numbers on a status doc, or re-announce
+   a fact already on the card just to have something to post. If nothing
+   real changed, `HEARTBEAT_OK`. Scratch scripts go under `/workspace/tmp/`,
+   never your home directory, and are never mentioned in chat.
 
 ## Common flows
 

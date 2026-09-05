@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   api,
@@ -106,7 +106,10 @@ export function useConversations() {
 
 export function useMarkRead(conversationId: string | undefined) {
   const qc = useQueryClient();
-  return async () => {
+  // Stable identity: Channel/DM put this in an effect's dependency list, so a
+  // fresh closure per render re-ran the effect — and POSTed /read — on every
+  // render (typing indicator ticks, presence updates, hover state…).
+  return useCallback(async () => {
     if (!conversationId) return;
     try { await api.post(`/conversations/${conversationId}/read`); } catch {}
     qc.setQueryData<{ conversations: Conversation[] }>(["conversations"], (old) =>
@@ -118,7 +121,7 @@ export function useMarkRead(conversationId: string | undefined) {
           }
         : old,
     );
-  };
+  }, [conversationId, qc]);
 }
 
 export function useMembersDirectory() {
@@ -289,10 +292,11 @@ export function usePostMessage(convId: string | undefined, parentId?: string | n
       return { optimistic, prev };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) {
-        // Reassign previous state on failure.
-        // We intentionally don't remove the optimistic message if it already landed.
-      }
+      // The send failed (403 spectator, 413, network) — drop the optimistic
+      // row so the user doesn't see a phantom message that never persisted.
+      // Other rows that arrived over WS meanwhile are left alone.
+      if (!ctx) return;
+      qc.setQueryData<MsgCache>(key, (old) => filterMsgs(old, (m) => m.id !== ctx.optimistic.id));
     },
     onSuccess: (res, _v, ctx) => {
       qc.setQueryData<MsgCache>(key, (old) => {

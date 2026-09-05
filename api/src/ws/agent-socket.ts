@@ -11,6 +11,7 @@ import {
 } from "../agents/registry.js";
 import { scheduleAgentHeartbeat } from "../agents/scheduler.js";
 import { id as makeId } from "../lib/ids.js";
+import { isInternalRequest } from "../lib/internal-request.js";
 
 export default async function agentSocketWs(app: FastifyInstance): Promise<void> {
   app.get("/agent-socket", { websocket: true }, async (conn, req) => {
@@ -39,12 +40,24 @@ export default async function agentSocketWs(app: FastifyInstance): Promise<void>
       return;
     }
 
+    // Attach teardown before the awaits: a bridge that connects and drops
+    // during the DB round-trip would otherwise fire `close` before the
+    // listener existed and stay registered as "connected" forever.
+    let closed = false;
+    socket.on("close", () => {
+      closed = true;
+      unregisterAgentSocket(agent.id, socket);
+    });
     registerAgentSocket(agent.id, socket);
     await db
       .update(agents)
       .set({ status: "idle" })
       .where(eq(agents.id, agent.id));
     await scheduleAgentHeartbeat(agent.id, agent.heartbeatIntervalSec);
+    if (closed || socket.readyState !== 1) {
+      unregisterAgentSocket(agent.id, socket);
+      return;
+    }
 
     socket.send(JSON.stringify({ type: "hello", agentId: agent.id, handle: agent.handle }));
 
@@ -60,15 +73,12 @@ export default async function agentSocketWs(app: FastifyInstance): Promise<void>
         // ignore
       }
     });
-
-    socket.on("close", () => {
-      unregisterAgentSocket(agent.id, socket);
-    });
   });
 
   // Internal dispatch endpoint so the worker process (which doesn't own the WS map)
   // can forward heartbeat/event packets to the right connected agent.
   app.post("/_internal/agent-dispatch", async (req, reply) => {
+    if (!isInternalRequest(req)) return reply.code(404).send({ error: "not_found" });
     const body = req.body as {
       agentId: string;
       kind: "heartbeat" | "event";

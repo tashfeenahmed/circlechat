@@ -1,7 +1,7 @@
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { agents, agentRuns, members, workspaces, workspaceMembers } from "../db/schema.js";
-import { notifyMany } from "./notifications.js";
+import { agents, agentRuns, workspaces } from "../db/schema.js";
+import { notifyMany, adminMemberIds } from "./notifications.js";
 
 // Monthly spend budgets with hard stops, modeled on Paperclip's budget scopes:
 // soft warning at 80%, hard stop at 100%. Two scopes — per-agent (pauses that
@@ -71,26 +71,6 @@ export async function workspaceSpendMonthUsd(workspaceId: string, now: Date = ne
     .innerJoin(agents, eq(agents.id, agentRuns.agentId))
     .where(and(eq(agents.workspaceId, workspaceId), gte(agentRuns.startedAt, monthStartUtc(now))));
   return row?.spent ?? 0;
-}
-
-// Workspace admins' user-member ids (the inbox recipients for budget alerts).
-async function adminMemberIds(workspaceId: string): Promise<string[]> {
-  const admins = await db
-    .select({ userId: workspaceMembers.userId })
-    .from(workspaceMembers)
-    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.role, "admin")));
-  if (!admins.length) return [];
-  const rows = await db
-    .select({ id: members.id })
-    .from(members)
-    .where(
-      and(
-        eq(members.workspaceId, workspaceId),
-        eq(members.kind, "user"),
-        inArray(members.refId, admins.map((a) => a.userId)),
-      ),
-    );
-  return rows.map((r) => r.id);
 }
 
 export type BudgetGate =
