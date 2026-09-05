@@ -341,6 +341,11 @@ function isEntrypointNoise(line) {
   // enum […]"). Multi-line variants are handled by stripRuntimeNoise().
   if (/^\u26A0?\uFE0F?\s*Could not execute tool\(s\)/i.test(t)) return true;
   if (/@@ARGS?_(?:START|END|BEGIN)\b/.test(t)) return true;
+  // Hermes gateway boot banner (box-drawing frame around "⚕ Hermes Gateway
+  // Starting...", "Messaging platforms + cron scheduler", "Press Ctrl+C to
+  // stop") — leaked into a channel on 5 Sep 2026.
+  if (/Hermes Gateway Starting|Messaging platforms \+ cron scheduler|Press Ctrl\+C to stop/i.test(t)) return true;
+  if (/^[┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝][┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝ \t]*$/.test(t)) return true;
   return false;
 }
 

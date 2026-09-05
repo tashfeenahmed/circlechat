@@ -57,6 +57,15 @@ export function verifierEnabled(): boolean {
 //   closed — block the flip silently (recorded as an error verdict).
 //   hold   — block the flip AND post one comment on the task so a human
 //            knows it is waiting on them, not on the agent.
+// How long one judge call may take. Free/`auto` gateways often land on
+// reasoning models that need well over a minute on a prompt carrying a whole
+// deliverable; the only live outage reason after the 5 Sep deploy was
+// `timeout_60000ms`. Override with VERIFY_JUDGE_TIMEOUT_MS.
+export function judgeTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.VERIFY_JUDGE_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 180_000;
+}
+
 export type VerifyFailMode = "open" | "closed" | "hold";
 export function resolveFailMode(raw: string | undefined = process.env.VERIFY_FAIL_MODE): VerifyFailMode {
   const v = (raw || "").trim().toLowerCase();
@@ -270,7 +279,7 @@ export async function verifyTaskForDone(
           renderBlock,
       },
     ],
-    { temperature: 0, maxTokens: 800, timeoutMs: 60_000, target },
+    { temperature: 0, maxTokens: 800, timeoutMs: judgeTimeoutMs(), target },
   );
 
   const method = obs ? "render" : taskType === "code" ? "test" : "rubric";

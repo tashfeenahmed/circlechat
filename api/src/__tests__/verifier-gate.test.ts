@@ -5,6 +5,7 @@ import {
   decideOnJudgeOutage,
   shouldReuseVerdict,
 } from "../lib/task-verifier.js";
+import { judgeTimeoutMs } from "../lib/task-verifier.js";
 import type { RenderObservation } from "../lib/deliverable-render.js";
 
 // The deterministic (fail-CLOSED) tier of the verification gate. It must block
@@ -92,5 +93,13 @@ describe("shouldReuseVerdict", () => {
     expect(shouldReuseVerdict(row({ createdAt: new Date(now - 601_000) }), "art_1", now, 600_000)).toBe(false);
     expect(shouldReuseVerdict(null, "art_1", now, 600_000)).toBe(false);
     expect(shouldReuseVerdict(row({ artifactId: null }), "art_1", now, 600_000)).toBe(false);
+  });
+});
+
+describe("judgeTimeoutMs", () => {
+  it("defaults to 180 s and honours VERIFY_JUDGE_TIMEOUT_MS", () => {
+    expect(judgeTimeoutMs({})).toBe(180_000);
+    expect(judgeTimeoutMs({ VERIFY_JUDGE_TIMEOUT_MS: "" })).toBe(180_000);
+    expect(judgeTimeoutMs({ VERIFY_JUDGE_TIMEOUT_MS: "90000" })).toBe(90_000);
   });
 });

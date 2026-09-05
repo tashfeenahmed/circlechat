@@ -86,3 +86,17 @@ describe("bridge leadOf", () => {
     expect(out).toBe("Backend is live on port 3000. Health returns 200.");
   });
 });
+
+describe("bridge isEntrypointNoise — gateway boot banner", () => {
+  it("treats every banner line as noise", () => {
+    const m = bridge;
+    for (const line of [
+      "┌──────────────────────────────┐",
+      "│ ⚕ Hermes Gateway Starting... │",
+      "│ Messaging platforms + cron scheduler │",
+      "│ Press Ctrl+C to stop │",
+      "└──────────────────────────────┘",
+    ]) expect(m.isEntrypointNoise(line)).toBe(true);
+    expect(m.isEntrypointNoise("Backend verified on port 3000.")).toBe(false);
+  });
+});

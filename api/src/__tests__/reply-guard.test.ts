@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkReplyBody, guardRejectHint } from "../agents/reply-guard.js";
+import { checkReplyBody, guardRejectHint, stripLeakedScaffolding } from "../agents/reply-guard.js";
 
 // The reply guard is the last line between agent runtime noise and a human's
 // chat. These cases are distilled from real leaks observed in production
@@ -316,5 +316,35 @@ describe("checkReplyBody — Hermes runtime scaffolding leaks (live.circlechat.c
     for (const reason of ["runaway_banner", "tool_exec_failure", "tool_parse_debris", "scaffold_talk", "signoff_only"]) {
       expect(guardRejectHint(reason).length).toBeGreaterThan(20);
     }
+  });
+});
+
+describe("checkReplyBody — Hermes gateway boot banner (live leak 5 Sep 2026)", () => {
+  const boxed = [
+    "┌──────────────────────────────────────────┐",
+    "│ ⚕ Hermes Gateway Starting...             │",
+    "├──────────────────────────────────────────┤",
+    "│ Messaging platforms + cron scheduler     │",
+    "│ Press Ctrl+C to stop                     │",
+    "└──────────────────────────────────────────┘",
+  ].join("\n");
+  it("rejects a reply that is only the boot banner", () => {
+    const r = checkReplyBody(boxed);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("gateway_boot");
+    expect(guardRejectHint("gateway_boot")).toMatch(/boot banner/);
+  });
+  it("rejects the flattened single-line variant", () => {
+    const r = checkReplyBody("┌┐ ⚕ Hermes Gateway Starting... ├┤ Messaging platforms + cron scheduler Press Ctrl+C to stop └┘");
+    expect(r.ok).toBe(false);
+  });
+  it("keeps the substantive remainder after the banner", () => {
+    const r = checkReplyBody(`${boxed}\n\nBackend verified end-to-end — all 3 streaming endpoints answer on port 3000.`);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.bodyMd).not.toMatch(/Gateway|Ctrl\+C|[┌┐└┘]/);
+      expect(r.bodyMd).toMatch(/^Backend verified end-to-end/);
+    }
+    expect(stripLeakedScaffolding(boxed).stripped).toContain("gateway_boot");
   });
 });
