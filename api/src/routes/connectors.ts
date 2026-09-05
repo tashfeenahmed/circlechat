@@ -267,19 +267,32 @@ export default async function connectorRoutes(app: FastifyInstance): Promise<voi
       : {};
     const clientSecret = typeof oldSecret.clientSecret === "string" ? oldSecret.clientSecret : "";
     const redirectUri = `${config.publicBaseUrl.replace(/\/$/, "")}/api/connectors/oauth/callback`;
-    const response = await fetch(oauth.tokenUrl, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code: query.code,
-        client_id: oauth.clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-      }),
-      signal: AbortSignal.timeout(20_000),
-    });
-    const token = (await response.json()) as Record<string, unknown>;
+    let response: Response;
+    try {
+      response = await fetch(oauth.tokenUrl, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: query.code,
+          client_id: oauth.clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (e) {
+      req.log.warn({ err: (e as Error).message, connectorId: connector.id }, "oauth token exchange unreachable");
+      return reply.code(502).send({ error: "oauth_token_exchange_failed" });
+    }
+    // A provider error page (HTML) or a network blip must not surface as a
+    // 500 from `response.json()` — it's a failed exchange either way.
+    let token: Record<string, unknown> = {};
+    try {
+      token = (await response.json()) as Record<string, unknown>;
+    } catch {
+      token = {};
+    }
     if (!response.ok || typeof token.access_token !== "string") {
       return reply.code(400).send({ error: "oauth_token_exchange_failed" });
     }

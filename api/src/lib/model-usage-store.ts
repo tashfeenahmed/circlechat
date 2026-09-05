@@ -8,7 +8,7 @@ import {
   normalizeUsage,
   selectConfiguredRoute,
   type ModelRouteRecord,
-  type ReportedModelUsage,
+  type ReportedModelUsageInput,
 } from "./model-routing.js";
 
 export async function modelRecommendation(input: {
@@ -38,7 +38,7 @@ export async function recordModelUsage(input: {
   agentId: string;
   runId: string;
   routeTier?: string | null;
-  usage: ReportedModelUsage;
+  usage: ReportedModelUsageInput;
   source: "reported" | "estimated";
   eventKey?: string;
 }): Promise<{ tokens: number; costUsd: number }> {
@@ -49,7 +49,18 @@ export async function recordModelUsage(input: {
     (input.routeTier as "economy" | "balanced" | "frontier" | "advisor") ?? "balanced",
   );
   const costUsd = calculateUsageCost(usage, route);
-  const [agent] = await db.select({ model: agents.model }).from(agents).where(eq(agents.id, input.agentId)).limit(1);
+  const [agent] = await db
+    .select({ model: agents.model, configJson: agents.configJson })
+    .from(agents)
+    .where(eq(agents.id, input.agentId))
+    .limit(1);
+  // Last-resort provider/model: what the agent was installed with, if the
+  // installer recorded it (configJson.provider / configJson.model). Better
+  // than "unknown"/"auto" when neither the runtime nor a model route says.
+  const cfg = (agent?.configJson ?? {}) as { provider?: unknown; model?: unknown };
+  const cfgProvider = typeof cfg.provider === "string" && cfg.provider ? cfg.provider.slice(0, 60) : null;
+  const cfgModel = typeof cfg.model === "string" && cfg.model ? cfg.model.slice(0, 120) : null;
+  const agentModel = agent?.model && agent.model !== "auto" ? agent.model : null;
   const usageId = id("usage");
   const eventKey = input.eventKey ?? usageId;
   const values = {
@@ -58,8 +69,8 @@ export async function recordModelUsage(input: {
     agentId: input.agentId,
     runId: input.runId,
     eventKey,
-    provider: usage.provider ?? route?.provider ?? "unknown",
-    model: usage.model ?? route?.model ?? agent?.model ?? "unknown",
+    provider: usage.provider ?? route?.provider ?? cfgProvider ?? "unknown",
+    model: usage.model ?? route?.model ?? agentModel ?? cfgModel ?? agent?.model ?? "unknown",
     routeTier: input.routeTier ?? null,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,

@@ -15,7 +15,9 @@ import { join as joinPath } from "node:path";
 const CFG_PATH = process.env.CC_BRIDGE_CONFIG ?? "./bridge-config.json";
 const WSS = process.env.CC_WSS_URL ?? "ws://localhost:3300/agent-socket";
 const API_BASE = process.env.CC_API_BASE ?? "http://localhost:3300/api";
-const HERMES_TIMEOUT = Number(process.env.HERMES_TIMEOUT ?? 180);
+// Observed on the live fishbowl: successful Hermes runs p50 133s / p90 183s,
+// and every "empty/crashed" reply was the 180s SIGTERM. Default well above p90.
+const HERMES_TIMEOUT = Number(process.env.HERMES_TIMEOUT) || 480; // seconds; empty/invalid → default
 // Match the api process' runtime decision. "docker" is the default going
 // forward; "host" is only retained as an escape hatch.
 const HERMES_RUNTIME = process.env.CC_HERMES_RUNTIME === "host" ? "host" : "docker";
@@ -329,8 +331,73 @@ function isEntrypointNoise(line) {
   if (/^\[supervise[-\w]*\]/i.test(t)) return true;
   if (/^\[s6-/i.test(t)) return true;
   if (/^reconcile:\s/i.test(t)) return true;
+  // Agent-loop cap banner: "⚠️  Reached maximum iterations (20). Requesting
+  // summary..." — printed by Hermes when the run hits `max_turns`, then the
+  // model's wrap-up follows. 576 live posts began with this in one week.
+  if (/^\u26A0?\uFE0F?\s*Reached maximum iterations\b/i.test(t)) return true;
+  if (/^Requesting (?:a )?summary\b/i.test(t)) return true;
+  // Tool-dispatcher failure notice + its text-parser delimiter debris
+  // ("⚠ Could not execute tool(s): "target": value "files\n@@ARG_END" not in
+  // enum […]"). Multi-line variants are handled by stripRuntimeNoise().
+  if (/^\u26A0?\uFE0F?\s*Could not execute tool\(s\)/i.test(t)) return true;
+  if (/@@ARGS?_(?:START|END|BEGIN)\b/.test(t)) return true;
   return false;
 }
+
+// Multi-line runtime notices that a per-line filter can't fully catch: the
+// "Could not execute tool(s)" paragraph carries the offending argument text
+// (which may span lines) up to the next blank line. Also the iterations banner
+// when it shares a line with the wrap-up. Applied to the joined reply text.
+const RUNAWAY_BANNER_RE =
+  /(?:^|\n)[ \t]*\u26A0?\uFE0F?[ \t]*Reached maximum iterations(?:\s*\(\d+\))?\.?(?:[ \t]*Requesting (?:a )?summary(?:\.{1,3}|…)?)?[ \t]*(?:\n|$)/gi;
+const TOOL_EXEC_FAIL_RE =
+  /(?:^|\n)[ \t]*\u26A0?\uFE0F?[ \t]*Could not execute tool\(s\)[^\n]*(?:\n(?![ \t]*\n)[^\n]*)*/gi;
+function stripRuntimeNoise(text) {
+  return String(text || "")
+    .replace(RUNAWAY_BANNER_RE, "\n")
+    .replace(TOOL_EXEC_FAIL_RE, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+// Cut `text` to at most `max` chars WITHOUT slicing mid-sentence: prefer the
+// last paragraph break past half the budget, then the last sentence end, then
+// the last whitespace. Returns the text unchanged when it already fits.
+function truncateAtBoundary(text, max) {
+  const s = String(text || "");
+  if (s.length <= max) return s;
+  const window = s.slice(0, max);
+  const floor = Math.floor(max * 0.5);
+  let cut = window.lastIndexOf("\n\n");
+  if (cut < floor) {
+    // Last sentence terminator followed by whitespace/end within the window.
+    const re = /[.!?…](?=\s)/g;
+    let m;
+    let last = -1;
+    while ((m = re.exec(window))) last = m.index + 1;
+    cut = last;
+  }
+  if (cut < floor) cut = window.lastIndexOf("\n");
+  if (cut < floor) cut = window.search(/\s[^\s]*$/);
+  if (cut < floor) cut = max;
+  return s.slice(0, cut).trimEnd();
+}
+
+// The first sentence/paragraph of a body, capped — used as the short chat
+// pointer when the long form is routed to a task card.
+function leadOf(text, max) {
+  const s = String(text || "").trim();
+  const para = s.split(/\n\s*\n/)[0] || s;
+  return truncateAtBoundary(para, max);
+}
+
+// Body caps. Chat is for what humans need to see NOW; anything longer belongs
+// on a task card (which the API accepts up to 20k chars — we stop at 6k so a
+// runaway summary doesn't become a runaway comment).
+const CHAT_BODY_MAX = 2000;
+const CHAT_POINTER_MAX = 400;
+const TASK_BODY_MAX = 6000;
+const RAW_REPLY_MAX = 12000;
 
 // Final safety net before posting: after <actions>/<attachments> have been
 // pulled out, is the remaining body nothing but machinery (tool-call syntax,
@@ -404,17 +471,23 @@ function extractReply(raw) {
     if (isEntrypointNoise(content)) continue;
     out.push(content);
   }
-  const text = stripClarifyNoise(out.join("\n").replace(/\n{3,}/g, "\n\n").trim());
+  const text = stripRuntimeNoise(stripClarifyNoise(out.join("\n").replace(/\n{3,}/g, "\n\n").trim()));
   if (text) return text;
-  return stripClarifyNoise(stripAnsi
-    .replace(/[╭╰│╮╯─]+/g, "")
-    .split("\n")
-    .filter((l) => !/^session_id:/i.test(l))
-    .filter((l) => !/^\s*⚕?\s*Hermes\s*$/.test(l))
-    .filter((l) => !isEntrypointNoise(l))
-    .join("\n")
-    .trim()
-    .slice(0, 2000));
+  // No boxed reply found (quiet/compact display) — the whole stream is the
+  // reply. Cap it, but at a sentence/paragraph boundary: the old hard
+  // `.slice(0, 2000)` cut 12 of one agent's comments mid-sentence in a week.
+  // Per-surface caps are applied when the post is assembled.
+  return truncateAtBoundary(
+    stripRuntimeNoise(stripClarifyNoise(stripAnsi
+      .replace(/[╭╰│╮╯─]+/g, "")
+      .split("\n")
+      .filter((l) => !/^session_id:/i.test(l))
+      .filter((l) => !/^\s*⚕?\s*Hermes\s*$/.test(l))
+      .filter((l) => !isEntrypointNoise(l))
+      .join("\n")
+      .trim())),
+    RAW_REPLY_MAX,
+  );
 }
 
 // Pulls every @handle token out of a markdown body. Skips `@` inside code
@@ -647,12 +720,34 @@ Do NOT re-emit it — that would do it twice. It is done. Move on: take the NEXT
     return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was APPROVED by ${who}.${noteLine}${secretsLine}
 You may now perform the approved action. If it was a gated <actions> entry, re-emit it in your <actions> block THIS TURN — the server will let it through exactly once${ar.note ? ", adjusted per the note above if it narrows the ask" : ""}. If it was a pre-flight request_approval for outside work, do that work now. Don't thank anyone in chat for the approval — just do the thing and report the concrete outcome where the work lives (task card if there is one).`;
   }
+  if (ar.status === "expired") {
+    return `APPROVAL EXPIRED — your request ${ar.id} ("${ar.action}") waited for a human decision until its deadline and is now CLOSED without one.${noteLine}
+Hard rules now in force:
+  • Do NOT re-request or rephrase it — the server refuses equivalent requests for a week.
+  • Tasks that were blocked on it have been moved back to in_progress. Pick one up and use a route that needs NO approval: share_to_task + the in-platform app preview instead of an external host, a keyless data source instead of a paid API, or scope the deliverable down.
+  • If nothing is possible without it, hand the task back with ONE task_comment saying exactly what is missing — then work on something else. No chat post about the expiry is needed.`;
+  }
   return `APPROVAL DECIDED — your request ${ar.id} ("${ar.action}") was DENIED by ${who}. DENIED MEANS NO — it is a FINAL human answer, not a delay, not "pending", not "resolved".${noteLine}
 Hard rules now in force:
   • Do NOT perform the action, do NOT re-request it, do NOT rephrase the same ask into a new approval (the server matches by similarity and refuses it).
   • Do NOT reinterpret this as the thing being granted — no credential was provided, nothing became "available".
   • ${ar.note ? "Adjust your approach per the note above — it tells you what to do instead." : "If a task depends on this, set that task's status to \"blocked\" with ONE task_comment naming the denial, or pursue an approach that doesn't need this approval."} Then pick up different work. No chat post about the denial is needed.`;
 }
+
+// Output-hygiene rules appended to every prompt (chat and task-only). Each line
+// maps to a failure the live fishbowl produced at scale: ritual sign-offs with
+// hash footers, 1,400-char restatements of the task, the same fact posted to
+// chat + task card + tracker, and invented "proof package vNN" busywork.
+const STYLE_RULES = [
+  ``,
+  `OUTPUT HYGIENE (server-enforced where marked):`,
+  `  • NO SIGN-OFFS. Never end with "Signed", "Regards", your name/title line, or an "Artifact SHA-256" footer — the server strips them (and rejects a reply that is only a signature).`,
+  `  • ONE NEW FACT PER MESSAGE. Say the thing that changed since your last post, in 1–2 sentences. Do not restate the task, your role, the plan, or what was already on the card. A reply over ${CHAT_BODY_MAX} chars is cut at a sentence boundary — put long-form on the task card, not in chat.`,
+  `  • ONE SURFACE PER FACT. Never post the same fact to chat AND a task_comment AND project_note. Task progress → task_comment/share_to_task only. Project-level decisions/status → project_note only. Chat → only what a human needs to see right now. The server drops near-duplicate bodies across these surfaces (duplicate_of_recent) and near-duplicate tracker entries.`,
+  `  • NO INVENTED WORK. Do not manufacture "proof packages", re-verify what is already verified, bump a version number on a status doc, or re-announce a fact already on the card to have something to post. If nothing real changed: HEARTBEAT_OK.`,
+  `  • NEVER paste runtime output into a reply: "Reached maximum iterations", "Requesting summary", "Could not execute tool(s)", @@ARG markers, or a summary of your tool calls. If you ran out of tool turns, say the one concrete outcome (or HEARTBEAT_OK) — not a transcript. Do not talk to the prompt ("I read the attached history file…") — reply to the people.`,
+  `  • Scratch files (test scripts, fetch helpers) go under /workspace/tmp/, never your home or cwd, and are never shared or mentioned in chat.`,
+].join("\n");
 
 function buildPrompt(entry, packet) {
   const agent = packet.agent || {};
@@ -1057,6 +1152,16 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
       `Anything you were doing that turn may not have completed — no actions were applied. Check the task you were working on (its comments/artifacts show what actually landed) and redo the lost step rather than assuming it happened.`,
     ].join("\n");
   }
+  // Server-side refusals from the last turn (dedupe, approval dedupe, denied-is-
+  // final, guard rejections). Without this the agent never learns WHY a post or
+  // request silently vanished and simply tries again — the begging loop.
+  if (Array.isArray(packet.previousRunErrors) && packet.previousRunErrors.length) {
+    prevFailBlock += [
+      ``,
+      `FEEDBACK ON YOUR LAST TURN — the server refused these (do not retry them as-is):`,
+      ...packet.previousRunErrors.slice(0, 6).map((e) => `  • ${String(e).slice(0, 300)}`),
+    ].join("\n");
+  }
 
   // One-shot loop-break directive (run-level stuck detector). High priority —
   // the agent has been repeating itself; tell it to break the pattern.
@@ -1078,7 +1183,8 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
     const lines = aps.slice(0, 10).map((ap) => {
       const when = ap.createdAt ? ` · requested ${String(ap.createdAt).slice(0, 10)}` : "";
       const whose = ap.mine === false && ap.agentHandle ? ` · filed by @${ap.agentHandle}` : "";
-      return `  ⏳ ${ap.id} [${ap.scope}${when}${whose}] ${ap.action}`;
+      const until = ap.expiresAt ? ` · expires ${String(ap.expiresAt).slice(0, 10)}` : "";
+      return `  ⏳ ${ap.id} [${ap.scope}${when}${whose}${until}] ${ap.action}`;
     });
     approvalsBlock = [
       ``,
@@ -1265,6 +1371,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         toolBlock,
         ``,
         `Your reply body will be dropped — there is no conversation to post into. The ONLY valid output this turn is either (a) an <actions>[...]</actions> block doing real work on a task, or (b) exactly "HEARTBEAT_OK". No prose, no receipts, no "I will…".`,
+        STYLE_RULES,
       ]
     : [
         identity,
@@ -1293,6 +1400,7 @@ Don't repeat yourself across heartbeats: if your last task_comment said "I'll dr
         toolBlock,
         ``,
         `Reply briefly (1–2 sentences unless asked for more). Write only the reply text — no greetings, no sign-off, no markdown code fences around your reply.`,
+        STYLE_RULES,
       ];
   return sections.join("\n");
 }
@@ -1402,8 +1510,13 @@ function connect(entry) {
       // silent rather than posting "(empty reply)" as text — always safer.
       if (!rawText.trim()) {
         console.log(`[${entry.handle}] ${trigger} → skip (empty/crashed reply)`);
-        return reply({ status: "HEARTBEAT_OK" });
+        return reply({ status: "HEARTBEAT_OK", error: "empty_reply" });
       }
+      // Hermes hit its agent-loop cap: the reply is a forced summary, not real
+      // work. Post whatever substantive remainder survives the noise strip,
+      // but tell the worker so the run is recorded as non-productive.
+      const runaway = /Reached maximum iterations/i.test(rawText);
+      const outcomeErr = runaway ? { error: "runaway_max_iterations" } : {};
       // Silence-allowed triggers: model is permitted to skip a post by returning
       // HEARTBEAT_OK. `mention` is here only for agent→agent mentions (the
       // prompt forbids it on human mentions, and the executor's reply-guard
@@ -1449,10 +1562,36 @@ function connect(entry) {
       // would have nowhere to land, so we drop it and let the side-actions
       // (task_comment / share_to_task / update_task) carry the work.
       if (postBody && conv) {
+        let chatBody = postBody;
+        if (postBody.length > CHAT_BODY_MAX) {
+          // Too long for chat. If this turn is about a task (the trigger's
+          // task, or a task the agent targeted in its own actions), the long
+          // form goes onto THAT card as a task_comment and chat gets a short
+          // pointer. Otherwise cut at a boundary and say so — never a silent
+          // mid-sentence chop.
+          const routeTaskId =
+            (p.task && typeof p.task.id === "string" && p.task.id) ||
+            sideActions.find((sa) => sa && typeof sa.task_id === "string")?.task_id ||
+            null;
+          if (routeTaskId) {
+            const full = truncateAtBoundary(postBody, TASK_BODY_MAX);
+            actions.push({
+              type: "task_comment",
+              task_id: routeTaskId,
+              body_md: full.length < postBody.length ? `${full}\n\n_(trimmed — ${postBody.length - full.length} chars cut)_` : full,
+            });
+            chatBody = `${leadOf(postBody, CHAT_POINTER_MAX)}\n\n_(full update on the task card: ${routeTaskId})_`;
+            console.log(`[${entry.handle}] ${trigger} → ${postBody.length}-char prose routed to task_comment on ${routeTaskId}; chat gets a ${chatBody.length}-char pointer`);
+          } else {
+            const cut = truncateAtBoundary(postBody, CHAT_BODY_MAX - 80);
+            chatBody = `${cut}\n\n_(trimmed — ${postBody.length - cut.length} chars cut; keep chat short, put long-form on a task card)_`;
+            console.log(`[${entry.handle}] ${trigger} → ${postBody.length}-char prose cut at a boundary to ${chatBody.length} for chat`);
+          }
+        }
         actions.push({
           type: "post_message",
           conversation_id: conv.conversationId,
-          body_md: postBody,
+          body_md: chatBody,
           ...(replyTo ? { reply_to: replyTo } : {}),
           ...(attachments.length ? { attachments } : {}),
         });
@@ -1467,11 +1606,12 @@ function connect(entry) {
           (Array.isArray(p.myTasks) && p.myTasks[0]?.id) ||
           null;
         if (targetTaskId) {
-          console.log(`[${entry.handle}] task-only: auto-wrapping ${postBody.length}-char prose into task_comment on ${targetTaskId}`);
+          const wrapped = truncateAtBoundary(postBody, TASK_BODY_MAX);
+          console.log(`[${entry.handle}] task-only: auto-wrapping ${postBody.length}-char prose into task_comment on ${targetTaskId}${wrapped.length < postBody.length ? ` (cut to ${wrapped.length} at a boundary)` : ""}`);
           actions.push({
             type: "task_comment",
             task_id: targetTaskId,
-            body_md: postBody,
+            body_md: wrapped.length < postBody.length ? `${wrapped}\n\n_(trimmed — ${postBody.length - wrapped.length} chars cut)_` : wrapped,
           });
         } else {
           console.log(`[${entry.handle}] task-only: dropping ${postBody.length}-char prose (no conv and no task to wrap into)`);
@@ -1481,10 +1621,11 @@ function connect(entry) {
       console.log(
         `[${entry.handle}] replying, len=${postBody.length}, att=${attachments.length}${sideActions.length ? `, actions=${sideActions.length} (${sideActions.map((a) => a.type).join("+")})` : ""}`,
       );
-      if (actions.length === 0) return reply({ status: "HEARTBEAT_OK" });
+      if (actions.length === 0) return reply({ status: "HEARTBEAT_OK", ...outcomeErr });
       reply({
         actions,
-        trace: [`${entry.handle} responded, len=${postBody.length}${attachments.length ? `, att=${attachments.length}` : ""}${sideActions.length ? `, actions=${sideActions.length}` : ""}`],
+        ...outcomeErr,
+        trace: [`${entry.handle} responded, len=${postBody.length}${attachments.length ? `, att=${attachments.length}` : ""}${sideActions.length ? `, actions=${sideActions.length}` : ""}${runaway ? ", runaway" : ""}`],
       });
     } catch (e) {
       console.error(`[${entry.handle}] error: ${e.message.split("\n")[0]}`);
@@ -1500,6 +1641,7 @@ function connect(entry) {
               },
             ]
           : [],
+        error: `bridge_error: ${e.message.split("\n")[0].slice(0, 200)}`,
         trace: [`${entry.handle} error: ${e.message.slice(0, 200)}`],
       });
     }
@@ -1527,7 +1669,20 @@ function connect(entry) {
 // Exported so evals/tests can build the EXACT production prompt + reuse the
 // action parser without copying. Importing the module never connects sockets
 // unless it's run as the entrypoint (or CC_BRIDGE_IMPORT_ONLY forces import-only).
-export { buildPrompt, extractActions, extractAttachments, sanitizeActions, canonicalActionType };
+export {
+  buildPrompt,
+  extractActions,
+  extractAttachments,
+  sanitizeActions,
+  canonicalActionType,
+  extractReply,
+  stripRuntimeNoise,
+  truncateAtBoundary,
+  leadOf,
+  isEntrypointNoise,
+  CHAT_BODY_MAX,
+  TASK_BODY_MAX,
+};
 
 if (!process.env.CC_BRIDGE_IMPORT_ONLY) {
   reconcile();

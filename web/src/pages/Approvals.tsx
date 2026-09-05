@@ -6,6 +6,15 @@ import { api } from "../api/client";
 import Avatar from "../components/Avatar";
 import { useQueryClient } from "@tanstack/react-query";
 
+// "expires in 31h" / "expires in 3d" / "expired" for a pending card's deadline.
+function expiryLabel(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms)) return "";
+  if (ms <= 0) return "expired — awaiting sweep";
+  const h = Math.round(ms / 3_600_000);
+  return h < 48 ? `expires in ${Math.max(1, h)}h` : `expires in ${Math.round(h / 24)}d`;
+}
+
 const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 // Requests that ask for a credential. Approving one of these WITHOUT attaching
@@ -143,6 +152,9 @@ export default function ApprovalsPage() {
                   )}
                   <div className="text-[11.5px] text-[var(--color-muted-2)] mt-2 font-mono">
                     requested {new Date(ap.createdAt).toLocaleString()}
+                    {ap.status === "pending" && ap.expiresAt && (
+                      <> · {expiryLabel(ap.expiresAt)}</>
+                    )}
                   </div>
                   {!spectator && (
                     <>

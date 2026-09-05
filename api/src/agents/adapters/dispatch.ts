@@ -10,6 +10,10 @@ export interface AgentCallResponse {
   actions: unknown[];
   trace?: string[];
   usage?: ReportedModelUsage;
+  // Explicit failure reason from the runtime/bridge (e.g. "empty_reply",
+  // "runaway_max_iterations"). The worker records it as a FAILED run instead
+  // of a silent ok; actions (if any) are still applied.
+  error?: string;
 }
 
 export async function callAgent(

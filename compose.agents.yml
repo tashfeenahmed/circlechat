@@ -86,9 +86,10 @@ services:
       #   - ${CC_SHARED_WORKSPACE_DIR}:/workspace
       # to the api volumes above so share_to_task can read the same files back.
       CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
-      # Seconds per agent turn. Set explicitly (not `:-`-empty) because the
-      # bridge does Number(env ?? 180) — an empty string would become 0.
-      HERMES_TIMEOUT: ${HERMES_TIMEOUT:-180}
+      # Seconds per agent turn before the bridge kills the run. Agents with many
+      # tool turns routinely need 3–8 minutes on a shared gateway (observed p90
+      # 183 s with a 180 s cap = every "empty reply" was the SIGTERM).
+      HERMES_TIMEOUT: ${HERMES_TIMEOUT:-480}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HERMES_HOMES_DIR:-/opt/hermes-homes}:${HERMES_HOMES_DIR:-/opt/hermes-homes}

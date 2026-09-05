@@ -13,7 +13,7 @@ import {
   agents,
 } from "../db/schema.js";
 import { id } from "../lib/ids.js";
-import { publishToConversation } from "../lib/events.js";
+import { publishToConversation, publishToWorkspace } from "../lib/events.js";
 import { checkReplyBody, guardRejectHint } from "./reply-guard.js";
 import { checkRecentDuplicate, checkRecentDuplicateTaskComment } from "./dedupe.js";
 import {
@@ -41,8 +41,16 @@ import { redis } from "../lib/redis.js";
 import { loadLedger, appendFact, appendProgressNote, appendDeadEnd } from "../lib/ledger-core.js";
 import { putObject, publicUrl, readObject } from "../lib/storage.js";
 import { createArtifact, isSubstantiveContent } from "../lib/task-artifacts.js";
-import { notifyForMessage } from "../lib/notifications.js";
+import { notifyForMessage, notifyApprovers } from "../lib/notifications.js";
 import { writeProjectFile } from "../lib/project-files.js";
+import {
+  autoApprovalFor,
+  findDuplicateApproval,
+  duplicateApprovalError,
+  approvalExpiresAt,
+} from "../lib/approval-policy.js";
+import { writeAudit } from "../lib/access-control.js";
+import { enqueueAgentEvent } from "./enqueue.js";
 import { safePublicFetch } from "../lib/safe-fetch.js";
 
 export interface AgentAttachment {
@@ -363,67 +371,8 @@ function describeForApproval(a: AgentAction): { action: string; conversationId: 
   }
 }
 
-// Approval dedupe. Exact agent+scope+action matching got beaten in the wild:
-// agents minted a fresh free-form scope string every wake (github_auth,
-// hosting, hosting_credentials, deploy, deploy_creds, github_token, …) for
-// the SAME credential ask, so 11 cards piled up for one human decision. Match
-// on trigram similarity of the action text instead — workspace-wide, so three
-// agents asking for the same thing share one card — and remember DENIALS: a
-// similar request a human denied in the last 7 days is refused outright (a
-// denial is an answer, not a retry timer).
-const DENIAL_MEMORY_MS = 7 * 24 * 60 * 60 * 1000;
-// An agent's own re-ask matches looser than a teammate's distinct request.
-const DUP_SIM_SELF = 0.45;
-const DUP_SIM_TEAMMATE = 0.62;
-
-type DuplicateApproval = {
-  id: string;
-  status: string;
-  agentId: string;
-  decidedAt: Date | null;
-  action: string;
-};
-
-async function findDuplicateApproval(
-  agentId: string,
-  action: string,
-): Promise<DuplicateApproval | null> {
-  const [me] = await db
-    .select({ workspaceId: agents.workspaceId })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-    .limit(1);
-  if (!me) return null;
-  const deniedCutoff = new Date(Date.now() - DENIAL_MEMORY_MS);
-  const rows = await db
-    .select({
-      id: approvals.id,
-      status: approvals.status,
-      agentId: approvals.agentId,
-      decidedAt: approvals.decidedAt,
-      action: approvals.action,
-      sim: sql<number>`similarity(${approvals.action}, ${action})`.as("sim"),
-    })
-    .from(approvals)
-    .innerJoin(agents, eq(agents.id, approvals.agentId))
-    .where(
-      and(
-        eq(agents.workspaceId, me.workspaceId),
-        or(
-          eq(approvals.status, "pending"),
-          and(eq(approvals.status, "denied"), gt(approvals.decidedAt, deniedCutoff)),
-        ),
-        sql`similarity(${approvals.action}, ${action}) > ${DUP_SIM_SELF}`,
-      ),
-    )
-    .orderBy(sql`similarity(${approvals.action}, ${action}) desc`)
-    .limit(5);
-  for (const r of rows) {
-    const threshold = r.agentId === agentId ? DUP_SIM_SELF : DUP_SIM_TEAMMATE;
-    if (Number(r.sim) >= threshold) return r;
-  }
-  return null;
-}
+// Approval dedupe + denial memory now live in lib/approval-policy.ts
+// (scope- and credential-name-aware, workspace-wide, configurable window).
 
 // Actionable rejection copy for a duplicate/denied approval match. Returned as
 // an executor error so the agent reads WHY it was dropped and what to do.
@@ -437,24 +386,100 @@ export function approvalIdMisuse(action: string, payload?: Record<string, unknow
   return /\bap_[a-z0-9]{12,}\b/i.test(hay);
 }
 
-function duplicateApprovalError(actionType: string, dup: DuplicateApproval, agentId: string): string {
-  if (dup.status === "denied") {
-    const when = dup.decidedAt ? dup.decidedAt.toISOString().slice(0, 10) : "recently";
-    return (
-      `${actionType} refused: a human DENIED an equivalent request (${dup.id}, "${dup.action}") on ${when}. ` +
-      `A denial is final — do NOT re-request or rephrase it. Set the dependent task status:"blocked" with one comment, or pursue an approach that doesn't need this approval.`
-    );
+// One place every approval card is minted. Handles, in order:
+//   1. auto-approval policy (AUTO_APPROVE_SCOPES / agent `approve:` scopes) —
+//      records an audit row instead of a card and returns {auto};
+//   2. dedupe against pending + recently denied/expired cards — returns {dup};
+//   3. otherwise inserts the pending card, publishes approval.new to the
+//      conversation AND the workspace (a request_approval with no
+//      conversation_id previously produced no live event at all), and puts a
+//      notification in every approver's inbox (previously nobody was told).
+type OpenApprovalResult =
+  | { kind: "auto"; id: string; rule: string }
+  | { kind: "dup"; dup: import("../lib/approval-policy.js").DuplicateApproval }
+  | { kind: "opened"; id: string; expiresAt: Date | null };
+
+async function openApproval(params: {
+  agentId: string;
+  runId: string;
+  scope: string;
+  action: string;
+  conversationId: string | null;
+  payload: Record<string, unknown>;
+  agentScopes?: string[] | null;
+  // Auto-approved gated executor actions are executed by the caller right
+  // away, so their row is recorded as already `applied`; a request_approval
+  // is work the agent does itself, so it is `approved` and the agent is woken.
+  autoStatus: "approved" | "applied";
+}): Promise<OpenApprovalResult> {
+  const { agentId, runId, scope, action, conversationId, payload } = params;
+  const [ag] = await db
+    .select({ workspaceId: agents.workspaceId, name: agents.name, scopes: agents.scopes })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+  const agentScopes = params.agentScopes ?? ag?.scopes ?? [];
+
+  const auto = autoApprovalFor(scope, action, agentScopes);
+  if (auto) {
+    const apId = id("ap");
+    const note = `auto-approved by ${auto.by === "policy" ? "AUTO_APPROVE_SCOPES" : "agent scope"} rule "${auto.rule}"`;
+    await db.insert(approvals).values({
+      id: apId,
+      agentRunId: runId,
+      agentId,
+      conversationId,
+      scope,
+      action,
+      payloadJson: payload,
+      status: params.autoStatus,
+      decidedAt: new Date(),
+      decidedBy: null,
+      decisionNote: note,
+    });
+    if (ag) {
+      await writeAudit({
+        workspaceId: ag.workspaceId,
+        actorId: agentId,
+        actorType: "agent",
+        action: "approval.auto_approved",
+        targetType: "approval",
+        targetId: apId,
+        meta: { scope, action, rule: auto.rule, by: auto.by, runId },
+      }).catch(() => {});
+    }
+    return { kind: "auto", id: apId, rule: auto.rule };
   }
-  if (dup.agentId !== agentId) {
-    return (
-      `${actionType} skipped: a teammate already has an equivalent approval pending (${dup.id}, "${dup.action}"). ` +
-      `Don't file duplicates — the human decides once for the team. Coordinate on the task card if needed.`
-    );
+
+  const dup = await findDuplicateApproval(agentId, scope, action);
+  if (dup) return { kind: "dup", dup };
+
+  const apId = id("ap");
+  const createdAt = new Date();
+  await db.insert(approvals).values({
+    id: apId,
+    agentRunId: runId,
+    agentId,
+    conversationId,
+    scope,
+    action,
+    payloadJson: payload,
+    status: "pending",
+    createdAt,
+  });
+  const frame = { type: "approval.new" as const, approvalId: apId, agentId, scope, action, conversationId };
+  if (conversationId) await publishToConversation(conversationId, frame).catch(() => {});
+  if (ag) {
+    await publishToWorkspace(ag.workspaceId, frame).catch(() => {});
+    const expiresAt = approvalExpiresAt(createdAt);
+    await notifyApprovers(ag.workspaceId, {
+      title: `${ag.name} needs approval: ${scope}`,
+      body: `${action}`.slice(0, 280) + (expiresAt ? ` — expires ${expiresAt.toISOString().slice(0, 16).replace("T", " ")} UTC if nobody decides.` : ""),
+      link: "/approvals",
+    });
+    return { kind: "opened", id: apId, expiresAt };
   }
-  return (
-    `${actionType} skipped: your equivalent approval (${dup.id}) is already pending a human decision — ` +
-    `do not retry or rephrase it; you'll be woken with trigger:"approval_response" when it's decided.`
-  );
+  return { kind: "opened", id: apId, expiresAt: approvalExpiresAt(createdAt) };
 }
 
 // Credential-/access-begging or bare "still blocked" restatement. Used to stop
@@ -649,33 +674,33 @@ export async function applyActions(params: {
           out.actionsApplied++;
           continue;
         }
-        const dup = await findDuplicateApproval(agentId, d.action);
-        if (dup) {
-          out.trace.push(`gated ${a.type} → ${dup.status} duplicate approval ${dup.id}, skipped`);
-          out.errors.push(duplicateApprovalError(a.type, dup, agentId));
-          continue;
-        }
-        const apId = id("ap");
-        await db.insert(approvals).values({
-          id: apId,
-          agentRunId: runId,
+        const opened = await openApproval({
           agentId,
-          conversationId: d.conversationId,
+          runId,
           scope: reason,
           action: d.action,
-          payloadJson: d.payload,
-          status: "pending",
+          conversationId: d.conversationId,
+          payload: d.payload,
+          // Only pass the preloaded list when enforcement actually loaded it;
+          // otherwise let openApproval read the agent's scopes itself so
+          // `approve:` trust scopes still apply on the risk-gate-only path.
+          agentScopes: enforce ? scopes : undefined,
+          autoStatus: "applied",
         });
-        if (d.conversationId) {
-          await publishToConversation(d.conversationId, {
-            type: "approval.new",
-            approvalId: apId,
-            agentId,
-            scope: reason,
-            action: d.action,
-            conversationId: d.conversationId,
-          });
+        if (opened.kind === "dup") {
+          out.trace.push(`gated ${a.type} → ${opened.dup.status} duplicate approval ${opened.dup.id}, skipped`);
+          out.errors.push(duplicateApprovalError(a.type, opened.dup, agentId));
+          continue;
         }
+        if (opened.kind === "auto") {
+          // Policy says this scope needs no human: run it now, leave the
+          // audit row (status applied) so the decision is reviewable later.
+          out.trace.push(`gated ${a.type} auto-approved by ${opened.rule} (approval ${opened.id}, audited)`);
+          await applyOne(agentId, runId, agentMember.id, a, out);
+          out.actionsApplied++;
+          continue;
+        }
+        const apId = opened.id;
         const why = outOfScope ? `requires scope "${reason}"` : `is ${reason} and needs approval`;
         out.trace.push(`gated ${a.type} → approval ${apId} (${why})`);
         out.errors.push(`${a.type} ${why} — opened approval ${apId}`);
@@ -713,7 +738,9 @@ async function applyOne(
         out.trace.push(
           `post_message rejected (duplicate_of_recent vs ${dup.againstId} @${dup.score})`,
         );
-        out.errors.push("post_message rejected: duplicate_of_recent");
+        out.errors.push(
+          `post_message rejected: duplicate_of_recent — you already posted this as a ${dup.surface === "task_comment" ? "task comment" : "message"} (${dup.againstId}). One surface per fact; say something new or stay silent.`,
+        );
         return;
       }
 
@@ -849,7 +876,9 @@ async function applyOne(
         out.trace.push(
           `open_thread rejected (duplicate_of_recent vs ${dup.againstId} @${dup.score})`,
         );
-        out.errors.push("open_thread rejected: duplicate_of_recent");
+        out.errors.push(
+          `open_thread rejected: duplicate_of_recent — you already posted this as a ${dup.surface === "task_comment" ? "task comment" : "message"} (${dup.againstId}). One surface per fact.`,
+        );
         return;
       }
       const [authorRow] = await db
@@ -918,33 +947,34 @@ async function applyOne(
         );
         return;
       }
-      const dup = await findDuplicateApproval(agentId, a.action);
-      if (dup) {
-        out.trace.push(`request_approval → ${dup.status} duplicate ${dup.id}, skipped`);
-        out.errors.push(duplicateApprovalError("request_approval", dup, agentId));
-        return;
-      }
-      const apId = id("ap");
-      await db.insert(approvals).values({
-        id: apId,
-        agentRunId: runId,
+      const opened = await openApproval({
         agentId,
-        conversationId: a.conversation_id ?? null,
+        runId,
         scope: a.scope,
         action: a.action,
-        payloadJson: a.payload ?? {},
-        status: "pending",
+        conversationId: a.conversation_id ?? null,
+        payload: a.payload ?? {},
+        autoStatus: "approved",
       });
-      if (a.conversation_id) {
-        await publishToConversation(a.conversation_id, {
-          type: "approval.new",
-          approvalId: apId,
-          agentId,
-          scope: a.scope,
-          action: a.action,
-          conversationId: a.conversation_id,
-        });
+      if (opened.kind === "dup") {
+        out.trace.push(`request_approval → ${opened.dup.status} duplicate ${opened.dup.id}, skipped`);
+        out.errors.push(duplicateApprovalError("request_approval", opened.dup, agentId));
+        return;
       }
+      if (opened.kind === "auto") {
+        // Wake the agent through the normal approval_response path so it
+        // gets the same "APPROVED — do the work now" directive a human
+        // approve produces, instead of waiting for a card that never comes.
+        out.trace.push(`request_approval ${opened.id} auto-approved by ${opened.rule}`);
+        await enqueueAgentEvent(agentId, {
+          trigger: "approval_response",
+          approvalId: opened.id,
+          status: "approved",
+          conversationId: a.conversation_id ?? undefined,
+        }).catch(() => {});
+        return;
+      }
+      const apId = opened.id;
       out.trace.push(`request_approval ${apId}`);
       return;
     }
@@ -1296,7 +1326,7 @@ async function applyOne(
       const cdup = await checkRecentDuplicateTaskComment(a.task_id, guard.bodyMd);
       if (!cdup.ok) {
         out.errors.push(
-          `task_comment skipped: near-duplicate of an existing comment on ${a.task_id} (vs ${cdup.againstId}). You already said this — don't repeat it. Either do the next concrete step (ship a file via share_to_task, change status) or stay silent.`,
+          `task_comment skipped: near-duplicate of ${cdup.surface === "message" ? "a chat message you already posted" : "an existing comment"} (vs ${cdup.againstId}${cdup.surface === "message" ? "" : ` on ${a.task_id}`}). You already said this — don't repeat it. Either do the next concrete step (ship a file via share_to_task, change status) or stay silent.`,
         );
         return;
       }

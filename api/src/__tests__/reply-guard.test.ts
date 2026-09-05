@@ -225,3 +225,96 @@ describe("checkReplyBody — provider/gateway error echoes on the reply path", (
     expect(guardRejectHint("provider_error_echo")).toContain("HEARTBEAT_OK");
   });
 });
+
+describe("checkReplyBody — Hermes runtime scaffolding leaks (live.circlechat.co, Sep 2026)", () => {
+  const BANNER = "⚠️  Reached maximum iterations (20). Requesting summary...";
+  const TOOL_FAIL =
+    '⚠ Could not execute tool(s): "target": value "files\n@@ARG_END" not in enum ["messages", "tasks", "members"]';
+
+  it("strips the runaway banner + lead-in and keeps the substantive remainder", () => {
+    const r = checkReplyBody(
+      `${BANNER}\nHere's what I found and did this turn:\nThe HLS relay is live at https://relay.test/live.m3u8 and all three streams resolve.`,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.bodyMd).not.toMatch(/Reached maximum iterations|Requesting summary|Here's what I found/);
+      expect(r.bodyMd).toContain("HLS relay is live");
+    }
+  });
+
+  it("rejects when the banner is all there is", () => {
+    const r = checkReplyBody(BANNER);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("runaway_banner");
+  });
+
+  it("strips a tool-dispatch failure paragraph (with @@ARG_END debris) and keeps the rest", () => {
+    const r = checkReplyBody(`${TOOL_FAIL}\n\nPulled the task list — two cards are in review, none blocked.`);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.bodyMd).not.toMatch(/Could not execute|@@ARG_END|not in enum/);
+      expect(r.bodyMd).toContain("two cards are in review");
+    }
+  });
+
+  it("rejects a body that is only the tool failure notice", () => {
+    const r = checkReplyBody(TOOL_FAIL);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("tool_exec_failure");
+  });
+
+  it("rejects stray @@ARG parser debris in otherwise-prose", () => {
+    const r = checkReplyBody("Sharing the report now. target=files\n@@ARG_END and the rest of the summary follows here.");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("tool_parse_debris");
+  });
+
+  it("rejects the model talking to the prompt scaffolding", () => {
+    const r = checkReplyBody(
+      "I've read the attached conversation history file in full. However, I don't see a section titled \"CURRENT REQUEST (full text)\" so I cannot determine what you want me to do.",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("scaffold_talk");
+  });
+
+  it("strips a ritual sign-off with a SHA footer", () => {
+    const r = checkReplyBody(
+      "Relay verified live — 3/3 streams resolve, manifest cached.\n\n*Signed,* **@iris** — Researcher & Writer, Circle Labs — *Artifact SHA-256 (compute with `sha256sum`)*",
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bodyMd).toBe("Relay verified live — 3/3 streams resolve, manifest cached.");
+  });
+
+  it("strips a 'Best regards, Name' closer and a trailing '— @handle — Title' line", () => {
+    const r = checkReplyBody("Draft is on the card.\n\nBest regards,\nIris\n— @iris — Researcher");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bodyMd).toBe("Draft is on the card.");
+    const r2 = checkReplyBody("Draft is on the card.\n**@iris** — Researcher & Writer");
+    expect(r2.ok).toBe(true);
+    if (r2.ok) expect(r2.bodyMd).toBe("Draft is on the card.");
+  });
+
+  it("rejects a reply that is only a signature", () => {
+    const r = checkReplyBody("*Signed,* **@iris** — Researcher & Writer, Circle Labs");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("signoff_only");
+  });
+
+  it("does not strip legitimate prose that uses closer words mid-sentence or a lone @mention", () => {
+    const a = checkReplyBody("The contract was signed yesterday, so we can start the build.");
+    expect(a.ok).toBe(true);
+    if (a.ok) expect(a.bodyMd).toContain("signed yesterday");
+    const b = checkReplyBody("@bob — can you take the relay check?");
+    expect(b.ok).toBe(true);
+    if (b.ok) expect(b.bodyMd).toBe("@bob — can you take the relay check?");
+    const c = checkReplyBody("Cheers to the team for shipping the relay — three streams live now.");
+    expect(c.ok).toBe(true);
+    if (c.ok) expect(c.bodyMd).toContain("Cheers to the team");
+  });
+
+  it("has teaching hints for the new reasons", () => {
+    for (const reason of ["runaway_banner", "tool_exec_failure", "tool_parse_debris", "scaffold_talk", "signoff_only"]) {
+      expect(guardRejectHint(reason).length).toBeGreaterThan(20);
+    }
+  });
+});

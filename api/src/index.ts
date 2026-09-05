@@ -6,8 +6,9 @@ import rateLimit from "@fastify/rate-limit";
 import multipart from "@fastify/multipart";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
-import { existsSync } from "node:fs";
-import { resolve as pathResolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve as pathResolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import authRoutes from "./routes/auth.js";
 import workspaceRoutes from "./routes/workspaces.js";
@@ -90,20 +91,67 @@ await app.register(websocket, {
   options: { maxPayload: 1024 * 1024, clientTracking: true },
 });
 
-app.get("/health", async () => ({ ok: true, time: new Date().toISOString() }));
+// Version stamp for /health — read once from package.json (works from both
+// src/ under tsx and dist/ after build; both sit one level below api/).
+const API_VERSION: string = (() => {
+  try {
+    const pkgPath = pathResolve(dirname(fileURLToPath(import.meta.url)), "../package.json");
+    return String((JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version ?? "unknown");
+  } catch {
+    return "unknown";
+  }
+})();
+
+// Unauthenticated liveness probe. Registered at both the bare path (older
+// compose healthchecks) and under /api (the only prefix Caddy proxies to the
+// API, so external monitors can reach it). Rate-limit exempt so a probe every
+// few seconds from several monitors can't eat the client's budget.
+const healthHandler = async () => ({ ok: true, version: API_VERSION, time: new Date().toISOString() });
+app.get("/health", { config: { rateLimit: false } }, healthHandler);
+app.get("/api/health", { config: { rateLimit: false } }, healthHandler);
 
 // Global error handler — surface zod issues as 400s. MUST be registered before
 // the route plugins below: in Fastify each encapsulated plugin context captures
 // the error handler that exists when it is registered, so setting this after the
 // routes would leave them on the default handler (zod errors would 500, not 400).
-app.setErrorHandler((err, _req, reply) => {
-  const e = err as Error & { issues?: unknown[]; statusCode?: number };
+//
+// Client errors (4xx — bad content-type, oversized body, rate limit, malformed
+// JSON) are expected traffic, not incidents: log them once at warn WITHOUT a
+// stack trace. Only 5xx get the full error-level dump. Before this, every
+// scanner POSTing form-encoded bodies produced an error-level "Unsupported
+// Media Type" stack trace per hit on the public instance.
+app.setErrorHandler((err, req, reply) => {
+  const e = err as Error & { issues?: unknown[]; statusCode?: number; code?: string };
   if (e.issues) {
     reply.code(400).send({ error: "validation", issues: e.issues });
     return;
   }
-  app.log.error(e);
-  reply.code(e.statusCode ?? 500).send({ error: e.message ?? "server_error" });
+  const status = typeof e.statusCode === "number" && e.statusCode >= 400 && e.statusCode <= 599 ? e.statusCode : 500;
+  if (status < 500) {
+    req.log.warn(
+      { code: e.code, statusCode: status, method: req.method, url: req.url, contentType: req.headers["content-type"] },
+      e.message,
+    );
+    if (e.code === "FST_ERR_CTP_INVALID_MEDIA_TYPE") {
+      reply.code(415).send({ error: "unsupported_media_type", accepted: ["application/json", "multipart/form-data"] });
+      return;
+    }
+    if (e.code === "FST_ERR_CTP_EMPTY_JSON_BODY" || e.code === "FST_ERR_CTP_INVALID_JSON_BODY" || e.code === "FST_ERR_CTP_INVALID_CONTENT_LENGTH") {
+      reply.code(400).send({ error: "invalid_body" });
+      return;
+    }
+    if (e.code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+      reply.code(413).send({ error: "body_too_large" });
+      return;
+    }
+    reply.code(status).send({ error: e.message ?? "request_error" });
+    return;
+  }
+  req.log.error(e);
+  // Only forward machine-readable codes (snake_case tokens) thrown on purpose;
+  // raw driver/library messages stay in the log.
+  const code = typeof e.message === "string" && /^[a-z][a-z0-9_]{0,79}(:[^\s]{0,200})?$/.test(e.message) ? e.message : "server_error";
+  reply.code(status).send({ error: code });
 });
 
 await app.register(authRoutes, { prefix: "/api" });

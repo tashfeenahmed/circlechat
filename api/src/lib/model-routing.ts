@@ -67,17 +67,64 @@ export function calculateUsageCost(usage: ReportedModelUsage, route: ModelRouteR
   );
 }
 
-export function normalizeUsage(input: ReportedModelUsage): ReportedModelUsage {
+// Loose shape a runtime/bridge/gateway may hand us. Runtimes disagree on key
+// names — OpenAI-compatible gateways report `prompt_tokens`/`completion_tokens`,
+// Anthropic-style `input_tokens`/`output_tokens`, some bridges camelCase. The
+// fishbowl recorded output_tokens=0 on 1,130/1,130 rows because nothing ever
+// arrived under `outputTokens`; accept every common spelling so a report is
+// never silently zeroed.
+export interface ReportedModelUsageInput {
+  provider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  costUsd?: number;
+  // aliases
+  input_tokens?: number;
+  output_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cached_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cachedTokens?: number;
+  total_tokens?: number;
+  totalTokens?: number;
+  cost_usd?: number;
+  cost?: number;
+}
+
+function firstFinite(...values: Array<number | undefined>): number | undefined {
+  for (const v of values) if (typeof v === "number" && Number.isFinite(v)) return v;
+  return undefined;
+}
+
+export function normalizeUsage(input: ReportedModelUsageInput): ReportedModelUsage {
   const integer = (value: number | undefined): number =>
     Number.isFinite(value) ? Math.max(0, Math.floor(value!)) : 0;
+  const inputRaw = firstFinite(input.inputTokens, input.input_tokens, input.prompt_tokens, input.promptTokens);
+  let outputRaw = firstFinite(input.outputTokens, input.output_tokens, input.completion_tokens, input.completionTokens);
+  const total = firstFinite(input.total_tokens, input.totalTokens);
+  // Only a total and an input → derive output rather than record 0.
+  if (outputRaw === undefined && total !== undefined && inputRaw !== undefined) {
+    outputRaw = Math.max(0, total - inputRaw);
+  }
+  const cachedRaw = firstFinite(
+    input.cachedInputTokens,
+    input.cached_input_tokens,
+    input.cache_read_input_tokens,
+    input.cachedTokens,
+  );
+  const costRaw = firstFinite(input.costUsd, input.cost_usd, input.cost);
+  const inputTokens = integer(inputRaw);
   return {
     provider: input.provider?.slice(0, 60),
     model: input.model?.slice(0, 120),
-    inputTokens: integer(input.inputTokens),
-    outputTokens: integer(input.outputTokens),
-    cachedInputTokens: Math.min(integer(input.cachedInputTokens), integer(input.inputTokens)),
-    ...(input.costUsd != null && Number.isFinite(input.costUsd)
-      ? { costUsd: Math.max(0, input.costUsd) }
-      : {}),
+    inputTokens,
+    outputTokens: integer(outputRaw),
+    cachedInputTokens: Math.min(integer(cachedRaw), inputTokens),
+    ...(costRaw != null ? { costUsd: Math.max(0, costRaw) } : {}),
   };
 }

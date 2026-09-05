@@ -356,3 +356,138 @@ describe("writeProjectFile + loadProjectIndex (temp mount)", () => {
     expect(index[0].files.map((f) => f.name)).not.toContain("INDEX.md");
   });
 });
+
+// ── append dedupe + rolling compaction + tail-first injection ──
+import { splitEntries, compactEntries, excerptForInjection, KEEP_ENTRIES, COMPACT_AT_CHARS } from "../lib/project-files.js";
+
+function buildLog(n: number, noteFor: (i: number) => string, head = ""): string {
+  let cur: string | null = head ? serializeProjectFile({ summary: "", owner: "rachel", updatedBy: "rachel", triggers: [], always: false }, head) : null;
+  for (let i = 0; i < n; i++) {
+    const r = applyProjectWrite(cur, { mode: "append", note: noteFor(i), actorHandle: i % 2 ? "iris" : "nova", dateLabel: `2026-09-0${(i % 9) + 1} 10:${String(i % 60).padStart(2, "0")}` });
+    if (!("content" in r)) throw new Error(`append ${i} failed: ${(r as { error: string }).error}`);
+    cur = r.content;
+  }
+  return cur as string;
+}
+
+describe("splitEntries", () => {
+  it("separates a free-form head from dated provenance entries", () => {
+    const body = "Brief: showcase site.\n\n## 2026-09-01 10:00 · @nova\nRelay live.\n\n## 2026-09-02 11:00 · @iris\nHashes recomputed.";
+    const { head, entries } = splitEntries(body);
+    expect(head).toBe("Brief: showcase site.");
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toContain("Hashes recomputed.");
+  });
+  it("treats a body without provenance headers as head only", () => {
+    expect(splitEntries("## Goals\nShip it.").entries).toHaveLength(0);
+  });
+});
+
+describe("applyProjectWrite — append dedupe", () => {
+  it("refuses a near-duplicate of a recent entry, even from another agent", () => {
+    const first = applyProjectWrite(null, {
+      mode: "append",
+      note: "Self-hosted HLS relay verified live — all three streams resolve and the manifest is cached at the edge.",
+      actorHandle: "nova",
+      dateLabel: "2026-09-04 09:00",
+    });
+    if (!("content" in first)) throw new Error("expected content");
+    const dup = applyProjectWrite(first.content, {
+      mode: "append",
+      note: "**Self-hosted HLS relay verified live** — all three streams resolve and the manifest is cached at the edge (cc @iris).",
+      actorHandle: "iris",
+      dateLabel: "2026-09-04 11:30",
+    });
+    expect("error" in dup).toBe(true);
+    if ("error" in dup) expect(dup.error).toMatch(/near-duplicate.*@nova/);
+  });
+
+  it("accepts a genuinely new fact", () => {
+    const first = applyProjectWrite(null, {
+      mode: "append",
+      note: "Self-hosted HLS relay verified live — all three streams resolve and the manifest is cached at the edge.",
+      actorHandle: "nova",
+      dateLabel: "d1",
+    });
+    if (!("content" in first)) throw new Error("expected content");
+    const next = applyProjectWrite(first.content, {
+      mode: "append",
+      note: "Decision: drop the CDN fallback; the relay alone meets the latency budget (p95 1.8s).",
+      actorHandle: "iris",
+      dateLabel: "d2",
+    });
+    expect("content" in next).toBe(true);
+  });
+
+  it("caps a single appended entry at half the file limit", () => {
+    const r = applyProjectWrite(null, { mode: "append", note: "y".repeat(PROJECT_FILE_MAX_CHARS / 2 + 1), actorHandle: "nova", dateLabel: "d" });
+    expect("error" in r).toBe(true);
+  });
+});
+
+describe("rolling compaction", () => {
+  it("keeps at most KEEP_ENTRIES entries and reports the archived ones", () => {
+    const content = buildLog(KEEP_ENTRIES + 5, (i) => `Distinct milestone number ${i}: ${["alpha", "beta", "gamma", "delta", "epsilon"][i % 5]} stage ${i * 7} reached with ${i * 3} checks passing.`);
+    const { entries } = splitEntries(parseProjectFile(content).body);
+    expect(entries.length).toBe(KEEP_ENTRIES);
+    // newest survives, oldest is gone
+    expect(content).toContain(`Distinct milestone number ${KEEP_ENTRIES + 4}:`);
+    expect(content).not.toContain("Distinct milestone number 0:");
+  });
+
+  it("compacts by size when entries are long, never below the minimum", () => {
+    const head = "Brief: keep me.";
+    const long = (i: number) => `Entry ${i} ` + `unique-${i}-word `.repeat(30); // ~450 chars each
+    const entries = Array.from({ length: 20 }, (_, i) => `## d${i} · @nova\n${long(i)}`);
+    const { body, archived } = compactEntries(head, entries);
+    expect(body.length).toBeLessThanOrEqual(COMPACT_AT_CHARS);
+    expect(archived.length).toBeGreaterThan(0);
+    expect(archived.length + splitEntries(body).entries.length).toBe(20);
+    // Never below the minimum even when entries are huge.
+    const huge = Array.from({ length: 12 }, (_, i) => `## d${i} · @nova\nEntry ${i} ` + "w ".repeat(1500));
+    expect(splitEntries(compactEntries("", huge).body).entries.length).toBe(8);
+    expect(body.startsWith(head)).toBe(true);
+    expect(body).toContain("Entry 19 ");
+  });
+
+  it("writes archived entries to <project>/archive/<file> on disk and keeps them out of the index", async () => {
+    const mount = join(tmpdir(), `cc-proj-archive-${process.pid}-${Date.now()}`);
+    process.env.CC_WORKSPACE_MOUNT = mount;
+    try {
+      for (let i = 0; i < KEEP_ENTRIES + 2; i++) {
+        const r = await writeProjectFile({
+          project: "arch-test",
+          file: "status.md",
+          note: `Milestone ${i}: ${["alpha", "beta", "gamma"][i % 3]} stage ${i * 11} done, ${i + 2} checks green.`,
+          actorHandle: "nova",
+        });
+        expect("ok" in r).toBe(true);
+      }
+      const arch = await fsp.readFile(join(mount, "projects", "arch-test", "archive", "status.md"), "utf8");
+      expect(arch).toContain("Milestone 0:");
+      const live = await fsp.readFile(join(mount, "projects", "arch-test", "status.md"), "utf8");
+      expect(live).not.toContain("Milestone 0:");
+      const idx = await loadProjectIndex();
+      expect(idx.find((p) => p.slug === "arch-test")?.files.map((f) => f.name)).toEqual(["status.md"]);
+    } finally {
+      delete process.env.CC_WORKSPACE_MOUNT;
+      await fsp.rm(mount, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("excerptForInjection", () => {
+  it("injects the NEWEST entries (plus head) when a log exceeds the cap", () => {
+    const body = ["Brief: showcase site.", ...Array.from({ length: 40 }, (_, i) => `## 2026-09-01 10:${String(i).padStart(2, "0")} · @nova\nEntry ${i} ` + "filler ".repeat(20))].join("\n\n");
+    const out = excerptForInjection(body, 1600);
+    expect(out.length).toBeLessThanOrEqual(1600);
+    expect(out.startsWith("Brief: showcase site.")).toBe(true);
+    expect(out).toContain("Entry 39 ");
+    expect(out).not.toContain("Entry 0 ");
+    expect(out).toMatch(/older entries omitted/);
+  });
+  it("returns a short body untouched and head-slices a plain document", () => {
+    expect(excerptForInjection("short body", 100)).toBe("short body");
+    expect(excerptForInjection("a".repeat(300), 100)).toBe("a".repeat(100));
+  });
+});

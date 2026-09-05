@@ -262,6 +262,88 @@ function scrubSecrets(s: string): string {
     .replace(RAW_BOT_TOKEN_RE, "cc_***");
 }
 
+// ─────────── Hermes runtime scaffolding that leaks as a reply PREFIX ───────────
+// When the agent loop hits its `max_turns` cap, Hermes prints
+//   "⚠️  Reached maximum iterations (20). Requesting summary..."
+// and then asks the model for a wrap-up, which typically opens "Here's what I
+// found and did this turn:". Live fishbowl: 400 chat messages + 176 task
+// comments in one week BEGAN with that banner. The summary underneath is
+// often real work, so STRIP the banner (and the lead-in line) and keep the
+// remainder; reject only when nothing substantive is left.
+const RUNAWAY_BANNER_RE =
+  /(?:^|\n)[ \t]*⚠?\uFE0F?[ \t]*Reached maximum iterations(?:\s*\(\d+\))?\.?(?:[ \t]*Requesting (?:a )?summary(?:\.{1,3}|…)?)?[ \t]*(?:\n|$)/gi;
+const SUMMARY_LEADIN_RE =
+  /(?:^|\n)[ \t]*(?:\*\*)?(?:Here(?:'|’)s|Here is) (?:what|a (?:quick |brief )?summary of what) I(?:'ve| have)? (?:found|did|done|found and did|did and found)(?: (?:so far|this turn|in this turn))?[.:]?(?:\*\*)?[ \t]*(?:\n|$)/gi;
+// Hermes' tool-dispatcher failure notice, e.g.
+//   ⚠ Could not execute tool(s): "target": value "files\n@@ARG_END" not in enum […]
+// It's a paragraph (runs to the next blank line, may contain the quoted
+// argument text with embedded newlines). Strip the whole paragraph.
+const TOOL_EXEC_FAIL_RE =
+  /(?:^|\n)[ \t]*⚠?\uFE0F?[ \t]*Could not execute tool\(s\)[^\n]*(?:\n(?![ \t]*\n)[^\n]*)*/gi;
+// Argument-delimiter debris from Hermes' text-based tool-call parser
+// (`@@ARG_START` / `@@ARG_END` and friends). If any survives the paragraph
+// strip above, the body is machinery — reject.
+const ARG_DEBRIS_RE = /@@(?:ARGS?|TOOL|CALL|FUNC|PARAMS?)[A-Z0-9_]*(?:_(?:START|END|BEGIN))?\b|@@ARG_END|@@ARG_START/;
+// The model talking to the PROMPT SCAFFOLDING instead of the humans: "I've read
+// the attached conversation history file in full. However, I don't see a
+// section titled "CURRENT REQUEST (full text)"…". Those section names exist
+// only in the packet we build; a real reply never mentions them.
+const SCAFFOLD_TALK_RE =
+  /CURRENT REQUEST \(full text\)|section titled ["“]CURRENT REQUEST|\battached conversation[- ]history file\b|\bconversation history file\b|\bI(?:'ve| have) read the (?:attached|provided) (?:conversation|context|history|file)\b/i;
+
+// Ritual sign-offs: "*Signed,* **@iris** — Researcher & Writer, Circle Labs —
+// *Artifact SHA-256 (compute…". Nobody signs a chat message. Cut from a
+// closer line ("Signed,", "Regards,", "Best regards," …) to the end, drop a
+// trailing "— @handle — Title" signature line, and drop any "Artifact
+// SHA-256" footer line wherever it sits.
+const SIGNOFF_CLOSER_RE =
+  /(?:^|\n)[ \t]*[*_]{0,3}(?:[Ss]igned|[Rr]egards|[Kk]ind regards|[Bb]est regards|[Ww]arm regards|[Ss]incerely|[Cc]heers|[Rr]espectfully|[Yy]ours (?:truly|sincerely|faithfully))[,.]?[*_]{0,3}(?:[ \t]*(?=\n|$)|[ \t]+(?=[*_—–-]*[ \t]*@)|[ \t]+[A-Z][\w.'-]*(?:[ \t]+[A-Z][\w.'-]*){0,3}[*_]{0,3}[ \t]*(?=\n|$))/;
+const SIGNATURE_LINE_RE =
+  /\n[ \t]*(?:[—–-]+[ \t]*[*_]{0,3}@[a-z0-9][a-z0-9._-]*[*_]{0,3}[^\n]*|[*_]{1,3}@[a-z0-9][a-z0-9._-]*[*_]{1,3}[ \t]*[—–][^\n]*)[ \t]*$/i;
+const SHA_FOOTER_RE = /(?:^|\n)[^\n]*\bArtifact SHA-?256\b[^\n]*/gi;
+
+export function stripSignOff(s: string): string {
+  let out = s;
+  const closer = SIGNOFF_CLOSER_RE.exec(out);
+  if (closer) out = out.slice(0, closer.index);
+  out = out.replace(SHA_FOOTER_RE, "\n");
+  // Signature line only when there is content above it — a whole reply that is
+  // "@bob — ping" must survive.
+  const sig = SIGNATURE_LINE_RE.exec(out);
+  if (sig && out.slice(0, sig.index).trim()) out = out.slice(0, sig.index);
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+export interface ScaffoldStrip {
+  text: string;
+  // Leak classes removed, in the order found. Empty when nothing was stripped.
+  stripped: string[];
+}
+
+// Remove leaked runtime scaffolding + sign-offs, keeping the substantive
+// remainder. Exported for tests and for the bridge-side mirror.
+export function stripLeakedScaffolding(s: string): ScaffoldStrip {
+  const stripped: string[] = [];
+  let out = s;
+  const step = (re: RegExp, reason: string, repl = "\n") => {
+    if (re.test(out)) {
+      stripped.push(reason);
+      re.lastIndex = 0;
+      out = out.replace(re, repl);
+    }
+    re.lastIndex = 0;
+  };
+  step(RUNAWAY_BANNER_RE, "runaway_banner");
+  step(TOOL_EXEC_FAIL_RE, "tool_exec_failure");
+  if (stripped.includes("runaway_banner")) step(SUMMARY_LEADIN_RE, "summary_leadin");
+  const unsigned = stripSignOff(out);
+  if (unsigned !== out.trim()) {
+    stripped.push("signoff");
+    out = unsigned;
+  }
+  return { text: out.replace(/\n{3,}/g, "\n\n").trim(), stripped };
+}
+
 // Actionable guidance appended to the rejection error fed back to the agent
 // on its next turn. Only reasons where the fix isn't obvious from the name.
 export function guardRejectHint(reason: string): string {
@@ -303,6 +385,15 @@ export function guardRejectHint(reason: string): string {
       return " Your whole message is a JSON blob. If it's an action, put it in an <actions> block; if it's data to share, write it to a /workspace file and attach it via share_to_task with a one-line caption.";
     case "curl_transcript":
       return " You pasted a curl command. You don't need raw HTTP — use an <actions> block to act on the board, or share_to_task to attach a file you wrote to /workspace.";
+    case "runaway_banner":
+      return " Your reply was only the runtime's 'Reached maximum iterations' banner — you ran out of tool turns before saying anything. Do fewer tool calls per turn: pick ONE concrete step, do it, and report it in a sentence or two (or an <actions> block). Never paste runtime warnings.";
+    case "tool_exec_failure":
+    case "tool_parse_debris":
+      return " Your reply carried the runtime's 'Could not execute tool(s)' notice / @@ARG parser debris — a tool call you emitted was malformed. That's diagnostics, not a message. Re-issue the tool call correctly (valid enum values, no stray delimiters) or emit the board action as an <actions> JSON block; only post prose that a teammate should read.";
+    case "scaffold_talk":
+      return " You addressed the prompt scaffolding ('CURRENT REQUEST', 'attached conversation history file') instead of the team. Nobody attached a file — the context you were given IS the conversation. Reply to the last human message in plain prose, or stay silent with HEARTBEAT_OK.";
+    case "signoff_only":
+      return " Your reply was only a signature/sign-off. Chat messages carry no sign-offs, no name/title lines, no hash footers — say the one new fact, then stop.";
     default:
       return "";
   }
@@ -312,9 +403,18 @@ export function checkReplyBody(
   bodyMd: string,
   opts?: { hasAttachments?: boolean },
 ): GuardResult {
-  const scrubbed = scrubSecrets(bodyMd);
+  // Strip leaked runtime scaffolding (runaway-iterations banner, tool-dispatch
+  // failure paragraphs, sign-offs) FIRST so a reply with a substantive body
+  // under the noise still posts — clean. If nothing substantive survives, the
+  // first stripped class is the reason (it teaches better than "empty_body").
+  const { text: scrubbed, stripped } = stripLeakedScaffolding(scrubSecrets(bodyMd));
   const trimmed = scrubbed.trim();
-  if (!trimmed) return { ok: false, reason: "empty_body" };
+  if (!trimmed) {
+    const lead = stripped.find((r) => r !== "summary_leadin");
+    return { ok: false, reason: lead === "signoff" ? "signoff_only" : lead || "empty_body" };
+  }
+  if (ARG_DEBRIS_RE.test(trimmed)) return { ok: false, reason: "tool_parse_debris" };
+  if (SCAFFOLD_TALK_RE.test(trimmed)) return { ok: false, reason: "scaffold_talk" };
   if (HEARTBEAT_RE.test(trimmed)) return { ok: false, reason: "heartbeat_leaked" };
   if (EMPTY_REPLY_NOTICE_RE.test(trimmed)) return { ok: false, reason: "empty_reply_notice" };
   if (TRACEBACK_RE.test(trimmed)) return { ok: false, reason: "python_traceback" };

@@ -8,6 +8,7 @@ import {
   messages,
 } from "../db/schema.js";
 import { enqueueAgentEvent } from "./enqueue.js";
+import { heartbeatBackoffRemainingMs } from "./scheduler.js";
 
 // Background "water-cooler" loop: picks one random active agent + one of
 // their channels every MIN..MAX minutes and enqueues an `ambient` trigger.
@@ -27,6 +28,11 @@ const PER_AGENT_COOLDOWN_MS = Number(process.env.AMBIENT_AGENT_COOLDOWN_MS ?? 15
 // last CHANNEL_QUIET_MS window — active humans don't want ambient noise
 // piled on top.
 const CHANNEL_QUIET_MS = Number(process.env.AMBIENT_CHANNEL_QUIET_MS ?? 6 * 60 * 1000);
+// A water-cooler needs people at it. Only fire into a channel where a HUMAN
+// has posted within this window — otherwise agents chat to each other in a
+// room nobody reads (505 ambient runs/week on the fishbowl, every one of them
+// an LLM call producing filler nobody asked for). 0 disables the check.
+const HUMAN_ACTIVE_MS = Number(process.env.AMBIENT_HUMAN_ACTIVE_MS ?? 24 * 60 * 60 * 1000);
 
 const lastFiredByAgent = new Map<string, number>();
 let timer: NodeJS.Timeout | null = null;
@@ -110,6 +116,21 @@ async function tick(): Promise<void> {
   // channel next cycle.
   const lastTs = picked.lastTs instanceof Date ? picked.lastTs.getTime() : 0;
   if (lastTs && now - lastTs < CHANNEL_QUIET_MS) return;
+
+  // No human has spoken here recently → nobody to be ambient FOR. Skip.
+  if (HUMAN_ACTIVE_MS > 0) {
+    const [h] = await db
+      .select({ ts: dsql<Date | null>`max(${messages.ts})` })
+      .from(messages)
+      .innerJoin(members, eq(members.id, messages.memberId))
+      .where(and(eq(messages.conversationId, picked.id), eq(members.kind, "user")));
+    const lastHuman = h?.ts instanceof Date ? h.ts.getTime() : h?.ts ? new Date(h.ts as unknown as string).getTime() : 0;
+    if (!lastHuman || now - lastHuman > HUMAN_ACTIVE_MS) return;
+  }
+
+  // An agent whose heartbeats keep coming back empty/failed is backing off —
+  // don't hand it an ambient turn to burn instead.
+  if ((await heartbeatBackoffRemainingMs(chosen.agentId)) > 0) return;
 
   lastFiredByAgent.set(chosen.agentId, now);
   await enqueueAgentEvent(chosen.agentId, {

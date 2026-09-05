@@ -7,6 +7,7 @@ import {
   conversationMembers,
   users,
   agents,
+  workspaceMembers,
 } from "../db/schema.js";
 import { id } from "./ids.js";
 import { publishToMember } from "./events.js";
@@ -177,4 +178,64 @@ export async function humanMembersOf(memberIds: string[]): Promise<string[]> {
     .from(members)
     .where(and(inArray(members.id, unique), eq(members.kind, "user")));
   return rows.map((r) => r.id);
+}
+
+// Workspace admins' user-member ids — the default inbox for anything that
+// needs a human decision (budget alerts, approvals, expiries).
+export async function adminMemberIds(workspaceId: string): Promise<string[]> {
+  const admins = await db
+    .select({ userId: workspaceMembers.userId })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.role, "admin")));
+  if (!admins.length) return [];
+  const rows = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(
+      and(
+        eq(members.workspaceId, workspaceId),
+        eq(members.kind, "user"),
+        inArray(members.refId, admins.map((a) => a.userId)),
+      ),
+    );
+  return rows.map((r) => r.id);
+}
+
+// Who gets told about an approval: the admins; if a workspace has none (a
+// solo owner whose role row was never set, an imported workspace), every
+// human member — an approval card that nobody is told about is exactly the
+// silent-forever queue observed in the wild (5 cards pending for two months
+// with no notification ever written).
+export async function approverMemberIds(workspaceId: string): Promise<string[]> {
+  const admins = await adminMemberIds(workspaceId);
+  if (admins.length) return admins;
+  const rows = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.workspaceId, workspaceId), eq(members.kind, "user")));
+  return rows.map((r) => r.id);
+}
+
+// Inbox + live event for every approver when an approval is opened, expired,
+// or auto-approved. Best-effort: never throws (an inbox hiccup must not fail
+// the agent's action). The body never carries payloads or secret values —
+// only the agent, the scope, and the human-readable ask.
+export async function notifyApprovers(
+  workspaceId: string,
+  msg: { kind?: NotificationKind; title: string; body: string; link?: string; actorMemberId?: string | null },
+): Promise<void> {
+  try {
+    const recipients = await approverMemberIds(workspaceId);
+    if (!recipients.length) return;
+    await notifyMany(recipients, {
+      workspaceId,
+      kind: msg.kind ?? "approval",
+      actorMemberId: msg.actorMemberId ?? null,
+      title: msg.title,
+      body: msg.body,
+      link: msg.link ?? "/approvals",
+    });
+  } catch (e) {
+    console.error("[notifications] approver fan-out failed", (e as Error).message);
+  }
 }

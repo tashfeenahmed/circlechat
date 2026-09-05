@@ -165,6 +165,14 @@ async function reactionsFor(
   return map;
 }
 
+// `Number("abc")` is NaN, and NaN survives Math.min/Math.max — the old
+// `Math.min(200, Math.max(1, Number(q.limit)))` handed NaN to the SQL builder.
+function clampLimit(raw: unknown, fallback: number, max: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(1, Math.floor(n)));
+}
+
 async function resolveMembers(
   memberIds: string[],
 ): Promise<Record<string, { handle: string; name: string; kind: string }>> {
@@ -208,11 +216,21 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       .object({
         provider: z.string().min(1).max(60).optional(),
         model: z.string().min(1).max(120).optional(),
-        inputTokens: z.number().int().min(0),
-        outputTokens: z.number().int().min(0),
+        // Accept the common spellings (OpenAI `prompt_/completion_tokens`,
+        // Anthropic `input_/output_tokens`, camelCase); normalizeUsage picks.
+        inputTokens: z.number().int().min(0).optional(),
+        outputTokens: z.number().int().min(0).optional(),
+        input_tokens: z.number().int().min(0).optional(),
+        output_tokens: z.number().int().min(0).optional(),
+        prompt_tokens: z.number().int().min(0).optional(),
+        completion_tokens: z.number().int().min(0).optional(),
+        total_tokens: z.number().int().min(0).optional(),
         cachedInputTokens: z.number().int().min(0).optional(),
+        cached_input_tokens: z.number().int().min(0).optional(),
         costUsd: z.number().min(0).max(1_000_000).optional(),
+        cost_usd: z.number().min(0).max(1_000_000).optional(),
       })
+      .passthrough()
       .parse(req.body);
     const [run] = await db
       .select({ id: agentRuns.id, agentId: agentRuns.agentId, contextJson: agentRuns.contextJson })
@@ -576,8 +594,12 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
 
     const where = [eq(messages.conversationId, q.conversationId), isNull(messages.deletedAt)];
     if (q.parentId) where.push(eq(messages.parentId, q.parentId));
-    if (q.before) where.push(lt(messages.ts, new Date(q.before)));
-    const limit = Math.min(200, Math.max(1, Number(q.limit ?? 50)));
+    if (q.before) {
+      const before = new Date(q.before);
+      if (Number.isNaN(before.getTime())) return reply.code(400).send({ error: "invalid_before" });
+      where.push(lt(messages.ts, before));
+    }
+    const limit = clampLimit(q.limit, 50, 200);
 
     const rows = await db
       .select()
@@ -623,7 +645,10 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
   app.get("/agent-api/search", async (req, reply) => {
     const q = req.query as { q?: string; conversationId?: string; limit?: string };
     if (!q.q || q.q.length < 2) return reply.code(400).send({ error: "q_too_short" });
-    const limit = Math.min(50, Math.max(1, Number(q.limit ?? 20)));
+    if (q.q.length > 200) return reply.code(400).send({ error: "q_too_long" });
+    const limit = clampLimit(q.limit, 20, 50);
+    // Escape LIKE metacharacters so `%`/`_` in the query aren't wildcards.
+    const pattern = `%${q.q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
 
     // Always resolve what this agent may see, then restrict to a caller-supplied
     // conversationId only if it is actually in that set. Trusting the supplied
@@ -641,7 +666,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     const rows = await db
       .select()
       .from(messages)
-      .where(and(inArray(messages.conversationId, convIds), ilike(messages.bodyMd, `%${q.q}%`), isNull(messages.deletedAt)))
+      .where(and(inArray(messages.conversationId, convIds), ilike(messages.bodyMd, pattern), isNull(messages.deletedAt)))
       .orderBy(desc(messages.ts))
       .limit(limit);
 

@@ -30,7 +30,7 @@ const RoleBody = z.object({
   name: z.string().min(1).max(80),
   permissions: z.array(z.enum([
     "workspace.read", "workspace.write", "channels.write", "runs.control",
-    "apps.request_publish", "audit.export", "access.manage",
+    "apps.request_publish", "approvals.decide", "audit.export", "access.manage",
   ])).max(30),
 });
 
@@ -99,7 +99,7 @@ export default async function enterpriseRoutes(app: FastifyInstance): Promise<vo
       access,
       builtInRoles: [
         { key: "admin", name: "Admin", permissions: ["*"] },
-        { key: "member", name: "Member", permissions: ["workspace.read", "workspace.write", "runs.control", "apps.request_publish"] },
+        { key: "member", name: "Member", permissions: ["workspace.read", "workspace.write", "runs.control", "apps.request_publish", "approvals.decide"] },
         { key: "guest", name: "Guest", permissions: ["workspace.read", "channels.write"] },
       ],
       roles,
@@ -159,7 +159,14 @@ export default async function enterpriseRoutes(app: FastifyInstance): Promise<vo
   app.put("/enterprise/sso", async (req, reply) => {
     if (!(await admin(req, reply))) return;
     const body = SsoBody.parse(req.body);
-    await discovery(body.issuer);
+    // Discovery failures are the operator's input being wrong (non-https
+    // issuer, unreachable/malformed metadata) — a 400 with the reason, not a
+    // 500 stack trace.
+    try {
+      await discovery(body.issuer);
+    } catch (e) {
+      return reply.code(400).send({ error: "oidc_discovery_failed", detail: (e as Error).message.slice(0, 200) });
+    }
     const [existing] = await db.select().from(ssoConnections).where(eq(ssoConnections.workspaceId, req.auth!.workspaceId!)).limit(1);
     if (!existing && !body.clientSecret) return reply.code(400).send({ error: "client_secret_required" });
     const secret = body.clientSecret ? encryptSecret({ clientSecret: body.clientSecret }) : existing!.clientSecretCiphertext;

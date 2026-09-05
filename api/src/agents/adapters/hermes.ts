@@ -11,7 +11,7 @@ export async function callHermesSocket(params: {
   const url = `${config.apiInternalUrl.replace(/\/$/, "")}/_internal/agent-dispatch`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-internal-token": config.sessionSecret },
     body: JSON.stringify({ agentId: params.agentId, kind: params.kind, packet: params.packet }),
   });
   if (res.status === 404) throw new Error("agent_not_connected");
@@ -20,7 +20,13 @@ export async function callHermesSocket(params: {
     reply: AgentCallResponse & { status?: string } | undefined;
   };
   if (!reply) return { actions: [] };
-  if (reply.status === "HEARTBEAT_OK") return "HEARTBEAT_OK";
-  if (Array.isArray(reply.actions)) return { actions: reply.actions, trace: reply.trace, usage: reply.usage };
-  return { actions: [] };
+  const error = typeof reply.error === "string" && reply.error ? reply.error.slice(0, 200) : undefined;
+  // A bridge that skipped because the runtime produced nothing may say so via
+  // `error` (e.g. {status:"HEARTBEAT_OK", error:"empty_reply"}); surface it
+  // rather than folding it into a healthy idle beat.
+  if (reply.status === "HEARTBEAT_OK") return error ? { actions: [], error } : "HEARTBEAT_OK";
+  if (Array.isArray(reply.actions)) {
+    return { actions: reply.actions, trace: reply.trace, usage: reply.usage, ...(error ? { error } : {}) };
+  }
+  return error ? { actions: [], error } : { actions: [] };
 }
