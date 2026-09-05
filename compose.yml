@@ -86,6 +86,9 @@ services:
       # containers, also add `- ${CC_SHARED_WORKSPACE_DIR}:/workspace` to the
       # api/worker/bridge `volumes:` (see the box compose).
       CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
+      # Keep the internal dispatch wait above the bridge's per-run cap.
+      HERMES_TIMEOUT: ${HERMES_TIMEOUT:-}
+      CC_DISPATCH_TIMEOUT_MS: ${CC_DISPATCH_TIMEOUT_MS:-}
       # ── Planner / judge backend ────────────────────────────────────────
       # One OpenAI-compatible /v1 endpoint powers the goal planner, the mission
       # planner, the task condenser, the memory janitor, and the verification
@@ -132,6 +135,9 @@ services:
       API_INTERNAL_URL: http://api:3000
       SESSION_SECRET: ${SESSION_SECRET:-please-change-me}
       CC_SHARED_WORKSPACE_DIR: ${CC_SHARED_WORKSPACE_DIR:-}
+      # Keep the internal dispatch wait above the bridge's per-run cap.
+      HERMES_TIMEOUT: ${HERMES_TIMEOUT:-}
+      CC_DISPATCH_TIMEOUT_MS: ${CC_DISPATCH_TIMEOUT_MS:-}
       # ── Planner / judge backend ────────────────────────────────────────
       # One OpenAI-compatible /v1 endpoint powers the goal planner, the mission
       # planner, the task condenser, the memory janitor, and the verification

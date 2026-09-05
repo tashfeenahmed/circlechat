@@ -12,6 +12,7 @@ import {
 import { scheduleAgentHeartbeat } from "../agents/scheduler.js";
 import { id as makeId } from "../lib/ids.js";
 import { isInternalRequest } from "../lib/internal-request.js";
+import { dispatchTimeoutMs } from "../lib/config.js";
 
 export default async function agentSocketWs(app: FastifyInstance): Promise<void> {
   app.get("/agent-socket", { websocket: true }, async (conn, req) => {
@@ -92,7 +93,7 @@ export default async function agentSocketWs(app: FastifyInstance): Promise<void>
         body.agentId,
         makeId("c").slice(2, 20),
         { type: body.kind, packet: body.packet },
-        body.timeoutMs ?? 210_000,
+        body.timeoutMs && body.timeoutMs > 0 ? body.timeoutMs : dispatchTimeoutMs(),
       );
       return reply.send({ reply: resp });
     } catch (e) {
