@@ -322,6 +322,18 @@ export interface ScaffoldStrip {
 
 // Remove leaked runtime scaffolding + sign-offs, keeping the substantive
 // remainder. Exported for tests and for the bridge-side mirror.
+// Hermes gateway boot banner leaking through the reply stream:
+//   ┌──…┐ / │ ⚕ Hermes Gateway Starting... │ / │ Messaging platforms + cron
+//   scheduler │ / │ Press Ctrl+C to stop │ / └──…┘  (box-drawing frame, any
+// width, sometimes flattened onto one line). Pure runtime output — strip it.
+const GATEWAY_BOOT_LINE_RE =
+  /(?:^|\n)[ \t]*[┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝]*[ \t]*(?:⚕[ \t]*)?(?:Hermes Gateway Starting\.{0,3}|Messaging platforms \+ cron scheduler|Press Ctrl\+C to stop)[^\n]*(?=\n|$)/gi;
+const BOX_ONLY_LINE_RE = /(?:^|\n)[ \t]*[┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝][┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝ \t]*(?=\n|$)/g;
+// Flattened single-line variant: "┌┐ ⚕ Hermes Gateway Starting... ├┤ Messaging
+// platforms + cron scheduler Press Ctrl+C to stop └┘".
+const GATEWAY_BOOT_INLINE_RE =
+  /[┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝ \t]*(?:⚕[ \t]*)?Hermes Gateway Starting\.{0,3}[ \t┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝]*(?:Messaging platforms \+ cron scheduler)?[ \t┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝]*(?:Press Ctrl\+C to stop)?[ \t┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝]*/gi;
+
 export function stripLeakedScaffolding(s: string): ScaffoldStrip {
   const stripped: string[] = [];
   let out = s;
@@ -335,6 +347,10 @@ export function stripLeakedScaffolding(s: string): ScaffoldStrip {
   };
   step(RUNAWAY_BANNER_RE, "runaway_banner");
   step(TOOL_EXEC_FAIL_RE, "tool_exec_failure");
+  if (/Hermes Gateway Starting|Messaging platforms \+ cron scheduler|Press Ctrl\+C to stop/i.test(out)) {
+    stripped.push("gateway_boot");
+    out = out.replace(GATEWAY_BOOT_LINE_RE, "\n").replace(GATEWAY_BOOT_INLINE_RE, " ").replace(BOX_ONLY_LINE_RE, "\n");
+  }
   if (stripped.includes("runaway_banner")) step(SUMMARY_LEADIN_RE, "summary_leadin");
   const unsigned = stripSignOff(out);
   if (unsigned !== out.trim()) {
@@ -392,6 +408,8 @@ export function guardRejectHint(reason: string): string {
       return " Your reply carried the runtime's 'Could not execute tool(s)' notice / @@ARG parser debris — a tool call you emitted was malformed. That's diagnostics, not a message. Re-issue the tool call correctly (valid enum values, no stray delimiters) or emit the board action as an <actions> JSON block; only post prose that a teammate should read.";
     case "scaffold_talk":
       return " You addressed the prompt scaffolding ('CURRENT REQUEST', 'attached conversation history file') instead of the team. Nobody attached a file — the context you were given IS the conversation. Reply to the last human message in plain prose, or stay silent with HEARTBEAT_OK.";
+    case "gateway_boot":
+      return " Your reply was only the Hermes gateway's boot banner ('Hermes Gateway Starting…') — runtime output, not a message. Say the one new fact for the team, or stay silent with HEARTBEAT_OK.";
     case "signoff_only":
       return " Your reply was only a signature/sign-off. Chat messages carry no sign-offs, no name/title lines, no hash footers — say the one new fact, then stop.";
     default:
