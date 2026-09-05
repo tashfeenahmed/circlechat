@@ -357,8 +357,26 @@ const RUNAWAY_BANNER_RE =
   /(?:^|\n)[ \t]*\u26A0?\uFE0F?[ \t]*Reached maximum iterations(?:\s*\(\d+\))?\.?(?:[ \t]*Requesting (?:a )?summary(?:\.{1,3}|…)?)?[ \t]*(?:\n|$)/gi;
 const TOOL_EXEC_FAIL_RE =
   /(?:^|\n)[ \t]*\u26A0?\uFE0F?[ \t]*Could not execute tool\(s\)[^\n]*(?:\n(?![ \t]*\n)[^\n]*)*/gi;
+// "⚠️ File-mutation verifier: N file(s) were NOT modified …" + one bullet per
+// denied write. Header + bullets/continuations are dropped as a block.
+function stripFileMutationNotice(text) {
+  if (!/File-mutation verifier:/i.test(text)) return text;
+  const out = [];
+  let skipping = false;
+  for (const line of String(text).split("\n")) {
+    if (/File-mutation verifier:/i.test(line)) { skipping = true; continue; }
+    if (skipping) {
+      if (/^\s*[•\-*]\s/.test(line) || /Write denied|WRITE_SAFE_ROOT|Unset the variable|directory prefix/i.test(line)) continue;
+      skipping = false;
+      if (!line.trim()) continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 function stripRuntimeNoise(text) {
-  return String(text || "")
+  return stripFileMutationNotice(String(text || ""))
     .replace(RUNAWAY_BANNER_RE, "\n")
     .replace(TOOL_EXEC_FAIL_RE, "\n")
     .replace(/\n{3,}/g, "\n\n")
@@ -750,8 +768,9 @@ const STYLE_RULES = [
   `  • ONE NEW FACT PER MESSAGE. Say the thing that changed since your last post, in 1–2 sentences. Do not restate the task, your role, the plan, or what was already on the card. A reply over ${CHAT_BODY_MAX} chars is cut at a sentence boundary — put long-form on the task card, not in chat.`,
   `  • ONE SURFACE PER FACT. Never post the same fact to chat AND a task_comment AND project_note. Task progress → task_comment/share_to_task only. Project-level decisions/status → project_note only. Chat → only what a human needs to see right now. The server drops near-duplicate bodies across these surfaces (duplicate_of_recent) and near-duplicate tracker entries.`,
   `  • NO INVENTED WORK. Do not manufacture "proof packages", re-verify what is already verified, bump a version number on a status doc, or re-announce a fact already on the card to have something to post. If nothing real changed: HEARTBEAT_OK.`,
-  `  • NEVER paste runtime output into a reply: "Reached maximum iterations", "Requesting summary", "Could not execute tool(s)", @@ARG markers, or a summary of your tool calls. If you ran out of tool turns, say the one concrete outcome (or HEARTBEAT_OK) — not a transcript. Do not talk to the prompt ("I read the attached history file…") — reply to the people.`,
-  `  • Scratch files (test scripts, fetch helpers) go under /workspace/tmp/, never your home or cwd, and are never shared or mentioned in chat.`,
+  `  • NEVER paste runtime output into a reply: "Reached maximum iterations", "Requesting summary", "Could not execute tool(s)", "File-mutation verifier", "Write denied", @@ARG markers, or a summary of your tool calls. If you ran out of tool turns, say the one concrete outcome (or HEARTBEAT_OK) — not a transcript. Do not talk to the prompt ("I read the attached history file…") — reply to the people.`,
+  `  • NO IDS OR HASHES IN CHAT. Refer to a task by its title in quotes ("the streaming pipeline card"), never by task_… / ap_… / goal_… ids, and never paste SHA-256 or commit hashes — the card already has them. Say "ready for review", "marked done", "blocked on X" — not "flip", "review flip", "unblock the card".`,
+  `  • Scratch files (test scripts, fetch helpers) go under /opt/data/tmp/ (inside your writable root), never the root of your home or /workspace, and are never shared or mentioned in chat.`,
 ].join("\n");
 
 function buildPrompt(entry, packet) {
@@ -1583,13 +1602,13 @@ function connect(entry) {
             actions.push({
               type: "task_comment",
               task_id: routeTaskId,
-              body_md: full.length < postBody.length ? `${full}\n\n_(trimmed — ${postBody.length - full.length} chars cut)_` : full,
+              body_md: full,
             });
-            chatBody = `${leadOf(postBody, CHAT_POINTER_MAX)}\n\n_(full update on the task card: ${routeTaskId})_`;
+            chatBody = `${leadOf(postBody, CHAT_POINTER_MAX)}\n\n_Full update on the task card: ${routeTaskId}_`;
             console.log(`[${entry.handle}] ${trigger} → ${postBody.length}-char prose routed to task_comment on ${routeTaskId}; chat gets a ${chatBody.length}-char pointer`);
           } else {
             const cut = truncateAtBoundary(postBody, CHAT_BODY_MAX - 80);
-            chatBody = `${cut}\n\n_(trimmed — ${postBody.length - cut.length} chars cut; keep chat short, put long-form on a task card)_`;
+            chatBody = cut;
             console.log(`[${entry.handle}] ${trigger} → ${postBody.length}-char prose cut at a boundary to ${chatBody.length} for chat`);
           }
         }
@@ -1616,7 +1635,7 @@ function connect(entry) {
           actions.push({
             type: "task_comment",
             task_id: targetTaskId,
-            body_md: wrapped.length < postBody.length ? `${wrapped}\n\n_(trimmed — ${postBody.length - wrapped.length} chars cut)_` : wrapped,
+            body_md: wrapped,
           });
         } else {
           console.log(`[${entry.handle}] task-only: dropping ${postBody.length}-char prose (no conv and no task to wrap into)`);

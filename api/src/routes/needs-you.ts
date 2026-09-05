@@ -40,7 +40,9 @@ export default async function needsYouRoutes(app: FastifyInstance): Promise<void
     const [approvalRows, reviewTasks, failedVerdicts, stalledGoals, waits, failures, connectorErrors, pendingApps, workspace] = await Promise.all([
       agentIds.length ? db.select({ approval: approvals, agentName: agents.name }).from(approvals).innerJoin(agents, eq(agents.id, approvals.agentId)).where(and(inArray(approvals.agentId, agentIds), eq(approvals.status, "pending"))).orderBy(desc(approvals.createdAt)) : [],
       db.select().from(tasks).where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.status, "review"), eq(tasks.archived, false))).orderBy(desc(tasks.updatedAt)),
-      db.select({ verification: taskVerifications, taskTitle: tasks.title }).from(taskVerifications).innerJoin(tasks, eq(tasks.id, taskVerifications.taskId)).where(and(eq(taskVerifications.workspaceId, workspaceId), eq(taskVerifications.verdict, "fail"))).orderBy(desc(taskVerifications.createdAt)),
+      // Only cards still sitting in review can act on a failed verdict; a fail on a
+      // card that has since moved (done, back to in_progress, archived) is history.
+      db.select({ verification: taskVerifications, taskTitle: tasks.title }).from(taskVerifications).innerJoin(tasks, eq(tasks.id, taskVerifications.taskId)).where(and(eq(taskVerifications.workspaceId, workspaceId), eq(taskVerifications.verdict, "fail"), eq(tasks.status, "review"), eq(tasks.archived, false))).orderBy(desc(taskVerifications.createdAt)),
       db.select({ ledger: goalLedgers, title: goals.title }).from(goalLedgers).innerJoin(goals, eq(goals.id, goalLedgers.goalId)).where(and(eq(goalLedgers.workspaceId, workspaceId), gt(goalLedgers.stallCount, 0))).orderBy(desc(goalLedgers.updatedAt)),
       db.select({ run: workflowRuns, name: workflows.name }).from(workflowRuns).innerJoin(workflows, eq(workflows.id, workflowRuns.workflowId)).where(and(eq(workflowRuns.workspaceId, workspaceId), eq(workflowRuns.status, "waiting"), eq(workflowRuns.waitKind, "human"))).orderBy(desc(workflowRuns.updatedAt)),
       db.select({ run: workflowRuns, name: workflows.name }).from(workflowRuns).innerJoin(workflows, eq(workflows.id, workflowRuns.workflowId)).where(and(eq(workflowRuns.workspaceId, workspaceId), eq(workflowRuns.status, "failed"))).orderBy(desc(workflowRuns.updatedAt)).limit(20),
@@ -72,10 +74,18 @@ export default async function needsYouRoutes(app: FastifyInstance): Promise<void
         actions: ["approve", "deny"],
       });
     }
-    for (const task of reviewTasks) items.push({ id: `task:${task.id}`, kind: "task_review", priority: "normal", title: task.title, detail: "Task is ready for human review.", link: `/board?task=${task.id}`, targetId: task.id, createdAt: task.updatedAt.toISOString(), actions: ["open"] });
+    // One item per review card. If its latest verdict is a fail, the item says
+    // so (with the judge's reason) instead of a second "verification failed" row.
     const latestFailed = new Map<string, (typeof failedVerdicts)[number]>();
     for (const row of failedVerdicts) if (!latestFailed.has(row.verification.taskId)) latestFailed.set(row.verification.taskId, row);
-    for (const row of latestFailed.values()) items.push({ id: `verification:${row.verification.id}`, kind: "verification_failed", priority: "high", title: `Verification failed: ${row.taskTitle}`, detail: row.verification.rationale || `Score ${row.verification.score ?? "n/a"}`, link: `/board?task=${row.verification.taskId}`, targetId: row.verification.taskId, createdAt: row.verification.createdAt.toISOString(), actions: ["open"] });
+    for (const task of reviewTasks) {
+      const failed = latestFailed.get(task.id);
+      if (failed) {
+        items.push({ id: `verification:${failed.verification.id}`, kind: "verification_failed", priority: "high", title: `Needs review: ${task.title}`, detail: `Verification failed — ${failed.verification.rationale || `score ${failed.verification.score ?? "n/a"}`}`, link: `/board?task=${task.id}`, targetId: task.id, createdAt: failed.verification.createdAt.toISOString(), actions: ["open"] });
+      } else {
+        items.push({ id: `task:${task.id}`, kind: "task_review", priority: "normal", title: `Needs review: ${task.title}`, detail: "The assignee marked this card ready. Open it to check the deliverable and move it to done.", link: `/board?task=${task.id}`, targetId: task.id, createdAt: task.updatedAt.toISOString(), actions: ["open"] });
+      }
+    }
     for (const row of stalledGoals) items.push({ id: `goal:${row.ledger.goalId}`, kind: "stalled_goal", priority: row.ledger.stallCount >= 3 ? "critical" : "high", title: `Stalled goal: ${row.title}`, detail: `${row.ledger.stallCount} stalled assessment(s); ${row.ledger.replanCount} re-plan(s).`, link: "/goals", targetId: row.ledger.goalId, createdAt: row.ledger.updatedAt.toISOString(), actions: ["open"] });
     for (const row of waits) items.push({ id: `workflow-wait:${row.run.id}`, kind: "workflow_wait", priority: "high", title: `${row.name} is waiting for you`, detail: `State ${row.run.currentStateId ?? "unknown"}`, link: "/automation", targetId: row.run.id, createdAt: row.run.updatedAt.toISOString(), actions: ["resume", "cancel", "steer"] });
     for (const row of failures) items.push({ id: `workflow-failed:${row.run.id}`, kind: "workflow_failed", priority: "high", title: `${row.name} failed`, detail: row.run.errorText ?? "Workflow failed without an error message.", link: "/automation", targetId: row.run.id, createdAt: row.run.updatedAt.toISOString(), actions: ["open"] });

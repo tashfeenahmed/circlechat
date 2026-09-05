@@ -86,10 +86,20 @@ export default function Board() {
     [q.data?.tasks],
   );
 
+  // Done keeps the board honest without turning into an archive: only cards
+  // finished in the last two weeks show by default; the rest sit behind a
+  // "show older" toggle. Every other column shows everything.
+  const DONE_WINDOW_MS = 14 * 24 * 3600 * 1000;
+  const [showOlderDone, setShowOlderDone] = useState(false);
+  const olderDoneCount = useMemo(
+    () => topLevel.filter((t) => t.status === "done" && Date.now() - Date.parse(t.updatedAt) > DONE_WINDOW_MS).length,
+    [topLevel],
+  );
   function byCol(col: TaskStatus): Task[] {
     return topLevel
       .filter((t) => t.status === col)
-      .sort((a, b) => a.position - b.position || a.createdAt.localeCompare(b.createdAt));
+      .filter((t) => col !== "done" || showOlderDone || Date.now() - Date.parse(t.updatedAt) <= DONE_WINDOW_MS)
+      .sort((a, b) => (col === "done" ? b.updatedAt.localeCompare(a.updatedAt) : a.position - b.position || a.createdAt.localeCompare(b.createdAt)));
   }
 
   async function addTask(col: TaskStatus) {
@@ -181,6 +191,11 @@ export default function Board() {
                 <span className="kh-glyph">{col.glyph}</span>
                 <span className="kh-title">{col.title}</span>
                 <span className="kh-count">{cards.length}</span>
+                {col.id === "done" && olderDoneCount > 0 && (
+                  <button type="button" className="kh-older" onClick={() => setShowOlderDone((v) => !v)}>
+                    {showOlderDone ? "hide older" : `+${olderDoneCount} older`}
+                  </button>
+                )}
                 <span className="kh-spacer" />
                 {!spectator && (
                   <button
