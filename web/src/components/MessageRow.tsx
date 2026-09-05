@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTasks } from "../lib/hooks";
 import { MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
 import Avatar from "./Avatar";
@@ -58,9 +59,11 @@ export default function MessageRow({
 
   const displayName = who?.name ?? (msg.memberId === meMemberId ? "me" : msg.memberId.slice(0, 6));
   const handle = who?.handle;
+  const tasksQ = useTasks();
+  const taskTitles = useMemo(() => new Map((tasksQ.data?.tasks ?? []).map((t) => [t.id, t.title])), [tasksQ.data]);
   const html = useMemo(
-    () => renderMarkdown(msg.bodyMd, (h) => isAgentHandle(h, dir)),
-    [msg.bodyMd, dir],
+    () => renderMarkdown(msg.bodyMd, (h) => isAgentHandle(h, dir), (id) => taskTitles.get(id)),
+    [msg.bodyMd, dir, taskTitles],
   );
 
   const rxByEmoji: Record<string, string[]> = {};

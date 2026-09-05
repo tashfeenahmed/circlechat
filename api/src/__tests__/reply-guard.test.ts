@@ -348,3 +348,25 @@ describe("checkReplyBody — Hermes gateway boot banner (live leak 5 Sep 2026)",
     expect(stripLeakedScaffolding(boxed).stripped).toContain("gateway_boot");
   });
 });
+
+describe("checkReplyBody — Hermes file-mutation verifier notice (live leak 5 Sep 2026)", () => {
+  const notice = [
+    "⚠️ File-mutation verifier: 1 file(s) were NOT modified this turn despite any wording above that may suggest otherwise. Run `git status` or `read_file` to confirm.",
+    "  • `/workspace/tmp/fetch_tasks.py` — [write_file] Write denied: '`/workspace/tmp/fetch_tasks.py`' is outside HERMES_WRITE_SAFE_ROOT (/opt/data). Unset the variable or add this path's directory prefix.",
+  ].join("\n");
+  it("rejects a reply that is only the notice", () => {
+    const r = checkReplyBody(notice);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("file_mutation_notice");
+    expect(guardRejectHint("file_mutation_notice")).toMatch(/write was denied/);
+  });
+  it("keeps the substantive part and drops the notice block", () => {
+    const r = checkReplyBody(`Archive verified: 85 records, 0 mismatches. Evidence is on the card.\n\n${notice}`);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.bodyMd).toMatch(/^Archive verified/);
+      expect(r.bodyMd).not.toMatch(/File-mutation|Write denied|WRITE_SAFE_ROOT/);
+    }
+    expect(stripLeakedScaffolding(notice).stripped).toContain("file_mutation_notice");
+  });
+});

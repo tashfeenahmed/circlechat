@@ -100,3 +100,11 @@ describe("bridge isEntrypointNoise — gateway boot banner", () => {
     expect(m.isEntrypointNoise("Backend verified on port 3000.")).toBe(false);
   });
 });
+
+describe("bridge stripRuntimeNoise — file-mutation verifier notice", () => {
+  it("drops the header and its bullets, keeps the reply", () => {
+    const text = "Backend is live on port 3000.\n\n⚠️ File-mutation verifier: 1 file(s) were NOT modified this turn despite any wording above.\n  • `/workspace/tmp/x.py` — [write_file] Write denied: outside HERMES_WRITE_SAFE_ROOT (/opt/data). Unset the variable or add this path's directory prefix.";
+    const out = bridge.stripRuntimeNoise(text);
+    expect(out).toBe("Backend is live on port 3000.");
+  });
+});

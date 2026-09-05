@@ -186,22 +186,22 @@ export default function Sidebar() {
             <span className="sb-badge mention">{pendingNeeds}</span>
           )}
         </Link>
-        <Link
-          to="/automation"
-          className={`sb-item ${location.pathname === "/automation" ? "active" : ""}`}
-        >
-          <span className="sb-glyph"><Workflow size={14} strokeWidth={2} /></span>
-          <span className="sb-name">Automation</span>
-        </Link>
-        <Link
-          to="/platform"
-          className={`sb-item ${location.pathname === "/platform" ? "active" : ""}`}
-        >
-          <span className="sb-glyph"><Boxes size={14} strokeWidth={2} /></span>
-          <span className="sb-name">Platform</span>
-        </Link>
         {moreOpen && (
           <>
+            <Link
+              to="/automation"
+              className={`sb-item ${location.pathname === "/automation" ? "active" : ""}`}
+            >
+              <span className="sb-glyph"><Workflow size={14} strokeWidth={2} /></span>
+              <span className="sb-name">Automation</span>
+            </Link>
+            <Link
+              to="/platform"
+              className={`sb-item ${location.pathname === "/platform" ? "active" : ""}`}
+            >
+              <span className="sb-glyph"><Boxes size={14} strokeWidth={2} /></span>
+              <span className="sb-name">Platform</span>
+            </Link>
             <Link
               to="/analytics"
               className={`sb-item ${location.pathname === "/analytics" ? "active" : ""}`}

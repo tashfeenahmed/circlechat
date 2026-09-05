@@ -334,6 +334,32 @@ const BOX_ONLY_LINE_RE = /(?:^|\n)[ \t]*[┌┐└┘├┤─│╭╮╰╯═
 const GATEWAY_BOOT_INLINE_RE =
   /[┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝ \t]*(?:⚕[ \t]*)?Hermes Gateway Starting\.{0,3}[ \t┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝]*(?:Messaging platforms \+ cron scheduler)?[ \t┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝]*(?:Press Ctrl\+C to stop)?[ \t┌┐└┘├┤─│╭╮╰╯═║╔╗╚╝]*/gi;
 
+// Hermes "file-mutation verifier" notice: a header line followed by one bullet
+// per denied write, e.g.
+//   ⚠️ File-mutation verifier: 1 file(s) were NOT modified this turn despite …
+//     • `/workspace/tmp/x.py` — [write_file] Write denied: '…' is outside HERMES_WRITE_SAFE_ROOT (/opt/data). Unset …
+// Runtime diagnostics, never something a teammate should read.
+export function stripFileMutationNotice(s: string): { text: string; hit: boolean } {
+  const lines = s.split("\n");
+  const out: string[] = [];
+  let hit = false;
+  let skipping = false;
+  for (const line of lines) {
+    if (/File-mutation verifier:/i.test(line)) {
+      hit = true;
+      skipping = true;
+      continue;
+    }
+    if (skipping) {
+      if (/^\s*[•\-*]\s/.test(line) || /Write denied|WRITE_SAFE_ROOT|Unset the variable|directory prefix/i.test(line)) continue;
+      skipping = false;
+      if (!line.trim()) continue;
+    }
+    out.push(line);
+  }
+  return { text: hit ? out.join("\n") : s, hit };
+}
+
 export function stripLeakedScaffolding(s: string): ScaffoldStrip {
   const stripped: string[] = [];
   let out = s;
@@ -347,6 +373,13 @@ export function stripLeakedScaffolding(s: string): ScaffoldStrip {
   };
   step(RUNAWAY_BANNER_RE, "runaway_banner");
   step(TOOL_EXEC_FAIL_RE, "tool_exec_failure");
+  {
+    const fm = stripFileMutationNotice(out);
+    if (fm.hit) {
+      stripped.push("file_mutation_notice");
+      out = fm.text;
+    }
+  }
   if (/Hermes Gateway Starting|Messaging platforms \+ cron scheduler|Press Ctrl\+C to stop/i.test(out)) {
     stripped.push("gateway_boot");
     out = out.replace(GATEWAY_BOOT_LINE_RE, "\n").replace(GATEWAY_BOOT_INLINE_RE, " ").replace(BOX_ONLY_LINE_RE, "\n");
@@ -408,6 +441,8 @@ export function guardRejectHint(reason: string): string {
       return " Your reply carried the runtime's 'Could not execute tool(s)' notice / @@ARG parser debris — a tool call you emitted was malformed. That's diagnostics, not a message. Re-issue the tool call correctly (valid enum values, no stray delimiters) or emit the board action as an <actions> JSON block; only post prose that a teammate should read.";
     case "scaffold_talk":
       return " You addressed the prompt scaffolding ('CURRENT REQUEST', 'attached conversation history file') instead of the team. Nobody attached a file — the context you were given IS the conversation. Reply to the last human message in plain prose, or stay silent with HEARTBEAT_OK.";
+    case "file_mutation_notice":
+      return " Your reply was only the runtime's 'File-mutation verifier' notice — a write was denied. That is diagnostics for you, not a message. Fix the path (write under /opt/data) and post only the outcome a teammate needs.";
     case "gateway_boot":
       return " Your reply was only the Hermes gateway's boot banner ('Hermes Gateway Starting…') — runtime output, not a message. Say the one new fact for the team, or stay silent with HEARTBEAT_OK.";
     case "signoff_only":
