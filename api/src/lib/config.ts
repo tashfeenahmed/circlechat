@@ -61,3 +61,14 @@ export function autoApproveScopes(): string[] {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 }
+
+// How long the worker→api internal dispatch waits for the bridge to return an
+// agent's reply. Must exceed the bridge's HERMES_TIMEOUT (seconds) or every
+// long tool-using run dies as `dispatch_504` while Hermes is still working.
+// Explicit CC_DISPATCH_TIMEOUT_MS wins; otherwise HERMES_TIMEOUT + 60 s.
+export function dispatchTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const explicit = Number(env.CC_DISPATCH_TIMEOUT_MS);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
+  const hermesSec = Number(env.HERMES_TIMEOUT);
+  return ((Number.isFinite(hermesSec) && hermesSec > 0 ? hermesSec : 480) + 60) * 1000;
+}
