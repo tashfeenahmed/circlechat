@@ -8,6 +8,8 @@ import AgentActivity from "../components/AgentActivity";
 import Menu from "../components/Menu";
 import Modal from "../components/Modal";
 import Avatar from "../components/Avatar";
+import GettingStarted from "../components/GettingStarted";
+import { useOnboarding } from "../lib/onboarding";
 import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory, useMarkConversationNotificationsRead, useSpectator } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
@@ -17,6 +19,9 @@ export default function ChannelPage() {
   const { id } = useParams<{ id: string }>();
   const me = useMe();
   const spectator = useSpectator();
+  const onboarding = useOnboarding(id);
+  const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
+
   const conv = useConversation(id);
   const msgs = useMessages(id);
   const post = usePostMessage(id);
@@ -61,6 +66,7 @@ export default function ChannelPage() {
   if (!id) return null;
 
   const c = conv.data?.conversation;
+  const showGettingStarted = !spectator && c?.kind === "channel" && id === onboarding.firstChannelId;
   const memberCount = (conv.data?.members ?? []).length;
   const myRole = (conv.data?.members ?? []).find((m) => m.memberId === me.data?.memberId)?.role;
   const isAdmin = myRole === "admin";
@@ -211,6 +217,10 @@ export default function ChannelPage() {
           </div>
         </header>
 
+        {showGettingStarted && (
+          <GettingStarted state={onboarding} onPrefill={(text) => setPrefill({ text, nonce: Date.now() })} />
+        )}
+
         <MessageList
           key={id}
           messages={msgs.messages}
@@ -236,7 +246,14 @@ export default function ChannelPage() {
         )}
 
         <Composer
-          placeholder={c?.kind === "dm" ? `Message ${dmTitle ?? ""}` : `Message #${c?.name ?? ""}`}
+          placeholder={
+            c?.kind === "dm"
+              ? `Message ${dmTitle ?? ""}`
+              : showGettingStarted && onboarding.fresh && onboarding.agent
+                ? `Message #${c?.name ?? ""} — try "@${onboarding.agent.handle} hello"`
+                : `Message #${c?.name ?? ""}`
+          }
+          prefill={prefill}
           conversationId={id}
           onTyping={() => {
             api.post(`/conversations/${id}/typing`).catch(() => {

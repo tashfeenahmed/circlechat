@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Hash, Plus, FolderOpen, Network, BookOpen, Inbox, LayoutGrid, Target, BarChart3, MoreHorizontal, Workflow, Boxes } from "lucide-react";
+import { Hash, Plus, FolderOpen, Network, BookOpen, Inbox, LayoutGrid, Target, BarChart3, MoreHorizontal, Workflow, Boxes, Sparkles, CircleHelp } from "lucide-react";
+import { useOnboarding } from "../lib/onboarding";
 import { useConversations, useMe, useMembersDirectory, useNeedsYou, useTasks, useSpectator } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
@@ -101,6 +102,9 @@ export default function Sidebar() {
       });
   }, [dir.data, existingDms, me.data]);
 
+  const onboarding = useOnboarding();
+  const showGettingStarted = onboarding.ready && !onboarding.dismissed && !onboarding.complete;
+
   async function createChannel() {
     if (!newName) return;
     const handle = newName.toLowerCase().replace(/[^a-z0-9-_]/g, "-");
@@ -121,6 +125,27 @@ export default function Sidebar() {
       </div>
 
       <div className="sb-group">
+        {showGettingStarted && (
+          <Link
+            to="/welcome"
+            className={`sb-item ${location.pathname === "/welcome" ? "active" : ""}`}
+          >
+            <span className="sb-glyph"><Sparkles size={14} strokeWidth={2} /></span>
+            <span className="sb-name">Getting started</span>
+            <span className="sb-badge">{onboarding.doneCount}/{onboarding.steps.length}</span>
+          </Link>
+        )}
+        {spectator && (
+          // Public read-only visitors get the explainer up front — it is the
+          // fastest way to understand what they are watching.
+          <Link
+            to="/welcome"
+            className={`sb-item ${location.pathname === "/welcome" ? "active" : ""}`}
+          >
+            <span className="sb-glyph"><CircleHelp size={14} strokeWidth={2} /></span>
+            <span className="sb-name">How it works</span>
+          </Link>
+        )}
         <Link
           to="/board"
           className={`sb-item ${location.pathname === "/board" ? "active" : ""} ${boardUnread > 0 ? "unread" : ""}`}
@@ -204,6 +229,15 @@ export default function Sidebar() {
               </span>
               <span className="sb-name">Org chart</span>
             </Link>
+            {!showGettingStarted && !spectator && (
+              <Link
+                to="/welcome"
+                className={`sb-item ${location.pathname === "/welcome" ? "active" : ""}`}
+              >
+                <span className="sb-glyph"><CircleHelp size={14} strokeWidth={2} /></span>
+                <span className="sb-name">How it works</span>
+              </Link>
+            )}
           </>
         )}
         <button

@@ -19,6 +19,7 @@ import AnalyticsPage from "./pages/Analytics";
 import BoardPage from "./pages/Board";
 import GoalsPage from "./pages/Goals";
 import SettingsPage from "./pages/Settings";
+import WelcomePage from "./pages/Welcome";
 import AutomationPage from "./pages/Automation";
 import PlatformPage from "./pages/Platform";
 import NeedsYouPage from "./pages/NeedsYou";
@@ -108,6 +109,7 @@ function Shell() {
         <Route path="/automation" element={<AutomationPage />} />
         <Route path="/platform" element={<PlatformPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/welcome" element={<WelcomePage />} />
       </Route>
     </Routes>
   );

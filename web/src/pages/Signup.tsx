@@ -90,7 +90,8 @@ export default function SignupPage() {
       if (runtime === "hermes") payload.apiKeyLabel = `${agentName} (${providerId})`;
       await api.post(endpoint, payload);
       await qc.invalidateQueries();
-      nav("/members", { replace: true });
+      // Land in #general with the getting-started card, not on an empty list.
+      nav("/", { replace: true });
     } catch (e) {
       setErr(humanizeError(e));
     } finally {
@@ -100,7 +101,7 @@ export default function SignupPage() {
 
   async function skip(): Promise<void> {
     await qc.invalidateQueries();
-    nav("/members", { replace: true });
+    nav("/", { replace: true });
   }
 
   return (
@@ -119,7 +120,11 @@ export default function SignupPage() {
             }}
           >
             <h1 className="text-[18px] font-semibold mb-1">Name your workspace</h1>
-            <p className="text-[13px] text-[var(--color-muted)] mb-5">You can create more later from the rail.</p>
+            <p className="text-[13px] text-[var(--color-muted)] mb-2">
+              CircleChat is team chat where AI agents are members: they sit in your channels, take work from a
+              shared board, and ask you before doing anything risky. This first workspace is yours to run.
+            </p>
+            <p className="text-[13px] text-[var(--color-muted)] mb-5">Three quick steps: name it, create your admin account, add an agent.</p>
             <input
               autoFocus
               placeholder="Acme Team"
@@ -200,10 +205,14 @@ export default function SignupPage() {
             }}
           >
             <h1 className="text-[18px] font-semibold mb-1">Add your first agent</h1>
+            <p className="text-[13px] text-[var(--color-muted)] mb-2">
+              An agent is a member of your workspace, not a bot: it gets a handle, a role, and reads the same
+              channels you do. It runs in its own container on this server and talks to the model provider you
+              pick below — your key never leaves this machine.
+            </p>
             <p className="text-[13px] text-[var(--color-muted)] mb-4">
-              We'll run it on this server, wire in your API key, and install the CircleChat MCP + skill for
-              you. You can skip this and add one later from{" "}
-              <span className="font-mono">Members → Add agent</span>.
+              After this, @-mention it in <span className="font-mono">#general</span> or give it a card on the
+              Board. You can skip and add one later from <span className="font-mono">Members → Add agent</span>.
             </p>
 
             <div className="space-y-3">
@@ -294,11 +303,11 @@ export default function SignupPage() {
                   <input
                     value={apiBaseUrl}
                     onChange={(e) => setApiBaseUrl(e.target.value)}
-                    placeholder="http://localhost:3200/v1"
+                    placeholder="http://localhost:3001/v1"
                     className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[13px] font-mono"
                   />
                   <div className="text-[11.5px] text-[var(--color-muted)] mt-1">
-                    Running on this Pi? Use <code className="font-mono">http://localhost:3200/v1</code>.{" "}
+                    Running FreeLLMAPI on this server? Use <code className="font-mono">http://localhost:3001/v1</code>.{" "}
                     <a
                       href="https://github.com/tashfeenahmed/freellmapi"
                       target="_blank"
@@ -341,6 +350,12 @@ export default function SignupPage() {
             </div>
 
             {err && <p className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
+            {busy && (
+              <p className="text-[12px] text-[var(--color-muted)] mt-3">
+                Setting up… the first install downloads the agent runtime image (several GB), so this can take a
+                few minutes. Keep this tab open.
+              </p>
+            )}
 
             <div className="flex justify-between items-center mt-5">
               <button type="button" onClick={skip} className="text-[13px] text-[var(--color-muted)]">

@@ -29,7 +29,10 @@ export default function MembersPage() {
   const [tab, setTab] = useState<Tab>("humans");
   const [q, setQ] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState<boolean>(
+    // /members?add=agent (from the first-run checklist) opens the add-agent flow directly.
+    () => new URLSearchParams(window.location.search).get("add") === "agent",
+  );
   const nav = useNavigate();
   const qc = useQueryClient();
   const presence = useBus((s) => s.presence);
@@ -445,7 +448,7 @@ function AddAgentModePicker({
             </span>
           </div>
           <div className="text-[12.5px] text-[var(--color-muted)] mt-0.5">
-            We'll create a fresh Hermes instance on this Pi, wire in your API key, and start it up.
+            We'll create a fresh agent in its own container on this server, wire in your API key, and start it up.
             You won't run anything on your own infra.
           </div>
         </button>

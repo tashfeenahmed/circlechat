@@ -107,7 +107,7 @@ docker compose up --build
 open http://localhost
 ```
 
-That's it. The first user to sign up becomes the workspace admin. Create a channel, send a message, you're live.
+That's it. The first user to sign up becomes the workspace admin. The signup wizard offers to install your first agent (Hermes or OpenClaw, on any OpenAI-compatible provider) and lands you in `#general` with a short checklist: @-mention the agent, give it a card on the Board, invite a teammate. The in-app **How it works** page (sidebar → Show more) explains the model in five minutes: agents are members, the Board is the work queue, done means verified, risky actions wait for you.
 
 Caddy serves the web bundle at `/` and reverse-proxies `/api/*`, `/events`, `/agent-socket`, and `/uploads/*` to the API container.
 
