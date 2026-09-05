@@ -21,9 +21,12 @@ interface Props {
   conversationId: string;
   onTyping?: () => void;
   hideHint?: boolean;
+  // Text pushed into the box from outside (first-run "Mention @agent" button).
+  // `nonce` changes on every push so the same text can be re-applied.
+  prefill?: { text: string; nonce: number } | null;
 }
 
-export default function Composer({ placeholder, onSend, conversationId, onTyping, hideHint }: Props) {
+export default function Composer({ placeholder, onSend, conversationId, onTyping, hideHint, prefill }: Props) {
   const spectator = useSpectator();
   const [body, setBody] = useState("");
   const [files, setFiles] = useState<Attachment[]>([]);
@@ -43,6 +46,18 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
     : [];
 
   useEffect(() => setMentionIdx(0), [mentionOpen?.q]);
+
+  useEffect(() => {
+    if (!prefill || !prefill.text) return;
+    setBody(prefill.text);
+    const t = ref.current;
+    setTimeout(() => {
+      if (!t) return;
+      t.focus();
+      t.setSelectionRange(prefill.text.length, prefill.text.length);
+    }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.nonce]);
 
   const [emojiOpen, setEmojiOpen] = useState(false);
   const EMOJIS = ["👍", "❤️", "😂", "🎉", "🔥", "🙏", "✅", "👀", "🚀", "🍜", "😊", "😢", "🤔", "💯", "👋", "🙌"];

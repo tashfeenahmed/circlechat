@@ -3151,3 +3151,33 @@ body { position: relative; }
   text-underline-offset: 2px;
   margin-left: 14px;
 }
+
+/* ── Getting started (first run) ─────────────────────────────────────── */
+.gs { margin: 10px 14px 0; border: 1px solid var(--color-hair-2); border-radius: 8px; background: var(--color-bg-2); padding: 12px 14px; flex: none; }
+.gs-head { display: flex; align-items: flex-start; gap: 12px; }
+.gs-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.gs-sub { font-size: 12.5px; color: var(--color-muted); margin-top: 2px; line-height: 1.45; max-width: 640px; }
+.gs-link { color: var(--color-ink); text-decoration: underline; text-underline-offset: 2px; }
+.gs-link:hover { color: var(--color-ink-hover); }
+.gs-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: none; }
+.gs-progress { font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); padding: 1px 6px; border: 1px solid var(--color-hair-2); border-radius: 999px; }
+.gs-icon { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: var(--color-muted); }
+.gs-icon:hover { background: var(--color-hi); color: var(--color-ink); }
+.gs-steps { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.gs-steps.standalone { gap: 8px; }
+.gs-step { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 6px; background: var(--color-paper); border: 1px solid var(--color-hair); }
+.gs-step.done { opacity: 0.6; }
+.gs-num { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 999px; border: 1px solid var(--color-hair-2); font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); margin-top: 1px; }
+.gs-step.done .gs-num { background: var(--color-ok); border-color: var(--color-ok); color: #fff; }
+.gs-step-title { font-size: 13px; font-weight: 500; }
+.gs-step-why { font-size: 12px; color: var(--color-muted); margin-top: 2px; line-height: 1.45; }
+.gs-step-status { font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); margin-top: 3px; }
+.gs-step-cta { flex: none; margin-left: auto; align-self: center; }
+.gs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.gs-card { border: 1px solid var(--color-hair-2); border-radius: 8px; padding: 12px 14px; background: var(--color-bg-2); }
+.gs-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.gs-card-icon { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; background: var(--color-hi); color: var(--color-ink); }
+.gs-card-title { font-size: 13.5px; font-weight: 600; }
+.gs-card-body { font-size: 12.5px; color: var(--color-muted); line-height: 1.5; margin: 0; }
+.gs-where { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; line-height: 1.5; }
+@media (max-width: 720px) { .gs { margin: 8px 8px 0; } .gs-step { flex-wrap: wrap; } .gs-step-cta { margin-left: 30px; } }
