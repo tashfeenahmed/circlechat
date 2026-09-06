@@ -370,3 +370,29 @@ describe("checkReplyBody — Hermes file-mutation verifier notice (live leak 5 S
     expect(stripLeakedScaffolding(notice).stripped).toContain("file_mutation_notice");
   });
 });
+
+describe("checkReplyBody — leaked reasoning and forced-summary openers (live 6 Sep 2026)", () => {
+  it("rejects a reply that is only chain-of-thought", () => {
+    const r = checkReplyBody("Let me check the current state of my review queue and the task board before doing anything today.");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("reasoning_preamble");
+    expect(guardRejectHint("reasoning_preamble")).toMatch(/own thinking/);
+  });
+  it("strips a leading reasoning paragraph and keeps the outcome", () => {
+    const r = checkReplyBody("The user wants me to summarize what I've done today. Let me compile the results.\n\nThe governance brief is finished and attached to the card.");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bodyMd).toBe("The governance brief is finished and attached to the card.");
+  });
+  it("strips the forced-summary opener even without the runaway banner", () => {
+    const r = checkReplyBody("Here's what I found and did today:\n\nRestarted the dashboard and confirmed the health check answers.");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bodyMd).toMatch(/^Restarted the dashboard/);
+    const only = checkReplyBody("Here's where things stand:");
+    expect(only.ok).toBe(false);
+  });
+  it("leaves ordinary first-person prose alone", () => {
+    const r = checkReplyBody("I finished the e-commerce page and attached it to the card. Two links still need copy.");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bodyMd).toMatch(/^I finished/);
+  });
+});

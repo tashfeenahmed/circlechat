@@ -273,7 +273,25 @@ function scrubSecrets(s: string): string {
 const RUNAWAY_BANNER_RE =
   /(?:^|\n)[ \t]*⚠?\uFE0F?[ \t]*Reached maximum iterations(?:\s*\(\d+\))?\.?(?:[ \t]*Requesting (?:a )?summary(?:\.{1,3}|…)?)?[ \t]*(?:\n|$)/gi;
 const SUMMARY_LEADIN_RE =
-  /(?:^|\n)[ \t]*(?:\*\*)?(?:Here(?:'|’)s|Here is) (?:what|a (?:quick |brief )?summary of what) I(?:'ve| have)? (?:found|did|done|found and did|did and found)(?: (?:so far|this turn|in this turn))?[.:]?(?:\*\*)?[ \t]*(?:\n|$)/gi;
+  /(?:^|\n)[ \t]*(?:\*\*)?(?:Here(?:'|’)s|Here is) (?:what|a (?:quick |brief )?summary of what|where things stand|the (?:state|status)(?: of things)?)(?: I(?:'ve| have)? (?:found|did|done|accomplished|found and did|did and found))?(?: (?:so far|this turn|in this turn|today))?[.:]?(?:\*\*)?[ \t]*(?:\n|$)/gi;
+// Chain-of-thought that leaked into the reply: a leading paragraph that talks
+// about the model's own plan ("The user wants me to summarize what I've done
+// today. Let me compile the results.", "Let me check the board before posting
+// anything."). Strip leading paragraphs of that shape; if nothing else remains
+// the reply was never a message.
+const REASONING_PREAMBLE_RE =
+  /^[ \t]*(?:the user (?:wants|asked|is asking|has asked)|let me |i need to |i should |i(?:'|’)ll (?:now |start|begin|first)|okay,|alright,|first,? let me|now i(?:'|’)ll |let(?:'|’)s (?:check|verify|look|see|start))[^\n]*(?:\n(?![ \t]*\n)[^\n]*)*[ \t]*(?:\n[ \t]*\n|\n|$)/i;
+export function stripReasoningPreamble(s: string): { text: string; hit: boolean } {
+  let out = s;
+  let hit = false;
+  for (let i = 0; i < 4; i++) {
+    const next = out.replace(REASONING_PREAMBLE_RE, "");
+    if (next === out) break;
+    hit = true;
+    out = next.replace(/^\s+/, "");
+  }
+  return { text: out, hit };
+}
 // Hermes' tool-dispatcher failure notice, e.g.
 //   ⚠ Could not execute tool(s): "target": value "files\n@@ARG_END" not in enum […]
 // It's a paragraph (runs to the next blank line, may contain the quoted
@@ -384,7 +402,17 @@ export function stripLeakedScaffolding(s: string): ScaffoldStrip {
     stripped.push("gateway_boot");
     out = out.replace(GATEWAY_BOOT_LINE_RE, "\n").replace(GATEWAY_BOOT_INLINE_RE, " ").replace(BOX_ONLY_LINE_RE, "\n");
   }
-  if (stripped.includes("runaway_banner")) step(SUMMARY_LEADIN_RE, "summary_leadin");
+  // The forced end-of-turn summary opener is noise whether or not the runaway
+  // banner survived upstream stripping (the bridge now removes the banner, so
+  // the lead-in used to arrive alone — 134 live messages began with it).
+  step(SUMMARY_LEADIN_RE, "summary_leadin");
+  {
+    const rp = stripReasoningPreamble(out);
+    if (rp.hit) {
+      stripped.push("reasoning_preamble");
+      out = rp.text;
+    }
+  }
   const unsigned = stripSignOff(out);
   if (unsigned !== out.trim()) {
     stripped.push("signoff");
@@ -621,6 +649,10 @@ export function guardRejectHint(reason: string): string {
       return " Your reply carried the runtime's 'Could not execute tool(s)' notice / @@ARG parser debris — a tool call you emitted was malformed. That's diagnostics, not a message. Re-issue the tool call correctly (valid enum values, no stray delimiters) or emit the board action as an <actions> JSON block; only post prose that a teammate should read.";
     case "scaffold_talk":
       return " You addressed the prompt scaffolding ('CURRENT REQUEST', 'attached conversation history file') instead of the team. Nobody attached a file — the context you were given IS the conversation. Reply to the last human message in plain prose, or stay silent with HEARTBEAT_OK.";
+    case "reasoning_preamble":
+      return " Your reply was your own thinking ('The user wants me to…', 'Let me check…'), not a message. Do the checking silently, then post only the outcome a teammate needs — or HEARTBEAT_OK if nothing changed.";
+    case "summary_leadin":
+      return " Your reply was only a summary header ('Here's what I found and did today') with nothing under it. Post one concrete outcome, or HEARTBEAT_OK.";
     case "file_mutation_notice":
       return " Your reply was only the runtime's 'File-mutation verifier' notice — a write was denied. That is diagnostics for you, not a message. Fix the path (write under /opt/data) and post only the outcome a teammate needs.";
     case "gateway_boot":
