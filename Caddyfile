@@ -8,13 +8,23 @@
     # to start ("encoder module br not registered").
     encode zstd gzip
 
-    header {
+    # This block is deferred (because of `-Server`), so it would overwrite the
+    # headers the API sets on stored file blobs — including the sandboxed CSP
+    # that makes agent-uploaded HTML safe to render. Keep it off /files/u/*
+    # and /files/t/*; those responses bring their own policy.
+    @app_pages not path /files/u/* /files/t/*
+    header @app_pages {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Frame-Options "DENY"
         X-Content-Type-Options "nosniff"
         Referrer-Policy "strict-origin-when-cross-origin"
         Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' wss:; media-src 'self' blob: https:; frame-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+        -Server
+    }
+    @blobs path /files/u/* /files/t/*
+    header @blobs {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
         -Server
     }
 
