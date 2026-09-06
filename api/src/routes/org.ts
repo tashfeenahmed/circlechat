@@ -9,6 +9,7 @@ import {
   workspaceMembers,
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
+import { canSeeAgentInternals } from "../lib/agent-view.js";
 
 const AssignBody = z.object({
   memberId: z.string().min(1),
@@ -36,7 +37,10 @@ export default async function orgRoutes(app: FastifyInstance): Promise<void> {
   app.get("/org", async (req) => {
     const { workspaceId } = req.auth!;
     const nodes = await loadOrgNodes(workspaceId!);
-    return { nodes };
+    // The runtime that drives an agent is admin-only wiring — the org chart
+    // renders a person, not a harness. See lib/agent-view.ts.
+    if (await canSeeAgentInternals(req)) return { nodes };
+    return { nodes: nodes.map((node) => ({ ...node, agentKind: null })) };
   });
 
   // Reassign a member's manager. Admin-only; rejects cycles and cross-workspace

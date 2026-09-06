@@ -24,7 +24,7 @@ import Modal from "./Modal";
 import VerificationBadge from "./VerificationBadge";
 import { Popover } from "@base-ui/react/popover";
 import { useMentionPicker, resolveMentionIds } from "../lib/useMentionPicker";
-import { renderMarkdown } from "../lib/md";
+import { renderMarkdown, scrubIds } from "../lib/md";
 import { useBus } from "../state/store";
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -301,7 +301,7 @@ export default function TaskModal({
         <div className="task-modal-body tm-split">
           <div className="tm-main">
             {spectator ? (
-              <div className="tm-title">{t.title}</div>
+              <div className="tm-title">{scrubIds(t.title)}</div>
             ) : (
               <input
                 className="tm-title"
@@ -317,7 +317,7 @@ export default function TaskModal({
               />
             )}
             {spectator ? (
-              t.bodyMd ? <div className="tm-body whitespace-pre-wrap">{t.bodyMd}</div> : null
+              t.bodyMd ? <div className="tm-body whitespace-pre-wrap">{scrubIds(t.bodyMd)}</div> : null
             ) : (
               <textarea
                 className="tm-body"
@@ -601,7 +601,7 @@ export default function TaskModal({
                     already gets it, and a human deciding whether to override a
                     failed gate needs it just as much. Card view only has it on
                     hover; here there is room to print it. */}
-                {t.verification.rationale && (
+                {t.verification.rationale && !spectator && (
                   <div className="tm-verify-why">{t.verification.rationale}</div>
                 )}
               </div>

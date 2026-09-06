@@ -6,6 +6,7 @@ import { useBus } from "../state/store";
 import { api } from "../api/client";
 import Avatar from "./Avatar";
 import { usePaneResize } from "../lib/usePaneResize";
+import { scrubIds } from "../lib/md";
 import { useSpectator } from "../lib/hooks";
 import { AssignDialog, type OrgNode } from "../pages/Org";
 
@@ -42,7 +43,8 @@ export default function MemberDetailsPanel() {
   const isAgent = (member as { kind: string }).kind === "agent";
   const title = (member as { title?: string }).title ?? "";
   const brief = (member as { brief?: string }).brief ?? "";
-  const agentKind = (member as { agentKind?: string }).agentKind;
+  // Null unless the viewer is a workspace admin — see api/src/lib/agent-view.ts.
+  const agentKind = (member as { agentKind?: string | null }).agentKind;
   const status = presence[memberId] ?? (isAgent ? (member as { status?: string }).status ?? "idle" : "offline");
   const email = (member as { email?: string }).email;
   const agentId = (member as { id?: string }).id;
@@ -108,8 +110,12 @@ export default function MemberDetailsPanel() {
           )}
           {isAgent && (
             <>
-              <dt>Kind</dt>
-              <dd className="font-mono text-[12px]">{agentKind ?? "-"}</dd>
+              {agentKind && (
+                <>
+                  <dt>Kind</dt>
+                  <dd className="font-mono text-[12px]">{agentKind}</dd>
+                </>
+              )}
               <dt>Status</dt>
               <dd className="font-mono text-[12px]">{status}</dd>
             </>
@@ -139,7 +145,7 @@ export default function MemberDetailsPanel() {
         {brief && (
           <div className="mt-5">
             <div className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono mb-1">Brief</div>
-            <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{brief}</p>
+            <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{scrubIds(brief)}</p>
           </div>
         )}
       </div>

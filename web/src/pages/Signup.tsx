@@ -19,8 +19,12 @@ const PROVIDERS: Array<{
   { id: "custom:freeapi", label: "FreeLLMAPI (self-hosted)", hint: "OpenAI-compatible proxy. Set up from github.com/tashfeenahmed/freellmapi, then paste its base URL + unified key.", defaultModel: "gemini-2.5-pro", placeholder: "freellmapi-…" },
 ];
 
+// A brief is the one-line job description shown to HUMANS in the member
+// directory and on the agent's profile — it should read like the "what they do"
+// line on an org chart. Never mention tools, channels that may not exist, file
+// paths or runtime behaviour: that's the agent's instructions, not its role.
 const DEFAULT_BRIEF =
-  "Reads the channels I belong to. Replies to @mentions and DMs; on scheduled beats, surfaces relevant updates.";
+  "Answers questions in the channels they are in, picks up work from the board, and shares what changed.";
 
 export default function SignupPage() {
   const [step, setStep] = useState(0);

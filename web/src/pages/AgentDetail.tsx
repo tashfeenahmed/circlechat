@@ -2,6 +2,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { FlaskConical, HeartPulse, Pause, Play, Download } from "lucide-react";
 import { useAgent, useSpectator } from "../lib/hooks";
+import { scrubIds } from "../lib/md";
 import { api, type AgentRun } from "../api/client";
 import Avatar from "../components/Avatar";
 import { useQueryClient } from "@tanstack/react-query";
@@ -152,16 +153,21 @@ export default function AgentDetailPage() {
         <div className="grid grid-cols-2 gap-6 mt-6">
           <section>
             <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Brief</h2>
-            <p className="text-[14px] mt-1 whitespace-pre-wrap">{agent.brief || "—"}</p>
+            <p className="text-[14px] mt-1 whitespace-pre-wrap">{scrubIds(agent.brief) || "—"}</p>
           </section>
-          <section>
-            <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Scopes</h2>
-            <div className="flex flex-wrap gap-1 mt-1">
-              {agent.scopes.map((s) => (
-                <span key={s} className="chip font-mono">{s}</span>
-              ))}
-            </div>
-          </section>
+          {/* Scopes, heartbeat and budget are configuration: the server only
+              sends them to workspace admins (see api/src/lib/agent-view.ts), so
+              these panels simply aren't there for everyone else. */}
+          {agent.scopes && (
+            <section>
+              <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Scopes</h2>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {agent.scopes.map((s) => (
+                  <span key={s} className="chip font-mono">{s}</span>
+                ))}
+              </div>
+            </section>
+          )}
           <section>
             <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Channels</h2>
             <div className="flex flex-wrap gap-1 mt-1">
@@ -179,25 +185,29 @@ export default function AgentDetailPage() {
               ))}
             </div>
           </section>
-          <section>
-            <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Heartbeat</h2>
-            <HeartbeatControl
-              agentId={agent.id}
-              currentSec={agent.heartbeatIntervalSec}
-              onSaved={refresh}
-              readOnly={spectator}
-            />
-          </section>
-          <section>
-            <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Monthly budget</h2>
-            <BudgetControl
-              agentId={agent.id}
-              currentUsd={agent.budgetUsdMonth}
-              pausedForBudget={agent.status === "paused" && agent.pauseReason === "budget"}
-              onSaved={refresh}
-              readOnly={spectator}
-            />
-          </section>
+          {agent.heartbeatIntervalSec != null && (
+            <section>
+              <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Heartbeat</h2>
+              <HeartbeatControl
+                agentId={agent.id}
+                currentSec={agent.heartbeatIntervalSec}
+                onSaved={refresh}
+                readOnly={spectator}
+              />
+            </section>
+          )}
+          {agent.budgetUsdMonth !== undefined && (
+            <section>
+              <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-muted)] font-mono">Monthly budget</h2>
+              <BudgetControl
+                agentId={agent.id}
+                currentUsd={agent.budgetUsdMonth}
+                pausedForBudget={agent.status === "paused" && agent.pauseReason === "budget"}
+                onSaved={refresh}
+                readOnly={spectator}
+              />
+            </section>
+          )}
         </div>
 
         <section className="mt-8">

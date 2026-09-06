@@ -105,6 +105,9 @@ describe("bridge stripRuntimeNoise — file-mutation verifier notice", () => {
   it("drops the header and its bullets, keeps the reply", () => {
     const text = "Backend is live on port 3000.\n\n⚠️ File-mutation verifier: 1 file(s) were NOT modified this turn despite any wording above.\n  • `/workspace/tmp/x.py` — [write_file] Write denied: outside HERMES_WRITE_SAFE_ROOT (/opt/data). Unset the variable or add this path's directory prefix.";
     const out = bridge.stripRuntimeNoise(text);
-    expect(out).toBe("Backend is live on port 3000.");
+    // stripRuntimeNoise now also runs the prose rewrites (mirror of
+    // sanitizeAgentProse in api/src/agents/reply-guard.ts), so the dev port
+    // goes with the notice.
+    expect(out).toBe("Backend is live.");
   });
 });

@@ -14,7 +14,7 @@ import {
 } from "../db/schema.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation, publishToWorkspace } from "../lib/events.js";
-import { checkReplyBody, guardRejectHint } from "./reply-guard.js";
+import { checkReplyBody, guardRejectHint, sanitizeAgentProse } from "./reply-guard.js";
 import { checkRecentDuplicate, checkRecentDuplicateTaskComment } from "./dedupe.js";
 import {
   extractMentionHandles,
@@ -1068,12 +1068,25 @@ async function applyOne(
         .from(agents)
         .where(eq(agents.id, agentId))
         .limit(1);
+      // Project notes are read by humans in the files pane, so they get the
+      // same prose sanitizer as chat and card comments: container paths, dev
+      // ports and harness vocabulary rewritten, machinery blocks stripped.
+      // A note that is nothing but machinery is refused rather than filed.
+      const noteProse = a.note === undefined ? null : sanitizeAgentProse(String(a.note));
+      if (noteProse?.emptyReason) {
+        out.errors.push(
+          `project_note rejected: ${noteProse.emptyReason}.${guardRejectHint(noteProse.emptyReason)}`,
+        );
+        return;
+      }
+      const summaryProse =
+        a.summary === undefined ? null : sanitizeAgentProse(String(a.summary));
       const r = await writeProjectFile({
         project: a.project,
         file: a.file,
         mode: a.mode,
-        note: a.note,
-        summary: a.summary,
+        note: noteProse ? noteProse.text : a.note,
+        summary: summaryProse && summaryProse.text ? summaryProse.text : a.summary,
         triggers: a.triggers,
         actorHandle: self?.handle ?? "agent",
       });

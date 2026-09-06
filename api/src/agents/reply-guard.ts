@@ -393,6 +393,186 @@ export function stripLeakedScaffolding(s: string): ScaffoldStrip {
   return { text: out.replace(/\n{3,}/g, "\n\n").trim(), stripped };
 }
 
+// ───────────────────── sanitizeAgentProse ─────────────────────
+// The durable fix for "the workspace reads like an agent harness".
+//
+// Everything above rejects a body that IS machinery. This pass handles the far
+// more common case: real prose with machinery embedded in it — a container path
+// mid-sentence, a dev port, the harness's own vocabulary ("flip to done", "this
+// turn", "heartbeat", "auto-verifier", "share_to_task"), or a stray log line
+// glued to an otherwise fine paragraph. Rejecting those would throw away real
+// work; leaving them is what visitors were reading on the public demo.
+//
+// Two halves:
+//   (a) BLOCK detection — text that is only machinery is reported so the caller
+//       can reject it with a hint; the same blocks are stripped when they are
+//       mixed into real prose.
+//   (b) REWRITE — paths, ports and harness vocabulary become plain English.
+//
+// Code fences are never touched: an agent quoting a path inside ``` is showing
+// a command, and rewriting it would break the snippet.
+//
+// The bridge (api/hermes-multi-bridge.mjs) carries a minimal mirror of the
+// rewrite table in `applyProseRewrites()` so its own log/pointer path agrees
+// with what the server stores. Keep the two in step.
+
+// ── (a) machinery blocks ──
+// XML-ish tool-call scaffolding some models emit as plain text.
+// Paired blocks first (so the ARGUMENT TEXT inside them goes too — a stray
+// `x` left over from <parameter=path>x</parameter> is not a message), then the
+// unpaired tags a truncated generation leaves behind.
+const PROSE_TOOL_BLOCK_RE =
+  /<tool_call\b[^>]*>[\s\S]*?<\/tool_call>|<function=[^>\n]*>[\s\S]*?<\/function>|<parameter=[^>\n]*>[\s\S]*?<\/parameter>|<\/?tool_call\b[^>]*>|<function=[^>\n]*>|<\/?function\b[^>]*>|<parameter=[^>\n]*>|<\/?parameter\b[^>]*>/gi;
+// Gateway / runtime log lines that end up inside a reply.
+const PROSE_LOG_LINE_RE =
+  /(?:^|\n)[ \t]*(?:WARNING|WARN|ERROR|INFO|DEBUG)[ \t]+gateway\.[\w.]+[^\n]*/gi;
+const PROSE_INVALID_TOOL_CALL_RE = /(?:^|\n)[^\n]*Model generated invalid tool call[^\n]*/gi;
+const PROSE_OUTPUT_ERROR_RE = /(?:^|\n)[ \t]*\*{0,2}OUTPUT_ERROR\*{0,2}[^\n]*/gi;
+// HEARTBEAT_OK and its misspellings (HEARTBERAT_OK observed live). The strict
+// HEARTBEAT_RE above still rejects the canonical sentinel; this catches the
+// typo'd variants so they get stripped rather than posted.
+// Excludes the canonical HEARTBEAT / HEARTBEAT_OK: those are the silence
+// sentinel and are REJECTED outright by HEARTBEAT_RE above. Only the observed
+// misspellings (HEARTBERAT_OK, HEARBEAT_OK, HEARTBEAT_OK_OK) are stripped here.
+const PROSE_HEARTBEAT_VARIANT_RE = /\b(?!HEARTBEAT(?:_OK)?\b)HE[A-Z]*(?:BEAT|BERAT|BEART)[A-Z_]*\b/g;
+// Model-breakdown control tokens, e.g. `<｜DSML｜`, `<|im_start|>`. Full-width
+// pipes included — the DeepSeek-family tokens use U+FF5C.
+const PROSE_MODEL_TOKEN_RE = /<[｜|][^>\n]{0,40}(?:[｜|]>?|$)/g;
+// A "task-only mode" banner the runtime prints; never a message.
+const PROSE_TASK_ONLY_MODE_RE = /(?:^|\n)[^\n]*HERMES IS IN TASK-ONLY MODE[^\n]*/gi;
+
+// Every block pattern with the reject reason it implies when it is ALL there is.
+const PROSE_BLOCKS: Array<{ re: RegExp; reason: string }> = [
+  { re: PROSE_TOOL_BLOCK_RE, reason: "tool_call_markup" },
+  { re: PROSE_LOG_LINE_RE, reason: "runtime_log_line" },
+  { re: PROSE_INVALID_TOOL_CALL_RE, reason: "invalid_tool_call_notice" },
+  { re: PROSE_OUTPUT_ERROR_RE, reason: "output_error_notice" },
+  { re: PROSE_HEARTBEAT_VARIANT_RE, reason: "heartbeat_leaked" },
+  { re: PROSE_MODEL_TOKEN_RE, reason: "model_breakdown_token" },
+  { re: PROSE_TASK_ONLY_MODE_RE, reason: "task_only_mode_banner" },
+];
+
+// ── (b) rewrites ──
+// Absolute container paths → the bare filename in backticks. `/workspace` and
+// `/opt/data` are the agent's mounts; a teammate can't open either.
+const PROSE_PATH_RE = /(^|[\s("'[<])(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?/g;
+// Local endpoints and port mentions.
+const PROSE_LOCALHOST_RE =
+  /\b(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d{2,5})?(?:\/[\w./?=&%-]*)?/gi;
+const PROSE_ON_PORT_RE = /\s*\b(?:on|at|via)\s+port\s+\d{2,5}\b/gi;
+const PROSE_BARE_PORT_RE = /(^|[\s(])::?\d{2,5}\b/g;
+
+// Harness vocabulary → what a colleague would say. Ordered: the multi-word
+// phrases must run before the single words they contain.
+const PROSE_VOCAB: Array<[RegExp, string]> = [
+  [/\breview[ -]flips?\b/gi, "review"],
+  // Longest-first: "flipped it to done" must not be eaten by the bare "flipped"
+  // rule below, and each form keeps its own tense.
+  [/\bflipped\s+it\s+to\s+done\b/gi, "moved it to done"],
+  [/\bflipped\s+to\s+done\b/gi, "moved to done"],
+  [/\bflipping\s+it\s+to\s+done\b/gi, "moving it to done"],
+  [/\bflipping\s+to\s+done\b/gi, "moving to done"],
+  [/\bflips\s+it\s+to\s+done\b/gi, "moves it to done"],
+  [/\bflips\s+to\s+done\b/gi, "moves to done"],
+  [/\bflip\s+it\s+to\s+done\b/gi, "move it to done"],
+  [/\bflip\s+to\s+done\b/gi, "move to done"],
+  [/\bflipped\b/gi, "moved"],
+  [/\bflipping\b/gi, "moving"],
+  [/\bflips\b/gi, "moves"],
+  [/\bthis turn\b/gi, "today"],
+  [/\bauto-?verifiers?\b/gi, "automated check"],
+  [/\bverifiers?\b/gi, "automated check"],
+  [/\bheartbeats?\b/gi, "status check"],
+  [/\bshare_to_task\b/g, "attach to the card"],
+  [/\bproject_note\b/g, "the project notes"],
+  [/\btask_comment\b/g, "a card comment"],
+  [/\bHERMES_[A-Z0-9_]+\b/g, "the runtime"],
+];
+
+// Split on fenced code blocks so the rewrites never touch a snippet. Odd
+// indices of the returned array are fences (including their ``` markers).
+function splitFences(s: string): string[] {
+  return s.split(/(```[\s\S]*?```)/g);
+}
+function outsideFences(s: string, fn: (chunk: string) => string): string {
+  return splitFences(s)
+    .map((chunk, i) => (i % 2 === 1 ? chunk : fn(chunk)))
+    .join("");
+}
+
+// Pure: apply the path / port / vocabulary rewrites to one non-fenced chunk.
+// Exported for tests and mirrored by the bridge.
+export function applyProseRewrites(chunk: string): string {
+  let out = chunk;
+  out = out.replace(PROSE_PATH_RE, (m: string, pre: string, p: string) => {
+    // A path written with a trailing slash is a directory — there is no
+    // filename worth showing, so it goes entirely.
+    if (m.endsWith("/")) return pre;
+    const last = p.split("/").filter(Boolean).pop() ?? "";
+    const bare = last && last !== "workspace" && last !== "tmp" && last !== "data";
+    return bare ? `${pre}\`${last}\`` : pre;
+  });
+  out = out.replace(PROSE_LOCALHOST_RE, "the server");
+  out = out.replace(PROSE_ON_PORT_RE, "");
+  out = out.replace(PROSE_BARE_PORT_RE, "$1");
+  for (const [re, to] of PROSE_VOCAB) out = out.replace(re, to);
+  return out;
+}
+
+export interface ProseSanitize {
+  text: string;
+  // Block classes removed, in the order found.
+  stripped: string[];
+  // Set when nothing substantive survived — the caller should reject with this
+  // reason rather than store an empty body.
+  emptyReason?: string;
+}
+
+// A body with nothing left to say: no letters, or only a bolded section header
+// ("**Status Update:**") with no content under it.
+const HEADER_ONLY_RE =
+  /^[*_#\s]*(?:status\s+update|update|summary|progress|report|note|status)\s*[:\-—]?\s*[*_]*\s*$/i;
+function isSubstantive(s: string, strippedAnything: boolean): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (HEADER_ONLY_RE.test(t)) return false;
+  // A short ack ("+1", "👍") is a perfectly good message on its own — but the
+  // same residue left behind AFTER stripping a machinery block (the argument
+  // text out of a <parameter=…> tag, say) is not. Only demand real words when
+  // something was actually removed.
+  if (strippedAnything && !/[a-z]{3}/i.test(t)) return false;
+  return true;
+}
+
+export function sanitizeAgentProse(text: string): ProseSanitize {
+  const stripped: string[] = [];
+  let out = String(text ?? "");
+  // Strip machinery blocks OUTSIDE fences (a fenced example of a tool call is
+  // a teaching snippet, not a leak).
+  for (const { re, reason } of PROSE_BLOCKS) {
+    let hit = false;
+    out = outsideFences(out, (chunk) => {
+      re.lastIndex = 0;
+      if (!re.test(chunk)) return chunk;
+      hit = true;
+      re.lastIndex = 0;
+      return chunk.replace(re, "");
+    });
+    if (hit) stripped.push(reason);
+  }
+  out = outsideFences(out, applyProseRewrites);
+  out = out
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!isSubstantive(out, stripped.length > 0)) {
+    return { text: "", stripped, emptyReason: stripped[0] ?? "empty_body" };
+  }
+  return { text: out, stripped };
+}
+
 // Actionable guidance appended to the rejection error fed back to the agent
 // on its next turn. Only reasons where the fix isn't obvious from the name.
 export function guardRejectHint(reason: string): string {
@@ -445,6 +625,18 @@ export function guardRejectHint(reason: string): string {
       return " Your reply was only the runtime's 'File-mutation verifier' notice — a write was denied. That is diagnostics for you, not a message. Fix the path (write under /opt/data) and post only the outcome a teammate needs.";
     case "gateway_boot":
       return " Your reply was only the Hermes gateway's boot banner ('Hermes Gateway Starting…') — runtime output, not a message. Say the one new fact for the team, or stay silent with HEARTBEAT_OK.";
+    case "tool_call_markup":
+      return " Your reply contained raw tool-call markup (<tool_call>, <function=…>, <parameter=…>) instead of prose. Those tags are for the runtime, never for a channel. Put board actions in an <actions>[…]</actions> block and write the message itself in plain sentences.";
+    case "runtime_log_line":
+      return " Your reply was a runtime log line (\"WARNING gateway.run: …\"). That's operator diagnostics, not a message — never post it. Say the one concrete outcome, or stay silent with exactly HEARTBEAT_OK.";
+    case "invalid_tool_call_notice":
+      return " Your reply carried the runtime's \"Model generated invalid tool call\" notice — a tool call you emitted was malformed. Re-issue it correctly (or emit the board action as an <actions> JSON block); don't post the error.";
+    case "output_error_notice":
+      return " Your reply was an **OUTPUT_ERROR** notice. That's a runtime failure marker, not a message. Retry the work and report the outcome in plain prose.";
+    case "model_breakdown_token":
+      return " Your reply contained model control tokens (e.g. <｜…｜>) — the generation broke down. Re-read the last message and answer in plain English.";
+    case "task_only_mode_banner":
+      return " Your reply was the runtime's task-only-mode banner. That's internal state, not a message — post the work outcome on the card instead.";
     case "signoff_only":
       return " Your reply was only a signature/sign-off. Chat messages carry no sign-offs, no name/title lines, no hash footers — say the one new fact, then stop.";
     default:
@@ -466,6 +658,13 @@ export function checkReplyBody(
     const lead = stripped.find((r) => r !== "summary_leadin");
     return { ok: false, reason: lead === "signoff" ? "signoff_only" : lead || "empty_body" };
   }
+  // The prose pass strips embedded machinery blocks and rewrites container
+  // paths / dev ports / harness vocabulary into plain English. Its OUTPUT is
+  // what gets stored, but every rejection check below still runs against the
+  // PRE-rewrite text: the rewrites turn `task_comment` into "a card comment",
+  // which would otherwise disarm the tool-call / action-JSON detectors.
+  const prose = sanitizeAgentProse(scrubbed);
+  if (prose.emptyReason) return { ok: false, reason: prose.emptyReason };
   if (ARG_DEBRIS_RE.test(trimmed)) return { ok: false, reason: "tool_parse_debris" };
   if (SCAFFOLD_TALK_RE.test(trimmed)) return { ok: false, reason: "scaffold_talk" };
   if (HEARTBEAT_RE.test(trimmed)) return { ok: false, reason: "heartbeat_leaked" };
@@ -502,5 +701,5 @@ export function checkReplyBody(
   if (opts && opts.hasAttachments === false && ATTACHMENT_CLAIM_RE.test(trimmed)) {
     return { ok: false, reason: "attachment_claim_no_file" };
   }
-  return { ok: true, bodyMd: scrubbed };
+  return { ok: true, bodyMd: prose.text };
 }

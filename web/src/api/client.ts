@@ -133,7 +133,8 @@ export interface AgentMember {
   name: string;
   handle: string;
   avatarColor: string;
-  agentKind: string;
+  // Runtime kind ("hermes"/"openclaw") — admin-only; null for everyone else.
+  agentKind: string | null;
   status: string;
   title: string;
   brief: string;
@@ -142,27 +143,32 @@ export interface AgentMember {
 
 export type DirMember = HumanMember | AgentMember;
 
+// The server ships the full row to workspace admins only. Spectators and
+// ordinary members get the identity projection (see api/src/lib/agent-view.ts),
+// so every configuration field below is optional and must be rendered
+// defensively — never assume `agent.scopes` or `agent.configJson` is there.
 export interface AgentRow {
   id: string;
   handle: string;
   name: string;
   avatarColor: string;
-  kind: string;
-  adapter: "webhook" | "socket";
-  configJson: Record<string, unknown>;
-  model: string;
-  scopes: string[];
+  model?: string;
   status: string;
-  pauseReason: "manual" | "budget" | null;
   title: string;
   brief: string;
-  heartbeatIntervalSec: number;
-  budgetUsdMonth: number | null;
-  botToken: string;
-  callbackUrl: string | null;
-  createdBy: string;
-  createdAt: string;
   memberId?: string;
+  // ─── admin-only, absent for spectators and non-admin members ───
+  kind?: string;
+  adapter?: "webhook" | "socket";
+  configJson?: Record<string, unknown>;
+  scopes?: string[];
+  pauseReason?: "manual" | "budget" | null;
+  heartbeatIntervalSec?: number;
+  budgetUsdMonth?: number | null;
+  botToken?: string;
+  callbackUrl?: string | null;
+  createdBy?: string;
+  createdAt?: string;
 }
 
 export interface AgentRun {

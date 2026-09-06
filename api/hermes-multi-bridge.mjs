@@ -375,12 +375,105 @@ function stripFileMutationNotice(text) {
   return out.join("\n");
 }
 
-function stripRuntimeNoise(text) {
-  return stripFileMutationNotice(String(text || ""))
-    .replace(RUNAWAY_BANNER_RE, "\n")
-    .replace(TOOL_EXEC_FAIL_RE, "\n")
+// ───────── prose rewrites (mirror of api/src/agents/reply-guard.ts) ─────────
+// MINIMAL MIRROR of `applyProseRewrites` / the block table in
+// api/src/agents/reply-guard.ts (`sanitizeAgentProse`). The bridge can't import
+// the TypeScript module (it lives outside the api `rootDir` and ships as plain
+// ESM), so the tables are duplicated. Keep the two in step: the server is the
+// authority for what gets STORED, this copy keeps the bridge's own log line and
+// task-card pointer reading the same way.
+const PROSE_TOOL_BLOCK_RE =
+  /<tool_call\b[^>]*>[\s\S]*?<\/tool_call>|<function=[^>\n]*>[\s\S]*?<\/function>|<parameter=[^>\n]*>[\s\S]*?<\/parameter>|<\/?tool_call\b[^>]*>|<function=[^>\n]*>|<\/?function\b[^>]*>|<parameter=[^>\n]*>|<\/?parameter\b[^>]*>/gi;
+const PROSE_LOG_LINE_RE =
+  /(?:^|\n)[ \t]*(?:WARNING|WARN|ERROR|INFO|DEBUG)[ \t]+gateway\.[\w.]+[^\n]*/gi;
+const PROSE_INVALID_TOOL_CALL_RE = /(?:^|\n)[^\n]*Model generated invalid tool call[^\n]*/gi;
+const PROSE_OUTPUT_ERROR_RE = /(?:^|\n)[ \t]*\*{0,2}OUTPUT_ERROR\*{0,2}[^\n]*/gi;
+const PROSE_MODEL_TOKEN_RE = /<[｜|][^>\n]{0,40}(?:[｜|]>?|$)/g;
+const PROSE_TASK_ONLY_MODE_RE = /(?:^|\n)[^\n]*HERMES IS IN TASK-ONLY MODE[^\n]*/gi;
+const PROSE_PATH_RE = /(^|[\s("'[<])(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?/g;
+const PROSE_LOCALHOST_RE =
+  /\b(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d{2,5})?(?:\/[\w./?=&%-]*)?/gi;
+const PROSE_ON_PORT_RE = /\s*\b(?:on|at|via)\s+port\s+\d{2,5}\b/gi;
+const PROSE_BARE_PORT_RE = /(^|[\s(])::?\d{2,5}\b/g;
+const PROSE_VOCAB = [
+  [/\breview[ -]flips?\b/gi, "review"],
+  [/\bflipped\s+it\s+to\s+done\b/gi, "moved it to done"],
+  [/\bflipped\s+to\s+done\b/gi, "moved to done"],
+  [/\bflipping\s+it\s+to\s+done\b/gi, "moving it to done"],
+  [/\bflipping\s+to\s+done\b/gi, "moving to done"],
+  [/\bflips\s+it\s+to\s+done\b/gi, "moves it to done"],
+  [/\bflips\s+to\s+done\b/gi, "moves to done"],
+  [/\bflip\s+it\s+to\s+done\b/gi, "move it to done"],
+  [/\bflip\s+to\s+done\b/gi, "move to done"],
+  [/\bflipped\b/gi, "moved"],
+  [/\bflipping\b/gi, "moving"],
+  [/\bflips\b/gi, "moves"],
+  [/\bthis turn\b/gi, "today"],
+  [/\bauto-?verifiers?\b/gi, "automated check"],
+  [/\bverifiers?\b/gi, "automated check"],
+  [/\bheartbeats?\b/gi, "status check"],
+  [/\bshare_to_task\b/g, "attach to the card"],
+  [/\bproject_note\b/g, "the project notes"],
+  [/\btask_comment\b/g, "a card comment"],
+  [/\bHERMES_[A-Z0-9_]+\b/g, "the runtime"],
+];
+
+// Rewrite one chunk of NON-FENCED prose. Mirrors applyProseRewrites().
+function applyProseRewrites(chunk) {
+  let out = chunk;
+  out = out.replace(PROSE_PATH_RE, (m, pre, p) => {
+    if (m.endsWith("/")) return pre;
+    const last = p.split("/").filter(Boolean).pop() ?? "";
+    const bare = last && last !== "workspace" && last !== "tmp" && last !== "data";
+    return bare ? `${pre}\`${last}\`` : pre;
+  });
+  out = out.replace(PROSE_LOCALHOST_RE, "the server");
+  out = out.replace(PROSE_ON_PORT_RE, "");
+  out = out.replace(PROSE_BARE_PORT_RE, "$1");
+  for (const [re, to] of PROSE_VOCAB) out = out.replace(re, to);
+  return out;
+}
+
+// Apply `fn` only outside ``` fenced blocks — a snippet is a command, not prose.
+function outsideFences(text, fn) {
+  return String(text || "")
+    .split(/(```[\s\S]*?```)/g)
+    .map((chunk, i) => (i % 2 === 1 ? chunk : fn(chunk)))
+    .join("");
+}
+
+// Strip the machinery blocks and apply the rewrites. Mirrors the non-rejecting
+// half of sanitizeAgentProse().
+function sanitizeProse(text) {
+  let out = String(text || "");
+  for (const re of [
+    PROSE_TOOL_BLOCK_RE,
+    PROSE_LOG_LINE_RE,
+    PROSE_INVALID_TOOL_CALL_RE,
+    PROSE_OUTPUT_ERROR_RE,
+    PROSE_MODEL_TOKEN_RE,
+    PROSE_TASK_ONLY_MODE_RE,
+  ]) {
+    out = outsideFences(out, (chunk) => {
+      re.lastIndex = 0;
+      return chunk.replace(re, "");
+    });
+  }
+  out = outsideFences(out, applyProseRewrites);
+  return out
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/\(\s*\)/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function stripRuntimeNoise(text) {
+  return sanitizeProse(
+    stripFileMutationNotice(String(text || ""))
+      .replace(RUNAWAY_BANNER_RE, "\n")
+      .replace(TOOL_EXEC_FAIL_RE, "\n"),
+  );
 }
 
 // Cut `text` to at most `max` chars WITHOUT slicing mid-sentence: prefer the
@@ -1701,6 +1794,8 @@ export {
   canonicalActionType,
   extractReply,
   stripRuntimeNoise,
+  sanitizeProse,
+  applyProseRewrites,
   truncateAtBoundary,
   leadOf,
   isEntrypointNoise,
