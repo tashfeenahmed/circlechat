@@ -164,6 +164,26 @@ async function keyVisibleToPrincipal(
   return false;
 }
 
+// Response policy for every stored blob. `sandbox` (no tokens) is the load
+// bearing part: the document gets an opaque origin and no script execution, so
+// an agent-authored .html/.svg deliverable can be handed to the browser with
+// its real content-type and still not reach the workspace session. The rest is
+// what a static deliverable legitimately needs to LOOK right — its own inline
+// <style>, a Google Fonts stylesheet, data:/https: images — and nothing else:
+// no script-src, no connect-src, so the pages that poll a dead localhost
+// backend simply stay quiet instead of erroring.
+const BLOB_CSP = [
+  "sandbox",
+  "default-src 'none'",
+  "style-src 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src https://fonts.gstatic.com data:",
+  "img-src data: blob: https:",
+  "media-src data: blob: https:",
+  "frame-ancestors 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join("; ");
+
 // File serving: session cookie (web UI) OR agent bearer token (agent runtime).
 export async function fileServeRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireSessionOrAgent);
@@ -183,6 +203,25 @@ export async function fileServeRoutes(app: FastifyInstance): Promise<void> {
     reply.header("content-type", ct);
     reply.header("content-length", String(st.size));
     reply.header("cache-control", "private, max-age=60");
+    // Every blob here was written by an agent, so it is treated as untrusted
+    // markup no matter what its extension claims. The app-wide helmet policy is
+    // replaced with a much tighter one scoped to this response (see BLOB_CSP):
+    // the `sandbox` directive alone drops the document into an opaque origin
+    // with scripts, forms and plugins disabled, so serving a real text/html
+    // content-type can no longer lead to same-origin script execution against
+    // the session cookie. `nosniff` still pins the declared type.
+    //
+    // PDFs are the one exception: the sandbox flag set also disables plugin
+    // content, and Chrome's built-in PDF viewer is plugin content — a strict
+    // policy here would turn every PDF preview blank. A PDF cannot reach the
+    // page's origin anyway (it renders inside the viewer's own sandbox), so it
+    // keeps the app-wide helmet policy.
+    if (ct !== "application/pdf") reply.header("content-security-policy", BLOB_CSP);
+    reply.header("x-content-type-options", "nosniff");
+    // helmet's app-wide DENY would also block the in-app file viewer, which
+    // frames this exact same-origin URL. SAMEORIGIN (mirroring the CSP's
+    // frame-ancestors) still keeps other sites from embedding a deliverable.
+    reply.header("x-frame-options", "SAMEORIGIN");
     // Display in the browser rather than force-downloading. Without this,
     // navigating to e.g. a text/markdown URL pops a Save dialog. The web
     // viewer's explicit Download button uses the <a download> attribute, which
@@ -529,6 +568,12 @@ async function keyStillReferenced(key: string): Promise<boolean> {
 function guessContentType(key: string): string {
   const ext = key.toLowerCase().split(".").pop() ?? "";
   const map: Record<string, string> = {
+    // Agent deliverables are mostly web pages, and serving them as
+    // application/octet-stream meant "open in new tab" saved a file instead of
+    // showing the work. Safe to declare honestly because every response carries
+    // BLOB_CSP, whose `sandbox` directive stops the document executing script.
+    html: "text/html; charset=utf-8",
+    htm: "text/html; charset=utf-8",
     png: "image/png",
     jpg: "image/jpeg",
     jpeg: "image/jpeg",

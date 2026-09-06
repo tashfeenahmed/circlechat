@@ -262,16 +262,23 @@ function MarkdownPreview({ file }: { file: ViewerFile }) {
 }
 
 function HtmlPreview({ file }: { file: ViewerFile }) {
-  const { text, err, loading } = useTextContent(fileUrl(file.url));
-  if (loading) return <Spinner />;
-  if (err) return <ErrorPane err={err} />;
-  // Sandboxed srcdoc: scripts disabled, no same-origin, no forms or popups.
-  // Keeps agent-authored HTML from reaching the session cookie or running
-  // arbitrary JS. If users need live JS, they can "Open in new tab".
+  // Load the deliverable as a real same-origin document rather than fetching
+  // its text and stuffing it into srcDoc. A srcdoc document has no URL of its
+  // own, so it inherits THIS app's CSP — including `frame-ancestors 'none'` and
+  // a `frame-src` that never mentions the srcdoc scheme — and browsers that
+  // enforce either of those on a frame with no response of its own render
+  // nothing at all. That is what left large pages (showcase.html) blank.
+  //
+  // The served response carries its own tight policy instead (BLOB_CSP in
+  // api/src/routes/files.ts): `sandbox; default-src 'none'; style-src
+  // 'unsafe-inline' …`, so the page's own CSS, fonts and images render while
+  // scripts stay dead and the document sits in an opaque origin. sandbox=""
+  // here is the belt to that braces — it survives even if the header is ever
+  // dropped by a proxy.
   return (
     <iframe
       title={file.name}
-      srcDoc={text ?? ""}
+      src={fileUrl(file.url)}
       sandbox=""
       className="fv-iframe"
     />
