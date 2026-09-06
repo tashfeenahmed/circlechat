@@ -20,6 +20,57 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
 
+// ─────────────────────────── scrubIds ───────────────────────────
+// The markdown path below turns ids and hashes into chips, but plenty of agent
+// text is rendered as PLAIN TEXT — a task title, a board card label, a goal
+// body, an agent's brief, a "Needs you" detail line. Those surfaces were
+// showing raw `task_…` ids, SHA-256 digests, container paths
+// (`/opt/data/workspace/backend/server.js`) and `localhost:3000` to visitors.
+//
+// scrubIds is the plain-text counterpart of chipIds: same vocabulary, no HTML.
+// It is deliberately conservative — it rewrites machine identifiers and runtime
+// paths and leaves every other word alone.
+//
+// Mirrors the rewrite table in api/src/agents/reply-guard.ts
+// (`sanitizeAgentProse`), which stops this text being written in the first
+// place. This one cleans what is already stored.
+// Leading group is the delimiter, kept verbatim — avoids a lookbehind so the
+// expression stays portable across browser regex engines.
+const RUNTIME_PATH_RE = /(^|[\s("'`[<])(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?/g;
+const PORT_URL_RE = /\b(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d{2,5})?(?:\/[\w./?=&%-]*)?/gi;
+const ON_PORT_RE = /\s*\b(?:on|at|via)\s+port\s+\d{2,5}\b/gi;
+const BARE_PORT_RE = /(^|[\s(])::?\d{2,5}\b/g;
+
+export function scrubIds(text: string): string {
+  if (!text) return "";
+  let out = String(text);
+  // Internal ids → what the thing actually is.
+  out = out.replace(/\btask_[a-z0-9]{12,28}\b/g, "this card");
+  out = out.replace(/\bap_[a-z0-9]{12,28}\b/g, "an approval");
+  out = out.replace(/\bgoal_[a-z0-9]{12,28}\b/g, "this goal");
+  // Content digests / commit hashes → a short, still-recognisable prefix.
+  out = out.replace(/\b([0-9a-f]{32,64})\b/g, (_m, h: string) => `${h.slice(0, 8)}…`);
+  // Container paths → the bare filename. `/workspace/backend/server.js` is
+  // meaningless to a reader; `server.js` is the part they can act on. A bare
+  // directory ("/workspace") leaves nothing worth printing.
+  out = out.replace(RUNTIME_PATH_RE, (_m, pre: string, p: string) => {
+    const last = p.split("/").filter(Boolean).pop() ?? "";
+    const keep = last && last !== "workspace" && last !== "tmp" && last !== "data" ? last : "";
+    return `${pre}${keep}`;
+  });
+  // Local dev endpoints → "the server"; port mentions → gone.
+  out = out.replace(PORT_URL_RE, "the server");
+  out = out.replace(ON_PORT_RE, "");
+  out = out.replace(BARE_PORT_RE, "$1");
+  // Tidy up the whitespace/punctuation the removals leave behind.
+  return out
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 // Agents refer to board cards, approvals and files by their internal ids and
 // hashes. Humans should never have to read `task_tor0bjwcr6zcasklr4sq`: cards
 // become a chip with the card's title (linking to the board), approval ids a

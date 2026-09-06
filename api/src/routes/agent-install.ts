@@ -25,6 +25,7 @@ import {
 import { HERMES_RUNTIME, buildHermesCommand } from "../agents/hermes-runtime.js";
 import { buildOpenClawCommand } from "../agents/openclaw-runtime.js";
 import { equipOpenClawAgent } from "../agents/openclaw-equip.js";
+import { normalizeAgentBrief } from "../lib/agent-brief.js";
 
 // Where Hermes per-agent homes live and where the multi-bridge reads its
 // connection list. Both are overridable for dev.
@@ -260,7 +261,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       scopes: ["channels.read", "channels.reply", "tasks.write"],
       status: "provisioning",
       title: body.title ?? "",
-      brief: body.brief ?? "",
+      brief: normalizeAgentBrief(body.brief),
       botToken,
       heartbeatIntervalSec: body.heartbeatIntervalSec ?? 3600,
       callbackUrl: null,
@@ -487,7 +488,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       scopes: ["channels.read", "channels.reply", "tasks.write"],
       status: "provisioning",
       title: body.title ?? "",
-      brief: body.brief ?? "",
+      brief: normalizeAgentBrief(body.brief),
       botToken,
       heartbeatIntervalSec: body.heartbeatIntervalSec ?? 3600,
       callbackUrl: null,

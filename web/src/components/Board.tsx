@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Plus, MessageSquare, GitBranch, Link2, Calendar, Lock } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTasks, useMembersDirectory, useMe, useSpectator } from "../lib/hooks";
+import { scrubIds } from "../lib/md";
 import { api, type Task, type TaskStatus } from "../api/client";
 import Avatar from "./Avatar";
 import TaskModal from "./TaskModal";
@@ -280,7 +281,7 @@ export default function Board() {
                     onClick={() => openTask(c.id)}
                     title={c.id}
                   >
-                    <div className="kc-title">{c.title}</div>
+                    <div className="kc-title">{scrubIds(c.title)}</div>
                     {c.blockedBy && c.blockedBy.length > 0 && (
                       <div className="kc-blocked" title={`Blocked by ${c.blockedBy.length} unfinished task(s)`}>
                         <Lock size={10} strokeWidth={2.2} />

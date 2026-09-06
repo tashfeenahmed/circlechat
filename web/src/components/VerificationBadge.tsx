@@ -1,5 +1,6 @@
 import { ShieldCheck, ShieldAlert } from "lucide-react";
 import type { TaskVerification } from "../api/client";
+import { useSpectator } from "../lib/hooks";
 
 // The verification gate's verdict, rendered wherever a task is shown.
 //
@@ -18,6 +19,10 @@ interface Props {
 }
 
 export default function VerificationBadge({ verification, size = "card" }: Props) {
+  // The rationale is the judge's working notes — it quotes file paths, rubric
+  // wording and tool names. The verdict itself is public; the reasoning is not
+  // shown on the read-only demo.
+  const spectator = useSpectator();
   if (!verification) return null;
   const passed = verification.verdict === "pass";
   // Score is null for non-rubric methods (the deterministic render gate), so
@@ -26,7 +31,7 @@ export default function VerificationBadge({ verification, size = "card" }: Props
   const label = passed ? (score ? `Verified · ${score}` : "Verified") : "Verification failed";
   // The rationale is the judge's reason. On the card it's the only way to see
   // it (hover); the rail prints it below.
-  const title = verification.rationale
+  const title = verification.rationale && !spectator
     ? `${label} — ${verification.rationale}`
     : passed
       ? "Passed the verification gate"

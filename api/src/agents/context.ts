@@ -1,5 +1,6 @@
 import { and, eq, gt, inArray, desc, asc, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
+import { redactDeleted } from "../lib/deleted-rows.js";
 import {
   agents,
   members,
@@ -582,7 +583,10 @@ export async function buildContext(opts: {
         .from(messages)
         .where(and(eq(messages.parentId, rootId), isNull(messages.deletedAt)))
         .orderBy(asc(messages.ts));
-      const chain = [rootMsg, ...replies].filter(Boolean) as typeof replies;
+      // The thread ROOT is fetched by id, so (unlike the replies) a
+      // soft-deleted root would otherwise reach the agent's packet with its
+      // body intact. Redact instead of dropping — the thread shape matters.
+      const chain = [rootMsg, ...replies].filter(Boolean).map((m) => redactDeleted(m!)) as typeof replies;
       // Ensure every author is in the directory.
       const missing = chain
         .map((m) => m.memberId)

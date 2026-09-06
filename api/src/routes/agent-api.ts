@@ -32,6 +32,7 @@ import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
 import { notifyForMessage } from "../lib/notifications.js";
 import { checkReplyBody, guardRejectHint } from "../agents/reply-guard.js";
+import { redactDeleted } from "../lib/deleted-rows.js";
 import { checkRecentDuplicate } from "../agents/dedupe.js";
 import { sanitizeAttachments, applyActions, type AgentAction } from "../agents/executor.js";
 import {
@@ -125,7 +126,11 @@ function makeResolver(
   memberDir: Record<string, { handle: string; name: string; kind: string }>,
   rxMap: Map<string, Array<{ emoji: string; memberId: string; memberHandle: string }>>,
 ) {
-  return (m: typeof messages.$inferSelect) => ({
+  return (raw: typeof messages.$inferSelect) => {
+    // A soft-deleted message can still be reached (it's the root of a thread,
+    // or an older row whose body was never blanked) — never hand its text out.
+    const m = redactDeleted(raw);
+    return {
     id: m.id,
     conversationId: m.conversationId,
     memberId: m.memberId,
@@ -137,7 +142,8 @@ function makeResolver(
     ts: m.ts.toISOString(),
     reactions: rxMap.get(m.id) ?? [],
     attachments: m.attachmentsJson ?? [],
-  });
+    };
+  };
 }
 
 async function reactionsFor(

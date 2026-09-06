@@ -4,6 +4,7 @@ import { AlertTriangle, Check, ExternalLink, Inbox, RefreshCw, X } from "lucide-
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useSpectator } from "../lib/hooks";
+import { scrubIds } from "../lib/md";
 
 type Item = {
   id: string;
@@ -61,7 +62,7 @@ export default function NeedsYouPage() {
       {items.length === 0 && !query.isLoading && <div className="px-6 py-16 text-center text-[13px] text-[var(--color-muted)]">Nothing needs you. Approvals, reviews, failed verification, stalled work, budgets, app releases, and connector errors will collect here.</div>}
       <ul className="divide-y divide-[var(--color-hair)]">{items.map((item) => <li key={item.id} className="px-6 py-4 flex gap-4 items-start">
         <div className={`mt-0.5 w-8 h-8 rounded grid place-items-center ${item.priority === "critical" ? "bg-red-100 text-red-700" : item.priority === "high" ? "bg-amber-100 text-amber-800" : "bg-[var(--color-surface-2)]"}`}>{item.priority === "normal" ? <Inbox size={14} /> : <AlertTriangle size={14} />}</div>
-        <div className="min-w-0 flex-1"><div className="flex gap-2 items-center"><strong className="text-[14px]">{item.title}</strong><span className="tag">{item.kind.replaceAll("_", " ")}</span><span className="tag">{item.priority}</span></div><p className="mt-1 text-[12.5px] text-[var(--color-muted)]">{item.detail}</p><p className="mt-2 text-[10.5px] font-mono text-[var(--color-muted-2)]">{new Date(item.createdAt).toLocaleString()}</p></div>
+        <div className="min-w-0 flex-1"><div className="flex gap-2 items-center"><strong className="text-[14px]">{item.title}</strong><span className="tag">{item.kind.replaceAll("_", " ")}</span><span className="tag">{item.priority}</span></div><p className="mt-1 text-[12.5px] text-[var(--color-muted)]">{scrubIds(item.detail)}</p><p className="mt-2 text-[10.5px] font-mono text-[var(--color-muted-2)]">{new Date(item.createdAt).toLocaleString()}</p></div>
         <div className="flex gap-1 shrink-0">{item.actions.map((value) => value === "open" || value === "preview" ? <Link key={value} className="btn xs ghost" to={item.link}>{value === "preview" ? "Preview" : "Open"} <ExternalLink size={10} /></Link> : !spectator && <button key={value} className={`btn xs ${value === "approve" || value === "resume" ? "" : "ghost"}`} disabled={working === item.id} onClick={() => action(item, value)}>{value === "approve" || value === "resume" ? <Check size={10} /> : value === "deny" || value === "reject" || value === "cancel" ? <X size={10} /> : <RefreshCw size={10} />}{value.replace("_", " ")}</button>)}</div>
       </li>)}</ul>
     </div>

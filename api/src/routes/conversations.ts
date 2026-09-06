@@ -17,6 +17,7 @@ import {
 import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
 import { filterWorkspaceMemberIds } from "../lib/workspace-scope.js";
+import { canSeeAgentInternals } from "../lib/agent-view.js";
 
 function dmId(a: string, b: string): string {
   const sorted = [a, b].sort().join(":");
@@ -521,7 +522,14 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
     // must never see them. Null the field before it leaves the server so no
     // amount of client tampering can reveal a member's email on the fishbowl.
     const humans = req.spectator ? u.map((h) => ({ ...h, email: null })) : u;
-    return { humans, agents: a };
+    // `agentKind` is the runtime that drives the agent ("hermes"/"openclaw") —
+    // harness detail the directory printed next to every agent's name. Only an
+    // admin has any use for it; for everyone else it's jargon (and on the
+    // public demo, deployment detail). Null it rather than dropping the key so
+    // the row shape stays stable for the client.
+    const full = await canSeeAgentInternals(req);
+    const agentRows = full ? a : a.map((row) => ({ ...row, agentKind: null }));
+    return { humans, agents: agentRows };
   });
 
   // Presence snapshot for every member of the current workspace. Reads the

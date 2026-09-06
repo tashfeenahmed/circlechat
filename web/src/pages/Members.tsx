@@ -12,6 +12,12 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { useMembersDirectory, useConversations, useMe, useSpectator } from "../lib/hooks";
+import { scrubIds } from "../lib/md";
+
+// The brief is what a human reads in the member directory: a job description,
+// never tool names, channel names or paths.
+const DEFAULT_AGENT_BRIEF =
+  "Answers questions in the channels they are in, picks up work from the board, and shares what changed.";
 import { api } from "../api/client";
 import { humanizeError } from "../api/errors";
 import Avatar from "../components/Avatar";
@@ -210,13 +216,16 @@ export default function MembersPage() {
                       {(aa as { title?: string }).title && (
                         <span className="text-[12px] text-[var(--color-ink)]">· {(aa as { title?: string }).title}</span>
                       )}
+                      {/* The runtime kind is admin-only (the server nulls it
+                          for everyone else) — the directory is a people list,
+                          not a deployment inventory. */}
                       <span className="text-[11px] font-mono text-[var(--color-muted-2)]">
-                        · {aa.agentKind} · {aa.status}
+                        {aa.agentKind ? `· ${aa.agentKind} ` : ""}· {aa.status}
                       </span>
                     </div>
                     {aa.brief && (
                       <div className="text-[12.5px] text-[var(--color-muted)] mt-0.5 line-clamp-2 max-w-[640px]">
-                        {aa.brief}
+                        {scrubIds(aa.brief)}
                       </div>
                     )}
                   </div>
@@ -504,9 +513,9 @@ function InstallAgent({
   const [name, setName] = useState("CEO");
   const [handle, setHandle] = useState("ceo");
   const [title, setTitle] = useState("Chief Executive Officer");
-  const [brief, setBrief] = useState(
-    "Reads the channels I belong to. Replies to @mentions and DMs; on scheduled beats, surfaces relevant updates.",
-  );
+  // Job-description prose, not a description of the harness — see
+  // DEFAULT_BRIEF in Signup.tsx.
+  const [brief, setBrief] = useState(DEFAULT_AGENT_BRIEF);
   const [runtime, setRuntime] = useState<"hermes" | "openclaw">("hermes");
   const [providerId, setProviderId] = useState<(typeof PROVIDERS)[number]["id"]>("anthropic");
   const provider = PROVIDERS.find((p) => p.id === providerId)!;
@@ -811,9 +820,9 @@ function AttachAgent({
   const [adapter, setAdapter] = useState<"webhook" | "socket">("socket");
   const [name, setName] = useState("CEO");
   const [handle, setHandle] = useState("ceo");
-  const [brief, setBrief] = useState(
-    "Reads the channels I belong to. Replies to @mentions and DMs; on scheduled beats, surfaces relevant updates.",
-  );
+  // Job-description prose, not a description of the harness — see
+  // DEFAULT_BRIEF in Signup.tsx.
+  const [brief, setBrief] = useState(DEFAULT_AGENT_BRIEF);
   const [model, setModel] = useState("");
   const [callbackUrl, setCallbackUrl] = useState("");
   const [interval, setInterval] = useState(60);

@@ -4,6 +4,7 @@ import { Target, Plus, Wand2, ChevronRight, ChevronDown, FolderKanban } from "lu
 import { api, type Goal, type Task, type PlanResult } from "../api/client";
 import { humanizeError } from "../api/errors";
 import { useGoals, useTasks, useMembersDirectory, useSpectator } from "../lib/hooks";
+import { scrubIds } from "../lib/md";
 import Segmented from "../components/Segmented";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -254,7 +255,7 @@ export default function GoalsPage() {
                           Project
                         </span>
                       )}
-                      <span className="truncate min-w-0">{g.title}</span>
+                      <span className="truncate min-w-0">{scrubIds(g.title)}</span>
                     </div>
                     <div className="text-[12px] text-[var(--color-muted)] flex items-center gap-2 flex-wrap mt-0.5">
                       {parent && (
@@ -297,7 +298,7 @@ export default function GoalsPage() {
                   <div className="goal-expand-inner">
                   <div className="border-t border-[var(--color-border)] px-3 py-2">
                     {g.bodyMd && (
-                      <div className="text-[12px] text-[var(--color-muted)] mb-2 whitespace-pre-wrap">{g.bodyMd}</div>
+                      <div className="text-[12px] text-[var(--color-muted)] mb-2 whitespace-pre-wrap">{scrubIds(g.bodyMd)}</div>
                     )}
                     {gTasks.length === 0 ? (
                       <div className="text-[12px] text-[var(--color-muted)] py-1">

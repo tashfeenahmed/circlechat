@@ -16,6 +16,7 @@ import {
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { approvalExpiresAt, isCredentialAsk } from "../lib/approval-policy.js";
+import { SPECTATOR_VERIFICATION_DETAIL, stalledDetail } from "../lib/needs-you-copy.js";
 
 type ReviewItem = {
   id: string;
@@ -81,12 +82,18 @@ export default async function needsYouRoutes(app: FastifyInstance): Promise<void
     for (const task of reviewTasks) {
       const failed = latestFailed.get(task.id);
       if (failed) {
-        items.push({ id: `verification:${failed.verification.id}`, kind: "verification_failed", priority: "high", title: `Needs review: ${task.title}`, detail: `Verification failed — ${failed.verification.rationale || `score ${failed.verification.score ?? "n/a"}`}`, link: `/board?task=${task.id}`, targetId: task.id, createdAt: failed.verification.createdAt.toISOString(), actions: ["open"] });
+        // The judge's rationale is written for the reviewer agent: it quotes
+        // file paths, tool names and rubric wording. A logged-in reviewer needs
+        // it; the public read-only spectator gets a plain-English stand-in.
+        const detail = req.spectator
+          ? SPECTATOR_VERIFICATION_DETAIL
+          : `Verification failed — ${failed.verification.rationale || `score ${failed.verification.score ?? "n/a"}`}`;
+        items.push({ id: `verification:${failed.verification.id}`, kind: "verification_failed", priority: "high", title: `Needs review: ${task.title}`, detail, link: `/board?task=${task.id}`, targetId: task.id, createdAt: failed.verification.createdAt.toISOString(), actions: ["open"] });
       } else {
         items.push({ id: `task:${task.id}`, kind: "task_review", priority: "normal", title: `Needs review: ${task.title}`, detail: "The assignee marked this card ready. Open it to check the deliverable and move it to done.", link: `/board?task=${task.id}`, targetId: task.id, createdAt: task.updatedAt.toISOString(), actions: ["open"] });
       }
     }
-    for (const row of stalledGoals) items.push({ id: `goal:${row.ledger.goalId}`, kind: "stalled_goal", priority: row.ledger.stallCount >= 3 ? "critical" : "high", title: `Stalled goal: ${row.title}`, detail: `${row.ledger.stallCount} stalled assessment(s); ${row.ledger.replanCount} re-plan(s).`, link: "/goals", targetId: row.ledger.goalId, createdAt: row.ledger.updatedAt.toISOString(), actions: ["open"] });
+    for (const row of stalledGoals) items.push({ id: `goal:${row.ledger.goalId}`, kind: "stalled_goal", priority: row.ledger.stallCount >= 3 ? "critical" : "high", title: `Stalled goal: ${row.title}`, detail: stalledDetail(row.ledger.updatedAt), link: "/goals", targetId: row.ledger.goalId, createdAt: row.ledger.updatedAt.toISOString(), actions: ["open"] });
     for (const row of waits) items.push({ id: `workflow-wait:${row.run.id}`, kind: "workflow_wait", priority: "high", title: `${row.name} is waiting for you`, detail: `State ${row.run.currentStateId ?? "unknown"}`, link: "/automation", targetId: row.run.id, createdAt: row.run.updatedAt.toISOString(), actions: ["resume", "cancel", "steer"] });
     for (const row of failures) items.push({ id: `workflow-failed:${row.run.id}`, kind: "workflow_failed", priority: "high", title: `${row.name} failed`, detail: row.run.errorText ?? "Workflow failed without an error message.", link: "/automation", targetId: row.run.id, createdAt: row.run.updatedAt.toISOString(), actions: ["open"] });
     for (const connector of connectorErrors) items.push({ id: `connector:${connector.id}`, kind: "connector_error", priority: "high", title: `Connector error: ${connector.name}`, detail: connector.lastError ?? "Health check failed.", link: "/automation", targetId: connector.id, createdAt: connector.updatedAt.toISOString(), actions: ["recheck"] });

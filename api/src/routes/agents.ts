@@ -16,6 +16,8 @@ import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { scheduleAgentHeartbeat, cancelAgentHeartbeat, clearHeartbeatBackoff } from "../agents/scheduler.js";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { filterWorkspaceConversationIds } from "../lib/workspace-scope.js";
+import { canSeeAgentInternals, publicAgentView } from "../lib/agent-view.js";
+import { normalizeAgentBrief } from "../lib/agent-brief.js";
 
 const CreateBody = z.object({
   name: z.string().min(1).max(100),
@@ -103,13 +105,16 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
           )
       : [];
     const mmap = new Map(memberRows.map((m) => [m.refId, m.id]));
-    return {
-      agents: rows.map((a) => ({
-        ...a,
-        botToken: mask(a.botToken),
-        memberId: mmap.get(a.id),
-      })),
-    };
+    // Only an admin sees the wiring (runtime kind, adapter, config, scopes,
+    // token, callback, heartbeat, budget). Spectators and ordinary members get
+    // the identity projection — see lib/agent-view.ts.
+    const full = await canSeeAgentInternals(req);
+    const shaped = rows.map((a) => ({
+      ...a,
+      botToken: mask(a.botToken),
+      memberId: mmap.get(a.id),
+    }));
+    return { agents: full ? shaped : shaped.map(publicAgentView) };
   });
 
   app.post("/agents", { preHandler: requireWorkspace }, async (req, reply) => {
@@ -141,7 +146,7 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
       scopes,
       status: "provisioning",
       title: body.title ?? "",
-      brief: body.brief ?? "",
+      brief: normalizeAgentBrief(body.brief),
       botToken,
       heartbeatIntervalSec: body.heartbeatIntervalSec ?? 3600,
       callbackUrl: body.callbackUrl ?? null,
@@ -210,8 +215,10 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(agentRuns.agentId, aId))
       .orderBy(desc(agentRuns.startedAt))
       .limit(25);
+    const full = await canSeeAgentInternals(req);
+    const shaped = { ...a, botToken: mask(a.botToken), memberId: mem?.id };
     return {
-      agent: { ...a, botToken: mask(a.botToken), memberId: mem?.id },
+      agent: full ? shaped : publicAgentView(shaped),
       channels: channels.map((c) => c.conversation),
       recentRuns,
     };
@@ -506,7 +513,7 @@ async function createAgentFromSpec(
     scopes: spec.scopes ?? ["channels.read", "channels.reply", "tasks.write"],
     status: "provisioning",
     title: spec.title ?? "",
-    brief: spec.brief ?? "",
+    brief: normalizeAgentBrief(spec.brief),
     botToken,
     heartbeatIntervalSec: spec.heartbeatIntervalSec ?? 3600,
     callbackUrl: null,

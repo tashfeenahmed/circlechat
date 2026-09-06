@@ -23,10 +23,19 @@ interface AgentRow {
 export default function SkillsPage() {
   const dir = useMembersDirectory();
 
+  // The server only tells workspace admins which runtime drives an agent (see
+  // api/src/lib/agent-view.ts), and skill installs are admin-only anyway — so
+  // when every row comes back without an `agentKind` this viewer simply can't
+  // use this page. Distinguish that from "no Hermes agents exist" below.
+  const runtimeHidden = useMemo(() => {
+    const all = (dir.data?.agents ?? []) as DirMember[];
+    return all.length > 0 && all.every((a) => !(a as { agentKind?: string | null }).agentKind);
+  }, [dir.data]);
+
   const agents = useMemo<AgentRow[]>(() => {
     const all = (dir.data?.agents ?? []) as DirMember[];
     return all
-      .filter((a) => (a as { agentKind?: string }).agentKind === "hermes")
+      .filter((a) => (a as { agentKind?: string | null }).agentKind === "hermes")
       .map((a) => {
         const aa = a as {
           id: string;
@@ -70,7 +79,9 @@ export default function SkillsPage() {
         )}
         {!dir.isLoading && agents.length === 0 && (
           <div className="p-8 text-[13px] text-[var(--color-muted)]">
-            No Hermes agents in this workspace yet.
+            {runtimeHidden
+              ? "Skills are managed by workspace admins."
+              : "No Hermes agents in this workspace yet."}
           </div>
         )}
         <div className="max-w-[960px] mx-auto py-6 px-6 space-y-6">
