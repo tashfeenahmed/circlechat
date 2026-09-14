@@ -6,6 +6,7 @@ import { loadOrgNodes } from "../routes/org.js";
 import { chatJson, plannerEnabled } from "./completion.js";
 import { createTask, addLink, startBacklogTask, logActivity } from "./tasks-core.js";
 import { writePlan, loadLedger } from "./ledger-core.js";
+import { setGoalStatus } from "./goal-status.js";
 import { listAgentSkills, type AgentSkill } from "./agent-skills-fs.js";
 import { embed, cosine, embeddingsEnabled } from "./embeddings.js";
 import { envInt } from "./env.js";
@@ -352,7 +353,9 @@ export async function planGoal(params: {
     );
   }
 
-  await db.update(goals).set({ status: "planning", updatedAt: new Date() }).where(eq(goals.id, goalId));
+  // Every goal status write goes through setGoalStatus (audit trail + one
+  // board frame); see lib/goal-status.ts.
+  await setGoalStatus({ goalId, workspaceId, to: "planning", actorMemberId, reason: "plan_started" });
 
   const raw = await chatJson<unknown>(
     buildMessages(goal.title, goal.bodyMd, ws?.mission ?? "", roster, replanNote),
@@ -372,16 +375,16 @@ export async function planGoal(params: {
               .map((i) => `${i.path.join(".")}: ${i.message}`)
               .join("; ")} — raw: ${JSON.stringify(raw).slice(0, 300)}`),
     );
-    await db.update(goals).set({ status: "open", updatedAt: new Date() }).where(eq(goals.id, goalId));
+    await setGoalStatus({ goalId, workspaceId, to: "open", actorMemberId, reason: "plan_failed", meta: { error: "plan_generation_failed" } });
     return { error: "plan_generation_failed" };
   }
   const planned = parsed.data.tasks;
   if (!planned.length) {
-    await db.update(goals).set({ status: "open", updatedAt: new Date() }).where(eq(goals.id, goalId));
+    await setGoalStatus({ goalId, workspaceId, to: "open", actorMemberId, reason: "plan_failed", meta: { error: "empty_plan" } });
     return { error: "empty_plan" };
   }
   if (hasCycle(planned)) {
-    await db.update(goals).set({ status: "open", updatedAt: new Date() }).where(eq(goals.id, goalId));
+    await setGoalStatus({ goalId, workspaceId, to: "open", actorMemberId, reason: "plan_failed", meta: { error: "cyclic_plan" } });
     return { error: "cyclic_plan" };
   }
 
@@ -484,7 +487,7 @@ export async function planGoal(params: {
     rootCount++;
   }
 
-  await db.update(goals).set({ status: "in_progress", updatedAt: new Date() }).where(eq(goals.id, goalId));
+  await setGoalStatus({ goalId, workspaceId, to: "in_progress", actorMemberId, reason: "planned", meta: { tasks: created.length } });
 
   // Externalize the plan into the goal ledger so every agent wake reads it
   // (via the context packet) instead of reconstructing intent from chat. On a

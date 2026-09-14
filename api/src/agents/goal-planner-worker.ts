@@ -10,10 +10,10 @@ import { bumpStall, assessProgress, writeProgressAssessment } from "../lib/ledge
 import { notify } from "../lib/notifications.js";
 import { runProductivityReview } from "../lib/productivity.js";
 import { reapStuckRuns } from "../lib/run-reaper.js";
-import { expireStaleApprovals } from "../lib/approval-policy.js";
+import { backfillApprovalDeadEnds, expireStaleApprovals } from "../lib/approval-policy.js";
 import { runMemoryJanitor } from "../lib/memory-janitor.js";
 import { GOAL_PARK_AFTER_MS, shouldParkGoal } from "../lib/goals-core.js";
-import { publishToWorkspace } from "../lib/events.js";
+import { goalParkedBody, setGoalStatus } from "../lib/goal-status.js";
 import { RETENTION_INTERVAL_MS, runRetentionSweep, shouldRunNow } from "../lib/retention.js";
 import { envInt, envNum } from "../lib/env.js";
 
@@ -81,11 +81,24 @@ async function handlePlan(goalId: string): Promise<void> {
 }
 
 async function handleSweep(): Promise<void> {
-  // 1. Un-stick goals whose planning crashed mid-flight.
-  await db
-    .update(goals)
-    .set({ status: "open", updatedAt: new Date() })
-    .where(and(eq(goals.status, "planning"), lt(goals.updatedAt, new Date(Date.now() - STUCK_PLANNING_MS))));
+  // 1. Un-stick goals whose planning crashed mid-flight. One row at a time
+  //    through setGoalStatus so the recovery lands in the audit trail — a bulk
+  //    UPDATE moved goals with nothing to show for it.
+  const stuckPlanning = await db
+    .select({ id: goals.id, workspaceId: goals.workspaceId })
+    .from(goals)
+    .where(and(eq(goals.status, "planning"), lt(goals.updatedAt, new Date(Date.now() - STUCK_PLANNING_MS))))
+    .limit(SWEEP_BATCH);
+  for (const g of stuckPlanning) {
+    await setGoalStatus({
+      goalId: g.id,
+      workspaceId: g.workspaceId,
+      to: "open",
+      actorMemberId: null,
+      reason: "plan_recovered",
+      meta: { stuckForMs: STUCK_PLANNING_MS },
+    }).catch(() => ({ changed: false }));
+  }
 
   // 2. Find open, under-attempt goals in auto workspaces; enqueue any with no
   //    tasks yet. Bounded per tick as a coarse rate limit.
@@ -196,7 +209,22 @@ async function handleGoalParking(): Promise<void> {
     if (!shouldParkGoal({ status: r.status, lastTaskMovementAt, updatedAt: r.updatedAt }, now, GOAL_PARK_AFTER_MS)) {
       continue;
     }
-    await db.update(goals).set({ status: "parked", updatedAt: new Date() }).where(eq(goals.id, r.id));
+    const lastMovedAt = lastTaskMovementAt ?? r.updatedAt ?? null;
+    // Every status write goes through setGoalStatus: it claims the row, writes
+    // the audit event (actor_type "system" — the sweep, not a person), and
+    // publishes the board frame. A lost race parks nothing and notifies nobody.
+    const moved = await setGoalStatus({
+      goalId: r.id,
+      workspaceId: r.workspaceId,
+      to: "parked",
+      actorMemberId: null,
+      reason: "park",
+      meta: {
+        parkAfterMs: GOAL_PARK_AFTER_MS,
+        lastMovementAt: lastMovedAt ? lastMovedAt.toISOString() : null,
+      },
+    }).catch(() => ({ changed: false }));
+    if (!moved.changed) continue;
     // Stop the ledger counters from firing the instant it is resumed.
     await db
       .update(goalLedgers)
@@ -204,14 +232,13 @@ async function handleGoalParking(): Promise<void> {
       .where(eq(goalLedgers.goalId, r.id))
       .catch(() => {});
     parked++;
-    const days = Math.round(GOAL_PARK_AFTER_MS / 86_400_000);
     if (r.ownerMemberId) {
       await notify({
         workspaceId: r.workspaceId,
         memberId: r.ownerMemberId,
         kind: "system",
         title: "A goal was parked after no progress",
-        body: `${r.title} — nothing on it has moved in ${days}+ days, so it has been parked and the team has stopped working on it. Resume it from Goals when it matters again.`,
+        body: goalParkedBody(r.title, lastMovedAt, now),
         link: `/goals`,
         // Parking is a one-shot event, but the sweep can retry after a failed
         // write; key it per goal so a retry can never double-notify.
@@ -219,12 +246,6 @@ async function handleGoalParking(): Promise<void> {
         dedupeWindowMs: 30 * 24 * 60 * 60 * 1000,
       }).catch(() => {});
     }
-    await publishToWorkspace(r.workspaceId, {
-      type: "goal.updated",
-      workspaceId: r.workspaceId,
-      goalId: r.id,
-      status: "parked",
-    }).catch(() => {});
   }
   if (parked) console.log(`[goal-planner] parked ${parked} goal(s) with no task movement`);
 }
@@ -420,6 +441,12 @@ export function startGoalPlanWorker(): Worker<GoalPlanJob> {
   );
   w.on("error", (e) => console.error("[goal-planner] error", e));
   w.on("failed", (job, err) => console.error("[goal-planner] job failed", job?.id, err?.message));
+  // One-off, idempotent: give every already-closed approval the goal-ledger
+  // dead-end note it predates. Off the boot path — it must never delay or
+  // fail the worker coming up.
+  backfillApprovalDeadEnds().catch((e) =>
+    console.error("[goal-planner] approval dead-end backfill failed", (e as Error).message),
+  );
   console.log("[goal-planner] worker up, concurrency=3");
   return w;
 }

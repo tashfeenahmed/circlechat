@@ -329,6 +329,59 @@ export async function clearApprovalFromGoalState(
   return goalIds;
 }
 
+// ───────────────── one-off dead-end backfill ─────────────────
+
+// Every approval that was closed BEFORE clearApprovalFromGoalState shipped left
+// its goals' ledgers untouched: on live, `tried_dead_ends` is `[]` on every
+// single goal ledger, because nothing has expired since the fix deployed. The
+// agents therefore still read a brief that calls a dead card a live blocker.
+// This walks the already-closed cards once per process and records the note
+// they never got. Cheap (one bounded query, then the same per-approval work the
+// sweep already does) and idempotent at two levels: it runs once per process,
+// and appendDeadEnd refuses to write a note a ledger already carries — so a
+// restart loop cannot duplicate anything.
+const DEAD_END_BACKFILL_LIMIT = Number(process.env.APPROVAL_DEAD_END_BACKFILL_LIMIT ?? 200);
+let deadEndBackfillRan = false;
+
+/** Pure: which outcome note does a closed approval get? */
+export function backfillOutcomeFor(status: string): "expired" | "denied" | null {
+  return status === "expired" || status === "denied" ? status : null;
+}
+
+export async function backfillApprovalDeadEnds(limit: number = DEAD_END_BACKFILL_LIMIT): Promise<number> {
+  if (deadEndBackfillRan) return 0;
+  deadEndBackfillRan = true;
+  if (limit <= 0) return 0;
+  const rows = await db
+    .select({
+      id: approvals.id,
+      status: approvals.status,
+      scope: approvals.scope,
+      workspaceId: agents.workspaceId,
+    })
+    .from(approvals)
+    .innerJoin(agents, eq(agents.id, approvals.agentId))
+    .where(or(eq(approvals.status, "expired"), eq(approvals.status, "denied")))
+    .orderBy(sql`${approvals.decidedAt} desc nulls last`)
+    .limit(limit)
+    .catch(() => [] as Array<{ id: string; status: string; scope: string; workspaceId: string }>);
+  let goalsTouched = 0;
+  for (const ap of rows) {
+    const outcome = backfillOutcomeFor(ap.status);
+    if (!outcome) continue;
+    const goalIds = await clearApprovalFromGoalState(ap.id, ap.workspaceId, ap.scope, outcome).catch(
+      () => [] as string[],
+    );
+    goalsTouched += goalIds.length;
+  }
+  if (rows.length) {
+    console.log(
+      `[approvals] dead-end backfill: ${rows.length} closed approval(s) scanned, ${goalsTouched} goal ledger(s) touched`,
+    );
+  }
+  return goalsTouched;
+}
+
 let lastSweepHeartbeat = 0;
 
 // Mark stale pending approvals expired, wake their agents, release blocked

@@ -14,6 +14,7 @@ import {
 } from "../db/schema.js";
 import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
+import { setGoalStatus } from "./goal-status.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { notify } from "./notifications.js";
 import { liveArtifactRows, isSubstantiveArtifact, purgeArtifactsForTasks } from "./task-artifacts.js";
@@ -767,8 +768,19 @@ async function tryCloseGoal(
   const childGoalsDone = activeChildGoals.every((c) => c.status === "done");
   if (!tasksDone || !childGoalsDone) return;
 
-  await db.update(goals).set({ status: "done", updatedAt: new Date() }).where(eq(goals.id, goalId));
-  await publishToWorkspace(workspaceId, { type: "goal.updated", workspaceId, goalId, status: "done" });
+  // Through the one goal-status writer: this roll-up used to set `done` with a
+  // bare UPDATE, so a goal tree could complete itself with nothing in
+  // audit_events. It publishes the board frame too, and returns false if
+  // someone moved the goal first — in which case there is nothing to announce.
+  const closed = await setGoalStatus({
+    goalId,
+    workspaceId,
+    to: "done",
+    actorMemberId,
+    reason: "complete",
+    meta: { tasks: directTasks.length, childGoals: activeChildGoals.length, viaTaskId: trigger.taskId },
+  });
+  if (!closed.changed) return;
 
   if (g.ownerMemberId) {
     // Wake the owner agent so it can synthesize/report on the finished tree,

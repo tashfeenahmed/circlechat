@@ -4,12 +4,14 @@ import {
   deliverableSetKey,
   expectedKinds,
   isAncillaryName,
+  looksLikePaperworkText,
+  paperworkAskedFor,
   scoreDeliverables,
   selectDeliverables,
   MIN_PRIMARY_BYTES,
   type DeliverableCandidate,
 } from "../lib/deliverable-select.js";
-import { renderDeliverableSet } from "../lib/task-verifier.js";
+import { renderDeliverableSet, renderPaperworkNotice, PAPERWORK_PROMPT_LINE } from "../lib/task-verifier.js";
 import { isShrinkingReplacement } from "../lib/task-artifacts.js";
 
 // Which artifact IS the deliverable? The verifier used to take the last one
@@ -264,5 +266,177 @@ describe("isShrinkingReplacement", () => {
     expect(isShrinkingReplacement(189, 500)).toBe(false);
     expect(isShrinkingReplacement(MIN_PRIMARY_BYTES, 13915)).toBe(false);
     expect(isShrinkingReplacement(20000, 13915)).toBe(false);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The paperwork regression: live task_9533y8685y7zginrepvk ("Deploy and Verify
+// the Live Dashboard", verdict tver_obtdsulpx3gt2klm6i3k). The judge was shown
+// dashboard.html AND three of the agent's own verification write-ups, and its
+// PASS rationale leaned on them: "The reports confirm the resolution of SHA-256
+// self-verification failures, the presence and 200 OK status of all 27 required
+// backend endpoints". The brief's own vocabulary ("Verify", "Re-verification
+// complete", "verified") had forgiven every paperwork token in those names.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LIVE_TITLE = "Deploy and Verify the Live Dashboard";
+const LIVE_BODY =
+  "Taking over stale deploy/verify card. Independent check found: SHA-256 self-verification failures on " +
+  "dashboard.html and page-customizer-demo.html (footer hash did not match body hash). /generate and /analytics " +
+  "endpoints missing from backend — both implemented and verified 200 OK. Re-verification complete 2026-09-13: " +
+  "root cause was a stale server snapshot from /opt/data/workspace/backend (no dashboard/ dir — 404). Restarted " +
+  "from /workspace/backend. 27/27 endpoints 200, SSE text/event-stream confirmed, 4/4 footer hashes MATCH. " +
+  "Deploy still blocked on VERCEL_TOKEN.";
+
+// Exactly the rows in task_artifacts for that task (collapsed to live versions).
+const liveRows = (): DeliverableCandidate[] => [
+  art({ name: "verify-dashboard-2026-09-13.md", contentType: "text/markdown", size: 1325 }),
+  art({ name: "backend-full-verification-2026-09-13.md", size: 3046 }),
+  art({ name: "dashboard-re-verification-2026-09-13.md", size: 896 }),
+  art({ name: "dashboard-final-verification-2026-09-13.md", size: 1495 }),
+  art({ name: "dashboard.html", contentType: "text/html", size: 13915, version: 5 }),
+];
+
+describe("paperworkAskedFor", () => {
+  it("does not treat the brief merely USING the vocabulary as a request for it", () => {
+    // This is the live bug in one assertion.
+    const asked = paperworkAskedFor(LIVE_TITLE, LIVE_BODY);
+    expect(asked.has("verify")).toBe(false);
+    expect(asked.has("verification")).toBe(false);
+    expect(asked.has("verified")).toBe(false);
+  });
+
+  it("forgives paperwork the brief actually asks for as a deliverable", () => {
+    expect(paperworkAskedFor("Write a competitor research report", "")).toContain("report");
+    expect(paperworkAskedFor("Q3 finance", "Produce an audit of the ledger")).toContain("audit");
+    expect(paperworkAskedFor("Release 2.1", "Deliver a migration checklist for the team")).toContain("checklist");
+  });
+
+  it("does not reach across a sentence boundary", () => {
+    expect(paperworkAskedFor("", "Write the dashboard. The audit is someone else's problem.")).not.toContain("audit");
+  });
+});
+
+describe("isAncillaryName — broadened, extension-gated", () => {
+  const none = new Set<string>();
+
+  it("flags every paperwork name that was on the live card", () => {
+    for (const n of [
+      "verify-dashboard-2026-09-13.md",
+      "backend-full-verification-2026-09-13.md",
+      "dashboard-re-verification-2026-09-13.md",
+      "dashboard-final-verification-2026-09-13.md",
+    ]) {
+      expect(isAncillaryName(n, none)).toBe(true);
+    }
+  });
+
+  it("flags the other shapes agents attach", () => {
+    expect(isAncillaryName("deployment-checklist.md", none)).toBe(true);
+    expect(isAncillaryName("evidence-of-completion.txt", none)).toBe(true);
+    expect(isAncillaryName("manifest.json", none)).toBe(true);
+    expect(isAncillaryName("CHECKSUMS", none)).toBe(true);
+    expect(isAncillaryName("status-2026-09-13.md", none)).toBe(true);
+  });
+
+  it("never flags the work itself, however it is named", () => {
+    // The extension gate: a report ABOUT the work is prose, never the artifact.
+    expect(isAncillaryName("final-status-dashboard.html", none)).toBe(false);
+    expect(isAncillaryName("audit-tool.ts", none)).toBe(false);
+    expect(isAncillaryName("verification-widget.tsx", none)).toBe(false);
+    expect(isAncillaryName("dashboard.html", none)).toBe(false);
+  });
+});
+
+describe("looksLikePaperworkText", () => {
+  it("catches a body that is mostly hashes, checkmarks and 200 OKs", () => {
+    const body = [
+      "# Backend verification 2026-09-13",
+      "GET /api/generate — 200 OK",
+      "GET /api/analytics — 200 OK",
+      "27/27 endpoints returned 200",
+      "dashboard.html sha256 3b1f0c7ad4e5b6981223aa4455661f0e9a7c8d2e3f405162738495a6b7c8d9e0 MATCH",
+      "4/4 footer hashes MATCH",
+      "✅ SSE text/event-stream confirmed",
+      "✅ All checks verified",
+    ].join("\n");
+    expect(looksLikePaperworkText(body)).toBe(true);
+  });
+
+  it("leaves real prose and real work alone", () => {
+    const research = [
+      "# Competitor pricing",
+      "Acme charges $29 per seat per month, billed annually, with a 14-day trial.",
+      "Globex bundles the same features into a flat $199 team plan and does not meter seats.",
+      "The gap matters most below ten seats, where Acme is cheaper and Globex is not.",
+      "Recommendation: price at $19 per seat and cap the team plan at $149.",
+    ].join("\n");
+    expect(looksLikePaperworkText(research)).toBe(false);
+    expect(looksLikePaperworkText("<html><body><h1>Dashboard</h1><div id=app></div></body></html>")).toBe(false);
+  });
+
+  it("never decides on a file too short to have a majority", () => {
+    expect(looksLikePaperworkText("200 OK\n200 OK")).toBe(false);
+    expect(looksLikePaperworkText("")).toBe(false);
+  });
+});
+
+describe("selectDeliverables — live task_9533y8685y7zginrepvk", () => {
+  it("judges dashboard.html alone and excludes all four verification write-ups", () => {
+    const sel = selectDeliverables(liveRows(), LIVE_TITLE, LIVE_BODY);
+    expect(sel.primary?.name).toBe("dashboard.html");
+    expect(sel.set.map((r) => r.name)).toEqual(["dashboard.html"]);
+    expect(sel.paperwork.map((r) => r.name).sort()).toEqual([
+      "backend-full-verification-2026-09-13.md",
+      "dashboard-final-verification-2026-09-13.md",
+      "dashboard-re-verification-2026-09-13.md",
+      "verify-dashboard-2026-09-13.md",
+    ]);
+  });
+
+  it("still judges the paperwork when it is ALL there is", () => {
+    const only = liveRows().filter((r) => r.name.endsWith(".md"));
+    const sel = selectDeliverables(only, LIVE_TITLE, LIVE_BODY);
+    expect(sel.primary).not.toBeNull();
+    expect(sel.paperwork).toEqual([]);
+  });
+
+  it("a report the brief ASKED for is a deliverable, not paperwork", () => {
+    const rows = [
+      art({ name: "competitor-research-report.md", size: 14000 }),
+      art({ name: "verification-notes.md", size: 9000 }),
+    ];
+    const sel = selectDeliverables(rows, "Write a competitor research report", "Cover pricing and positioning.");
+    expect(sel.primary?.name).toBe("competitor-research-report.md");
+    expect(sel.paperwork.map((r) => r.name)).toEqual(["verification-notes.md"]);
+  });
+});
+
+describe("renderPaperworkNotice", () => {
+  it("names the withheld files and tells the judge they are not evidence", () => {
+    const notice = renderPaperworkNotice([
+      "verify-dashboard-2026-09-13.md",
+      "backend-full-verification-2026-09-13.md",
+    ]);
+    expect(notice).toContain("NOT EVIDENCE");
+    expect(notice).toContain("verify-dashboard-2026-09-13.md");
+    expect(notice).toContain("backend-full-verification-2026-09-13.md");
+    expect(notice).toContain(PAPERWORK_PROMPT_LINE);
+  });
+
+  it("is empty when nothing was withheld", () => {
+    expect(renderPaperworkNotice([])).toBe("");
+  });
+
+  it("rides along with the deliverable block without leaking any paperwork BODY", () => {
+    const block = renderDeliverableSet(
+      [{ row: { name: "dashboard.html", contentType: "text/html", size: 13915 }, text: "<h1>Dashboard</h1>" }],
+      ["backend-full-verification-2026-09-13.md"],
+    );
+    expect(block).toContain("FILE 1: dashboard.html");
+    expect(block).toContain("backend-full-verification-2026-09-13.md");
+    expect(block).toContain(PAPERWORK_PROMPT_LINE);
+    expect(block).not.toContain("200 OK");
   });
 });
