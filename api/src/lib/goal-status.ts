@@ -53,6 +53,19 @@ export function auditActorType(
   return "user";
 }
 
+/**
+ * Pure: what a caller-driven (API / Goals page) transition should be recorded
+ * as. The sweeps and the planner name their own reason; this is only for the
+ * generic "a member changed the status" path.
+ */
+export function goalStatusReasonFor(from: string, to: string): GoalStatusReason {
+  if (to === "parked") return "park";
+  if (from === "parked") return "resume";
+  if (to === "done") return "complete";
+  if (to === "archived") return "archive";
+  return "manual";
+}
+
 export interface GoalStatusWrite {
   goalId: string;
   workspaceId: string;

@@ -1,8 +1,8 @@
 import { and, eq, inArray, desc, asc, ne, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { goals, tasks, members, workspaces, goalLedgers } from "../db/schema.js";
-import { audit } from "./audit.js";
 import { id } from "./ids.js";
+import { goalStatusReasonFor, setGoalStatus } from "./goal-status.js";
 import { publishToWorkspace } from "./events.js";
 import { hydrateTasks } from "./tasks-core.js";
 import { enqueueGoalPlan } from "./goal-queue.js";
@@ -264,10 +264,25 @@ export async function updateGoal(
   const patch: Partial<typeof goals.$inferInsert> = { updatedAt: new Date() };
   if (input.title !== undefined) patch.title = input.title;
   if (input.bodyMd !== undefined) patch.bodyMd = input.bodyMd;
-  if (input.status !== undefined) patch.status = input.status;
   if (input.ownerMemberId !== undefined) patch.ownerMemberId = input.ownerMemberId;
   if (input.kind !== undefined) patch.kind = input.kind;
   await db.update(goals).set(patch).where(eq(goals.id, goalId));
+
+  // The STATUS is never written here — it goes through setGoalStatus, the one
+  // writer that also records the audit event and derives actor_type from the
+  // member's kind. (publish:false: we publish the hydrated goal ourselves
+  // below, so the board still sees exactly one frame.)
+  if (input.status !== undefined && input.status !== g!.status) {
+    const actorMemberId = input.ownerMemberId ?? g!.ownerMemberId ?? null;
+    await setGoalStatus({
+      goalId,
+      workspaceId,
+      to: input.status,
+      actorMemberId,
+      reason: goalStatusReasonFor(g!.status, input.status),
+      publish: false,
+    });
+  }
 
   // Resuming a parked goal: give it a clean slate. Without this the ledger still
   // carries the stall/loop counters and the ancient lastProgressAt that parked
@@ -280,16 +295,6 @@ export async function updateGoal(
       .catch(() => {});
   }
 
-  if (input.status !== undefined && input.status !== g!.status) {
-    void audit({
-      workspaceId,
-      actorId: input.ownerMemberId ?? g!.ownerMemberId ?? "system",
-      action: "goal.status_changed",
-      targetType: "goal",
-      targetId: goalId,
-      meta: { from: g!.status, to: input.status, title: g!.title },
-    });
-  }
   const [row] = await db.select().from(goals).where(eq(goals.id, goalId));
   const [hydrated] = await withCounts([row]);
   await publishToWorkspace(workspaceId, { type: "goal.updated", workspaceId, goalId, goal: hydrated });

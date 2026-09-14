@@ -10,11 +10,10 @@ import { bumpStall, assessProgress, writeProgressAssessment } from "../lib/ledge
 import { notify } from "../lib/notifications.js";
 import { runProductivityReview } from "../lib/productivity.js";
 import { reapStuckRuns } from "../lib/run-reaper.js";
-import { expireStaleApprovals } from "../lib/approval-policy.js";
+import { backfillApprovalDeadEnds, expireStaleApprovals } from "../lib/approval-policy.js";
 import { runMemoryJanitor } from "../lib/memory-janitor.js";
 import { GOAL_PARK_AFTER_MS, shouldParkGoal } from "../lib/goals-core.js";
 import { goalParkedBody, setGoalStatus } from "../lib/goal-status.js";
-import { backfillApprovalDeadEnds } from "../lib/approval-policy.js";
 import { RETENTION_INTERVAL_MS, runRetentionSweep, shouldRunNow } from "../lib/retention.js";
 import { envInt, envNum } from "../lib/env.js";
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { auditActorType, goalParkedBody } from "../lib/goal-status.js";
+import { auditActorType, goalParkedBody, goalStatusReasonFor } from "../lib/goal-status.js";
 import { mergeDeadEnd } from "../lib/ledger-core.js";
 import { approvalDeadEndNote } from "../lib/approval-notes.js";
 import { backfillOutcomeFor } from "../lib/approval-policy.js";
@@ -29,6 +29,21 @@ describe("auditActorType", () => {
   it("never claims agent on an unresolvable member", () => {
     expect(auditActorType(null, "mem_gone")).toBe("user");
     expect(auditActorType("", "mem_gone")).toBe("user");
+  });
+});
+
+describe("goalStatusReasonFor", () => {
+  it("names the transition the audit trail cares about", () => {
+    expect(goalStatusReasonFor("in_progress", "parked")).toBe("park");
+    expect(goalStatusReasonFor("parked", "in_progress")).toBe("resume");
+    expect(goalStatusReasonFor("parked", "open")).toBe("resume");
+    expect(goalStatusReasonFor("in_progress", "done")).toBe("complete");
+    expect(goalStatusReasonFor("in_progress", "archived")).toBe("archive");
+    expect(goalStatusReasonFor("open", "in_progress")).toBe("manual");
+  });
+
+  it("prefers park over resume when a parked goal is re-parked", () => {
+    expect(goalStatusReasonFor("parked", "parked")).toBe("park");
   });
 });
 
