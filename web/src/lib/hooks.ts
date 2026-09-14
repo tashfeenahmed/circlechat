@@ -309,11 +309,41 @@ export function usePostMessage(convId: string | undefined, parentId?: string | n
   });
 }
 
+// `/tasks` and `/goals` are paginated (limit 100, opaque cursor). Both pages
+// render the whole workspace — the board needs every card to lay out its
+// columns — so the client walks the cursor to completion instead of showing a
+// "load more". That keeps the UI identical while the wire format stops being
+// one unbounded response. The page cap is a safety valve, not a product
+// decision: it bounds a runaway loop if a cursor ever failed to advance.
+const MAX_PAGES = 50;
+
+async function fetchAllPages<K extends string, T>(
+  path: string,
+  key: K,
+): Promise<{ items: T[]; last: Record<string, unknown> }> {
+  const items: T[] = [];
+  let cursor: string | null = null;
+  let last: Record<string, unknown> = {};
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const page: Record<string, unknown> = await api.get(`${path}${qs}`);
+    last = page;
+    items.push(...((page[key] as T[]) ?? []));
+    const next = page.nextCursor;
+    if (typeof next !== "string" || !next) break;
+    cursor = next;
+  }
+  return { items, last };
+}
+
 export function useGoals() {
   const qc = useQueryClient();
   const q = useQuery<{ goals: Goal[]; autoPlan?: string }>({
     queryKey: ["goals"],
-    queryFn: () => api.get("/goals"),
+    queryFn: async () => {
+      const { items, last } = await fetchAllPages<"goals", Goal>("/goals", "goals");
+      return { goals: items, autoPlan: last.autoPlan as string | undefined };
+    },
     staleTime: 15_000,
   });
   useEffect(() => {
@@ -662,7 +692,7 @@ export function useTasks() {
   const qc = useQueryClient();
   const q = useQuery<{ tasks: Task[] }>({
     queryKey: ["tasks"],
-    queryFn: () => api.get("/tasks"),
+    queryFn: async () => ({ tasks: (await fetchAllPages<"tasks", Task>("/tasks", "tasks")).items }),
     staleTime: 15_000,
   });
   useEffect(() => {

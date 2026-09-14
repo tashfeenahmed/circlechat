@@ -149,8 +149,13 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
         // counts are still computed; we just zero them out in the response so a
         // muted channel doesn't nag. The UI can still show a subtle dot off the
         // `muted` flag if it wants.
-        unreadCount: r.muted ? 0 : unreadMap.get(r.id)?.unread ?? 0,
-        unreadMentions: r.muted ? 0 : unreadMap.get(r.id)?.mentions ?? 0,
+        // The spectator identity is SHARED and never marks anything read, so
+        // its lastReadAt stays null forever and every message in the workspace
+        // counts unread — live.circlechat.co was badging #general with 1,155,
+        // a number that means nothing to the visitor reading it. Nobody's
+        // unread state is nobody's business: the public view gets zero.
+        unreadCount: r.muted || req.spectator ? 0 : unreadMap.get(r.id)?.unread ?? 0,
+        unreadMentions: r.muted || req.spectator ? 0 : unreadMap.get(r.id)?.mentions ?? 0,
       })),
     };
   });

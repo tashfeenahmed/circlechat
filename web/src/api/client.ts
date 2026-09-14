@@ -171,19 +171,27 @@ export interface AgentRow {
   createdAt?: string;
 }
 
+// Only workspace admins get the full row. Everyone else — ordinary members and
+// the public spectator — gets the projection from api/src/lib/agent-view.ts:
+// identity, outcome, timing and a one-line `summary`. The internal payloads are
+// optional here so the UI has to cope with their absence.
 export interface AgentRun {
   id: string;
-  agentId: string;
   trigger: string;
   status: string;
-  contextJson: Record<string, unknown>;
-  resultJson: Record<string, unknown>;
-  traceJson: string[];
-  conversationId: string | null;
   startedAt: string;
   finishedAt: string | null;
-  costUsd: number | null;
-  errorText: string | null;
+  // Present in the public projection.
+  durationSec?: number | null;
+  summary?: string;
+  // Admin-only.
+  agentId?: string;
+  contextJson?: Record<string, unknown>;
+  resultJson?: Record<string, unknown>;
+  traceJson?: string[];
+  conversationId?: string | null;
+  costUsd?: number | null;
+  errorText?: string | null;
 }
 
 export type TaskStatus = "backlog" | "in_progress" | "blocked" | "review" | "done";
@@ -344,16 +352,19 @@ export interface AnalyticsAgent {
   tasksOpen: { backlog: number; in_progress: number; review: number };
   runs: { total: number; ok: number; failed: number; byTrigger: Record<string, number> };
   actionsApplied: number;
-  runsWithErrors: number;
-  skippedRuns: number;
   avgRunSec: number;
   messages: number;
   taskComments: number;
   approvalsPending: number;
-  costUsdRange: number;
-  costUsdMonth: number;
-  budgetUsdMonth: number | null;
-  pauseReason: "manual" | "budget" | null;
+  // Cost and error/skip bookkeeping are omitted for the public read-only
+  // spectator (see api/src/routes/analytics.ts) — optional here so the page
+  // has to handle their absence rather than render `undefined`.
+  runsWithErrors?: number;
+  skippedRuns?: number;
+  costUsdRange?: number;
+  costUsdMonth?: number;
+  budgetUsdMonth?: number | null;
+  pauseReason?: "manual" | "budget" | null;
 }
 
 export interface AnalyticsData {
@@ -367,8 +378,8 @@ export interface AnalyticsData {
     runs: number;
     failedRuns: number;
     openTasks: number;
-    costUsdRange: number;
-    costUsdMonth: number;
+    costUsdRange?: number;
+    costUsdMonth?: number;
   };
   topErrors: Array<{ reason: string; count: number; agents: string[] }>;
   recentCompletions: Array<{

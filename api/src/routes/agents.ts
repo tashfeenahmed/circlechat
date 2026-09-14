@@ -16,7 +16,7 @@ import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { scheduleAgentHeartbeat, cancelAgentHeartbeat, clearHeartbeatBackoff } from "../agents/scheduler.js";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { filterWorkspaceConversationIds } from "../lib/workspace-scope.js";
-import { canSeeAgentInternals, publicAgentView } from "../lib/agent-view.js";
+import { canSeeAgentInternals, publicAgentView, publicRunView } from "../lib/agent-view.js";
 import { normalizeAgentBrief } from "../lib/agent-brief.js";
 
 const CreateBody = z.object({
@@ -220,7 +220,11 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
     return {
       agent: full ? shaped : publicAgentView(shaped),
       channels: channels.map((c) => c.conversation),
-      recentRuns,
+      // A run row carries the assembled prompt packet (contextJson: memory
+      // blocks, planner ledger, previousRunErrors), the tool trace and raw
+      // error strings. Admins configure the agent and debug it, so they keep
+      // the rows; everyone else — spectators included — gets the projection.
+      recentRuns: full ? recentRuns : recentRuns.map(publicRunView),
     };
   });
 
@@ -329,7 +333,7 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
       .where(and(eq(agentRuns.id, rId), eq(agents.workspaceId, workspaceId!)))
       .limit(1);
     if (!row) return reply.code(404).send({ error: "not_found" });
-    return { run: row.run };
+    return { run: (await canSeeAgentInternals(req)) ? row.run : publicRunView(row.run) };
   });
 
   // Thin memory KV for agents
@@ -342,6 +346,10 @@ export default async function agentRoutes(app: FastifyInstance): Promise<void> {
       .where(and(eq(agents.id, aId), eq(agents.workspaceId, workspaceId!)))
       .limit(1);
     if (!a) return reply.code(404).send({ error: "not_found" });
+    // An agent's memory KV is its private working state (it has held file
+    // paths, credentials-adjacent notes and half-formed plans). Same rule as
+    // the agent row itself: admins only.
+    if (!(await canSeeAgentInternals(req))) return reply.code(403).send({ error: "forbidden" });
     const rows = await db.select().from(memoryKv).where(eq(memoryKv.agentId, aId));
     return { memory: rows };
   });

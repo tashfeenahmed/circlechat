@@ -433,16 +433,31 @@ function stripFileMutationNotice(text) {
 const PROSE_TOOL_BLOCK_RE =
   /<tool_call\b[^>]*>[\s\S]*?<\/tool_call>|<function=[^>\n]*>[\s\S]*?<\/function>|<parameter=[^>\n]*>[\s\S]*?<\/parameter>|<\/?tool_call\b[^>]*>|<function=[^>\n]*>|<\/?function\b[^>]*>|<parameter=[^>\n]*>|<\/?parameter\b[^>]*>/gi;
 const PROSE_LOG_LINE_RE =
-  /(?:^|\n)[ \t]*(?:WARNING|WARN|ERROR|INFO|DEBUG)[ \t]+gateway\.[\w.]+[^\n]*/gi;
+  /(?:^|\n)[ \t]*(?:WARNING|WARN|ERROR|INFO|DEBUG|CRITICAL|FATAL|TRACE)[ \t]+[a-z_][\w]*(?:\.[\w]+)+[ \t]*:[^\n]*(?:\n[ \t]*\[\d{2}:\d{2}:\d{2}\][^\n]*)*/gi;
+const PROSE_TIMESTAMP_BLOCK_RE =
+  /(?:^|\n)[ \t]*\[\d{2}:\d{2}:\d{2}\][^\n]*(?:\n[ \t]*\[\d{2}:\d{2}:\d{2}\][^\n]*)+/g;
+const PROSE_BACKGROUND_TASK_RE =
+  /(?:^|\n)[ \t]*[↩⤴↪]?[ \t]*Background task running\b[^\n]*/gi;
+const PROSE_SUBAGENT_NOTICE_RE = /(?:^|\n)[ \t]*\[subagent-\d+\][^\n]*/gi;
+const PROSE_ROLE_TAG_RE =
+  /<\/(?:assistant|user|system|human|tool|tool_response|s|body|html|head)\s*>|<(?:assistant|user|system|human|tool_response)\s*>|<\|[\w.-]{1,32}\|>/gi;
+const PROSE_ENV_ASSIGN_RE = /\b[A-Z][A-Z0-9_]{3,}=(?:"[^"\n]*"|'[^'\n]*'|\S+)/g;
+const PROSE_ARTIFACT_ID_RE = /\bart_[a-z0-9]{12,28}\b/g;
+const PROSE_MESSAGE_ID_RE = /\bm_[a-z0-9]{16,28}\b/g;
 const PROSE_INVALID_TOOL_CALL_RE = /(?:^|\n)[^\n]*Model generated invalid tool call[^\n]*/gi;
 const PROSE_OUTPUT_ERROR_RE = /(?:^|\n)[ \t]*\*{0,2}OUTPUT_ERROR\*{0,2}[^\n]*/gi;
 const PROSE_MODEL_TOKEN_RE = /<[｜|][^>\n]{0,40}(?:[｜|]>?|$)/g;
 const PROSE_TASK_ONLY_MODE_RE = /(?:^|\n)[^\n]*HERMES IS IN TASK-ONLY MODE[^\n]*/gi;
-const PROSE_PATH_RE = /(^|[\s("'[<])(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?/g;
+const PROSE_BACKTICK_PATH_RE =
+  /`[ \t]*(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?[ \t]*`/g;
+const PROSE_PATH_RE = /(^|[\s("'`[<])(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?/g;
 const PROSE_LOCALHOST_RE =
   /\b(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d{2,5})?(?:\/[\w./?=&%-]*)?/gi;
-const PROSE_ON_PORT_RE = /\s*\b(?:on|at|via)\s+port\s+\d{2,5}\b/gi;
-const PROSE_BARE_PORT_RE = /(^|[\s(])::?\d{2,5}\b/g;
+const PROSE_ON_PORT_RE = /\s*\b(?:on|at|via|from)\s+port\s+\d{2,5}\b/gi;
+const PROSE_BARE_PORT_RE = /(^|\s)(?:\b(?:on|at|via|from|to)\s+)?::?\d{2,5}\b/gi;
+const DANGLING_PREPOSITION_RE = /\s+\b(?:on|at|in|from|to|under|via)\b(?=\s*(?:[,.;:—–)\]]|$))/gi;
+const REWRITE_DOUBLE_RE =
+  /\b(automated|check|status|moved|moving|moves|today|runtime)\s+\1\b/gi;
 const PROSE_VOCAB = [
   [/\breview[ -]flips?\b/gi, "review"],
   [/\bflipped\s+it\s+to\s+done\b/gi, "moved it to done"],
@@ -469,17 +484,62 @@ const PROSE_VOCAB = [
 // Rewrite one chunk of NON-FENCED prose. Mirrors applyProseRewrites().
 function applyProseRewrites(chunk) {
   let out = chunk;
-  out = out.replace(PROSE_PATH_RE, (m, pre, p) => {
-    if (m.endsWith("/")) return pre;
+  let rewrote = false;
+  const bareFilename = (p) => {
     const last = p.split("/").filter(Boolean).pop() ?? "";
-    const bare = last && last !== "workspace" && last !== "tmp" && last !== "data";
-    return bare ? `${pre}\`${last}\`` : pre;
+    return last && last !== "workspace" && last !== "tmp" && last !== "data" ? last : "";
+  };
+  out = out.replace(PROSE_BACKTICK_PATH_RE, (_m, p) => {
+    rewrote = true;
+    const last = bareFilename(p);
+    return last ? `\`${last}\`` : "";
   });
-  out = out.replace(PROSE_LOCALHOST_RE, "the server");
-  out = out.replace(PROSE_ON_PORT_RE, "");
-  out = out.replace(PROSE_BARE_PORT_RE, "$1");
+  out = out.replace(PROSE_PATH_RE, (m, pre, p) => {
+    rewrote = true;
+    if (m.endsWith("/")) return pre;
+    const last = bareFilename(p);
+    return last ? `${pre}\`${last}\`` : pre;
+  });
+  out = out.replace(PROSE_LOCALHOST_RE, () => {
+    rewrote = true;
+    return "the server";
+  });
+  out = out.replace(PROSE_ON_PORT_RE, () => {
+    rewrote = true;
+    return "";
+  });
+  out = out.replace(PROSE_BARE_PORT_RE, (_m, pre) => {
+    rewrote = true;
+    return pre;
+  });
+  out = out.replace(PROSE_ENV_ASSIGN_RE, () => {
+    rewrote = true;
+    return "";
+  });
+  out = out.replace(PROSE_ARTIFACT_ID_RE, "the attached file");
+  out = out.replace(PROSE_MESSAGE_ID_RE, "an earlier message");
   for (const [re, to] of PROSE_VOCAB) out = out.replace(re, to);
+  out = out.replace(REWRITE_DOUBLE_RE, "$1");
+  if (rewrote) out = out.replace(DANGLING_PREPOSITION_RE, "");
+  // Close up the gaps the removals left. sanitizeAgentProse tidies the whole
+  // body afterwards too, but doing it here keeps this function's own output
+  // readable — it is what the tests assert and what the bridge logs.
+  if (rewrote) {
+    out = out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([,.;:!?])/g, "$1");
+  }
   return out;
+}
+
+// Mirror of dedupeConsecutiveLines() — the harness notices arrive doubled.
+function dedupeConsecutiveLines(text) {
+  const out = [];
+  for (const line of String(text || "").split("\n")) {
+    const key = line.trim();
+    const prev = out.length ? out[out.length - 1].trim() : null;
+    if (key && prev === key) continue;
+    out.push(line);
+  }
+  return out.join("\n");
 }
 
 // Apply `fn` only outside ``` fenced blocks — a snippet is a command, not prose.
@@ -497,6 +557,10 @@ function sanitizeProse(text) {
   for (const re of [
     PROSE_TOOL_BLOCK_RE,
     PROSE_LOG_LINE_RE,
+    PROSE_TIMESTAMP_BLOCK_RE,
+    PROSE_BACKGROUND_TASK_RE,
+    PROSE_SUBAGENT_NOTICE_RE,
+    PROSE_ROLE_TAG_RE,
     PROSE_INVALID_TOOL_CALL_RE,
     PROSE_OUTPUT_ERROR_RE,
     PROSE_MODEL_TOKEN_RE,
@@ -508,6 +572,7 @@ function sanitizeProse(text) {
     });
   }
   out = outsideFences(out, applyProseRewrites);
+  out = outsideFences(out, dedupeConsecutiveLines);
   return out
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+([,.;:!?])/g, "$1")

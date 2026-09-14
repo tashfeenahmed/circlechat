@@ -21,7 +21,7 @@
 import { and, desc, eq, gte, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { messages, taskComments } from "../db/schema.js";
-import { findNearDuplicate } from "../lib/text-similarity.js";
+import { findNearDuplicate, normalizeText } from "../lib/text-similarity.js";
 
 const RECENT_LIMIT = 50;
 // Cross-surface window + fetch bound. Six hours covers the heartbeat cadence
@@ -29,6 +29,17 @@ const RECENT_LIMIT = 50;
 // without suppressing a legitimate next-day status.
 export const CROSS_WINDOW_MS = 6 * 60 * 60 * 1000;
 const CROSS_LIMIT = 120;
+
+// EXACT-repost window. The near-duplicate layers above need 30 normalized
+// characters before they will compare anything at all — short bodies repeat
+// naturally, so a fuzzy match on them is dangerous. A byte-identical body from
+// the SAME author inside ten minutes is not a coincidence at any length: the
+// live workspace has 55 such pairs in fourteen days, most of them milliseconds
+// apart because one comment was fanned out across four sibling cards by a
+// retry. Exact + same author + short window, so a legitimate re-post an hour
+// later, or the same line from a different agent, still lands.
+export const EXACT_WINDOW_MS = 10 * 60 * 1000;
+const EXACT_LIMIT = 200;
 
 export type DedupeSurface = "message" | "task_comment";
 
@@ -100,7 +111,14 @@ async function windowedMessages(since: Date): Promise<Row[]> {
 export async function checkRecentDuplicate(
   conversationId: string,
   bodyMd: string,
+  memberId?: string,
 ): Promise<DedupeResult> {
+  if (memberId) {
+    const exact = await findExactRepost(memberId, bodyMd, "message");
+    if (exact) {
+      return { ok: false, reason: "duplicate_of_recent", againstId: exact.id, score: 1, surface: "message" };
+    }
+  }
   const sameSurface = findNearDuplicate(bodyMd, await recentMessagesIn(conversationId));
   if (sameSurface) return hit("message", sameSurface);
 
@@ -120,7 +138,14 @@ export async function checkRecentDuplicate(
 export async function checkRecentDuplicateTaskComment(
   taskId: string,
   bodyMd: string,
+  memberId?: string,
 ): Promise<DedupeResult> {
+  if (memberId) {
+    const exact = await findExactRepost(memberId, bodyMd, "task_comment");
+    if (exact) {
+      return { ok: false, reason: "duplicate_of_recent", againstId: exact.id, score: 1, surface: "task_comment" };
+    }
+  }
   const sameTask = findNearDuplicate(bodyMd, await recentCommentsOn(taskId));
   if (sameTask) return hit("task_comment", sameTask);
 
@@ -130,4 +155,46 @@ export async function checkRecentDuplicateTaskComment(
   const chat = findNearDuplicate(bodyMd, await windowedMessages(since));
   if (chat) return hit("message", chat);
   return { ok: true };
+}
+
+// Byte-identical (after normalization) repost by the same author inside
+// EXACT_WINDOW_MS, on either surface. Returns the id it duplicates, or null.
+export async function findExactRepost(
+  memberId: string,
+  bodyMd: string,
+  surface: DedupeSurface,
+): Promise<{ id: string; surface: DedupeSurface } | null> {
+  const norm = normalizeText(bodyMd);
+  if (!norm) return null;
+  const since = new Date(Date.now() - EXACT_WINDOW_MS);
+  const rows =
+    surface === "task_comment"
+      ? await db
+          .select({ id: taskComments.id, bodyMd: taskComments.bodyMd })
+          .from(taskComments)
+          .where(
+            and(
+              eq(taskComments.memberId, memberId),
+              gte(taskComments.ts, since),
+              isNull(taskComments.deletedAt),
+            ),
+          )
+          .orderBy(desc(taskComments.ts))
+          .limit(EXACT_LIMIT)
+      : await db
+          .select({ id: messages.id, bodyMd: messages.bodyMd })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.memberId, memberId),
+              gte(messages.ts, since),
+              isNull(messages.deletedAt),
+            ),
+          )
+          .orderBy(desc(messages.ts))
+          .limit(EXACT_LIMIT);
+  for (const r of rows) {
+    if (normalizeText(r.bodyMd) === norm) return { id: r.id, surface };
+  }
+  return null;
 }

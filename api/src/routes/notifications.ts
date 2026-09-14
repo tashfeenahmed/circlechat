@@ -22,6 +22,7 @@ export default async function notificationRoutes(app: FastifyInstance): Promise<
   // member only ever has rows addressed to them.
   app.get("/notifications", async (req) => {
     const memberId = req.auth!.memberId!;
+    if (req.spectator) return { notifications: [], hasMore: false, nextBefore: null };
     const q = ListQuery.parse(req.query ?? {});
     const limit = q.limit ?? 30;
     const unreadOnly = q.unread === "1" || q.unread === "true";
@@ -49,6 +50,9 @@ export default async function notificationRoutes(app: FastifyInstance): Promise<
   // Unread count — cheap, used to badge the bell icon.
   app.get("/notifications/unread-count", async (req) => {
     const memberId = req.auth!.memberId!;
+    // Same reasoning as the per-conversation badges: the shared read-only
+    // identity has no personal inbox, so it is never "behind" on anything.
+    if (req.spectator) return { count: 0 };
     const [row] = await db
       .select({ c: dsql<number>`count(*)::int`.as("c") })
       .from(notifications)

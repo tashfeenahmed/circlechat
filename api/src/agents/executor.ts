@@ -16,6 +16,7 @@ import { audit } from "../lib/audit.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation, publishToWorkspace } from "../lib/events.js";
 import { checkReplyBody, guardRejectHint, sanitizeAgentProse } from "./reply-guard.js";
+import { contentTypeForName } from "../lib/content-type.js";
 import { checkRecentDuplicate, checkRecentDuplicateTaskComment } from "./dedupe.js";
 import {
   extractMentionHandles,
@@ -745,7 +746,7 @@ async function applyOne(
         );
         return;
       }
-      const dup = await checkRecentDuplicate(a.conversation_id, guard.bodyMd);
+      const dup = await checkRecentDuplicate(a.conversation_id, guard.bodyMd, agentMemberId);
       if (!dup.ok) {
         out.trace.push(
           `post_message rejected (duplicate_of_recent vs ${dup.againstId} @${dup.score})`,
@@ -883,7 +884,7 @@ async function applyOne(
       }
       const [m] = await db.select().from(messages).where(eq(messages.id, a.message_id)).limit(1);
       if (!m) throw new Error("message_not_found");
-      const dup = await checkRecentDuplicate(m.conversationId, guard.bodyMd);
+      const dup = await checkRecentDuplicate(m.conversationId, guard.bodyMd, agentMemberId);
       if (!dup.ok) {
         out.trace.push(
           `open_thread rejected (duplicate_of_recent vs ${dup.againstId} @${dup.score})`,
@@ -1348,7 +1349,7 @@ async function applyOne(
       }
       // Comment-level dedupe: a near-identical restatement of a recent comment
       // on the same task is the relocated begging loop — drop it with a hint.
-      const cdup = await checkRecentDuplicateTaskComment(a.task_id, guard.bodyMd);
+      const cdup = await checkRecentDuplicateTaskComment(a.task_id, guard.bodyMd, agentMemberId);
       if (!cdup.ok) {
         out.errors.push(
           `task_comment skipped: near-duplicate of ${cdup.surface === "message" ? "a chat message you already posted" : "an existing comment"} (vs ${cdup.againstId}${cdup.surface === "message" ? "" : ` on ${a.task_id}`}). You already said this — don't repeat it. Either do the next concrete step (ship a file via share_to_task, change status) or stay silent.`,
@@ -1712,15 +1713,7 @@ async function fetchAgentAttachments(
         }
         buf = await fsp.readFile(abs);
         nameHint = abs.split("/").pop() ?? "";
-        const ext = (nameHint.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? "").toLowerCase();
-        const extMap: Record<string, string> = {
-          pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-          gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
-          txt: "text/plain", md: "text/markdown", csv: "text/csv",
-          json: "application/json", html: "text/html", xml: "application/xml",
-          zip: "application/zip",
-        };
-        if (extMap[ext]) contentType = extMap[ext];
+        contentType = contentTypeForName(nameHint, contentType);
       }
 
       if (buf.length > MAX_BYTES) {
@@ -1731,7 +1724,13 @@ async function fetchAgentAttachments(
       const safeName = rawName.replace(/[^a-z0-9._-]/gi, "_").slice(0, 120) || "file";
       const key = `u/${id("f").slice(2)}/${safeName}`;
       await putObject(key, buf);
-      fetched.push({ key, name: safeName, contentType, size: buf.length, url: publicUrl(key) });
+      fetched.push({
+        key,
+        name: safeName,
+        contentType: contentTypeForName(safeName, contentType),
+        size: buf.length,
+        url: publicUrl(key),
+      });
     } catch (e) {
       trace.push(`${actionLabel} source ${hasUrl ? rawUrl : rawPath} failed: ${(e as Error).message}`);
     }

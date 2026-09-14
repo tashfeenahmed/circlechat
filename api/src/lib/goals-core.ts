@@ -6,6 +6,7 @@ import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
 import { hydrateTasks } from "./tasks-core.js";
 import { enqueueGoalPlan } from "./goal-queue.js";
+import { clampLimit, decodeCursor, encodeCursor, takePage } from "./list-page.js";
 
 // `parked` is the auto-parking terminal-until-resumed state: a goal whose tasks
 // have not moved for GOAL_PARK_AFTER_MS. It is deliberately NOT `in_progress`
@@ -182,13 +183,36 @@ export async function workspaceAutoPlan(workspaceId: string): Promise<string> {
   return ws?.autoPlan ?? "auto";
 }
 
-export async function listGoals(workspaceId: string) {
+// Newest-first, paginated on (createdAt, id) — see lib/list-page.ts for why
+// keyset rather than OFFSET. `id` is the tiebreaker for goals created inside
+// the same millisecond (the planner materialises a tree in one go).
+export async function listGoals(
+  workspaceId: string,
+  opts: { limit?: unknown; cursor?: unknown } = {},
+) {
+  const limit = clampLimit(opts.limit);
+  const after = decodeCursor(opts.cursor, 2);
+  const conds = [eq(goals.workspaceId, workspaceId)];
+  if (after) {
+    const [createdAt, goalId] = after;
+    conds.push(
+      dsql`(${goals.createdAt}, ${goals.id}) < (${new Date(String(createdAt))}, ${String(goalId)})` as never,
+    );
+  }
   const rows = await db
     .select()
     .from(goals)
-    .where(eq(goals.workspaceId, workspaceId))
-    .orderBy(desc(goals.createdAt));
-  return { goals: await withCounts(rows), autoPlan: await workspaceAutoPlan(workspaceId) };
+    .where(and(...conds))
+    .orderBy(desc(goals.createdAt), desc(goals.id))
+    .limit(limit + 1);
+  const { page, hasMore } = takePage(rows, limit);
+  const last = page[page.length - 1];
+  return {
+    goals: await withCounts(page),
+    autoPlan: await workspaceAutoPlan(workspaceId),
+    nextCursor:
+      hasMore && last ? encodeCursor([last.createdAt.toISOString(), last.id]) : null,
+  };
 }
 
 export async function getGoalDetail(goalId: string, workspaceId: string) {

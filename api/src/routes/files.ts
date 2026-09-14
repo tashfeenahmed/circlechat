@@ -13,7 +13,9 @@ import {
   tasks,
 } from "../db/schema.js";
 import { requireAuth, requireWorkspace, loadSession, loadSpectatorAuth } from "../auth/session.js";
-import { statObject, streamObject, deleteObject } from "../lib/storage.js";
+import { statObject, streamObject, readObject, deleteObject } from "../lib/storage.js";
+import { contentTypeForName, isScrubbableTextType } from "../lib/content-type.js";
+import { MAX_SCRUB_BYTES, scrubInternalPaths } from "../lib/public-text.js";
 import { workspaceMembers } from "../db/schema.js";
 import { artifactByStorageKey } from "../lib/task-artifacts.js";
 
@@ -35,6 +37,10 @@ declare module "fastify" {
       kind: "user" | "agent";
       memberId: string | null;
       workspaceId: string;
+      // True when this read rode the anonymous spectator fallback rather than
+      // a real session or an agent token. Only the public read path rewrites
+      // the bytes it serves (see the scrub below).
+      spectator?: boolean;
     };
   }
 }
@@ -76,7 +82,12 @@ async function requireSessionOrAgent(
   if (req.method === "GET" || req.method === "HEAD") {
     const spec = await loadSpectatorAuth();
     if (spec && spec.workspaceId && spec.memberId) {
-      req.filePrincipal = { kind: "user", memberId: spec.memberId, workspaceId: spec.workspaceId };
+      req.filePrincipal = {
+        kind: "user",
+        memberId: spec.memberId,
+        workspaceId: spec.workspaceId,
+        spectator: true,
+      };
       return;
     }
   }
@@ -199,9 +210,22 @@ export async function fileServeRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: "not_found" });
     const st = await statObject(key);
     if (!st || !st.isFile()) return reply.code(404).send({ error: "not_found" });
-    const ct = guessContentType(key);
+    const ct = contentTypeForName(key);
+    // Public (spectator) reads of a TEXT deliverable get the container paths
+    // and env-var assignments taken out of the body — the bytes in storage are
+    // untouched, and agents/signed-in members still read the original, because
+    // for them the paths are real and load-bearing. See lib/public-text.ts.
+    const scrubPublic =
+      req.filePrincipal?.spectator === true &&
+      isScrubbableTextType(ct) &&
+      st.size <= MAX_SCRUB_BYTES;
+    let body: Buffer | null = null;
+    if (scrubPublic) {
+      const raw = await readObject(key);
+      if (raw) body = Buffer.from(scrubInternalPaths(raw.toString("utf8")), "utf8");
+    }
     reply.header("content-type", ct);
-    reply.header("content-length", String(st.size));
+    reply.header("content-length", String(body ? body.length : st.size));
     reply.header("cache-control", "private, max-age=60");
     // Every blob here was written by an agent, so it is treated as untrusted
     // markup no matter what its extension claims. The app-wide helmet policy is
@@ -228,7 +252,7 @@ export async function fileServeRoutes(app: FastifyInstance): Promise<void> {
     // overrides this, so "download" still works.
     const fname = (key.split("/").pop() || "file").replace(/[\r\n"]/g, "_");
     reply.header("content-disposition", `inline; filename="${fname}"`);
-    return reply.send(streamObject(key));
+    return reply.send(body ?? streamObject(key));
   });
 }
 
@@ -356,7 +380,12 @@ export async function fileDirectoryRoutes(app: FastifyInstance): Promise<void> {
         expanded.push({
           key: a.key,
           name: a.name,
-          contentType: a.contentType,
+          // Derived from the extension, not from whatever the uploader
+          // declared: the stored descriptors disagree with each other (the
+          // same .md is text/markdown on one row and application/octet-stream
+          // — which forces a download — on the next). The serve path already
+          // derives it the same way, so the listing now agrees with it.
+          contentType: contentTypeForName(a.name || a.key, a.contentType),
           size: a.size,
           url: a.url,
           exists: !!st,
@@ -440,7 +469,7 @@ export async function fileDirectoryRoutes(app: FastifyInstance): Promise<void> {
           expanded.push({
             key: a.key,
             name: a.name,
-            contentType: a.contentType,
+            contentType: contentTypeForName(a.name || a.key, a.contentType),
             size: a.size,
             url: a.url,
             exists: !!st,
@@ -461,9 +490,28 @@ export async function fileDirectoryRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    // Combined output is sorted by freshness regardless of source.
+    // Combined output is sorted by freshness regardless of source, then
+    // deduped by storage key.
+    //
+    // One blob, one row. The directory is built by expanding every
+    // `attachments_json` array, and the same key legitimately appears in
+    // several of them — the observed case was one agent attaching
+    // `backend-restart-verification-2026-09-09.md` to four sibling cards
+    // inside 69 ms, which listed the identical file four times. The key IS the
+    // file; the newest reference wins (the rows are already newest-first) and
+    // `alsoAttachedTo` records how many other places reference it, so nothing
+    // is silently hidden.
     expanded.sort((a, b) => b.ts.localeCompare(a.ts));
-    return { files: expanded };
+    const byKey = new Map<string, FileRow & { alsoAttachedTo: number }>();
+    for (const row of expanded) {
+      const seen = byKey.get(row.key);
+      if (seen) {
+        seen.alsoAttachedTo++;
+        continue;
+      }
+      byKey.set(row.key, { ...row, alsoAttachedTo: 0 });
+    }
+    return { files: Array.from(byKey.values()) };
   });
 
   // Delete an attachment. The key identifies the file; we find the message OR
@@ -563,32 +611,4 @@ async function keyStillReferenced(key: string): Promise<boolean> {
     .where(dsql`${taskComments.attachmentsJson} @> ${probe}::jsonb` as never)
     .limit(1);
   return !!tc;
-}
-
-function guessContentType(key: string): string {
-  const ext = key.toLowerCase().split(".").pop() ?? "";
-  const map: Record<string, string> = {
-    // Agent deliverables are mostly web pages, and serving them as
-    // application/octet-stream meant "open in new tab" saved a file instead of
-    // showing the work. Safe to declare honestly because every response carries
-    // BLOB_CSP, whose `sandbox` directive stops the document executing script.
-    html: "text/html; charset=utf-8",
-    htm: "text/html; charset=utf-8",
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    gif: "image/gif",
-    webp: "image/webp",
-    svg: "image/svg+xml",
-    pdf: "application/pdf",
-    txt: "text/plain; charset=utf-8",
-    md: "text/markdown; charset=utf-8",
-    json: "application/json",
-    csv: "text/csv",
-    mp4: "video/mp4",
-    mp3: "audio/mpeg",
-    wav: "audio/wav",
-    zip: "application/zip",
-  };
-  return map[ext] ?? "application/octet-stream";
 }

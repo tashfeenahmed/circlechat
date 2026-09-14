@@ -17,6 +17,7 @@ import { decryptSecret, encryptSecret } from "../lib/secret-box.js";
 import { verifyWebhookSignature } from "../lib/signed-webhook.js";
 import { parseWorkflowDefinition } from "../lib/workflow-definition.js";
 import { resumeWorkflowFromHuman, startWorkflowRun } from "../lib/workflow-engine.js";
+import { canSeeAgentInternals, publicWorkflowRunView } from "../lib/agent-view.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -85,10 +86,16 @@ export default async function workflowRoutes(app: FastifyInstance): Promise<void
     const endpoints = workflowIds.length
       ? await db.select().from(webhookEndpoints).where(inArray(webhookEndpoints.workflowId, workflowIds))
       : [];
+    // A workflow run carries the run's own input/output payloads and any
+    // operator steer notes; only workspace admins see those (see agent-view).
+    const full = await canSeeAgentInternals(req);
     return {
       workflows: rows.map((workflow) => ({
         ...workflow,
-        latestRuns: runs.filter((run) => run.workflowId === workflow.id).slice(0, 10),
+        latestRuns: runs
+          .filter((run) => run.workflowId === workflow.id)
+          .slice(0, 10)
+          .map((run) => (full ? run : publicWorkflowRunView(run))),
         endpoints: endpoints
           .filter((endpoint) => endpoint.workflowId === workflow.id)
           .map(({ secretCiphertext: _secret, ...endpoint }) => ({ ...endpoint, url: endpointUrl(endpoint.id) })),
@@ -175,6 +182,20 @@ export default async function workflowRoutes(app: FastifyInstance): Promise<void
       .from(workflowSteps)
       .where(eq(workflowSteps.runId, runId))
       .orderBy(workflowSteps.startedAt);
+    if (!(await canSeeAgentInternals(req))) {
+      return {
+        run: publicWorkflowRunView(run),
+        steps: steps.map((step) => ({
+          id: step.id,
+          stateId: step.stateId,
+          kind: step.kind,
+          status: step.status,
+          attempt: step.attempt,
+          startedAt: step.startedAt,
+          finishedAt: step.finishedAt,
+        })),
+      };
+    }
     return { run, steps };
   });
 

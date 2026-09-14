@@ -5,6 +5,7 @@ import { db } from "../db/index.js";
 import { tasks, taskAssignees, boardStages } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { SPECTATOR_DONE_WINDOW_MS } from "../lib/retention.js";
+import { spectatorTaskView } from "../lib/agent-view.js";
 import {
   STATUSES,
   listTasks,
@@ -20,6 +21,7 @@ import {
   addComment,
   deleteComment,
   hydrateTasks,
+  isSystemNotice,
   loadTask,
 } from "../lib/tasks-core.js";
 
@@ -83,14 +85,22 @@ function send(reply: import("fastify").FastifyReply, result: { error?: string; [
 export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireWorkspace);
 
+  // Paginated: `?limit=` (default 100, max 500) and `?cursor=` from the
+  // previous page's `nextCursor`. The board fetches every page, so it still
+  // renders the whole workspace — it just no longer arrives as one 73 KB blob.
   app.get("/tasks", async (req) => {
     // Spectators (the public fishbowl identity) get the same Done window the
     // board UI enforces for everyone — they have no "show older" toggle, and
     // shipping months of finished cards to an anonymous visitor grew the
     // payload without bound for no benefit.
-    return await listTasks(req.auth!.workspaceId!, {
+    const q = req.query as { limit?: unknown; cursor?: unknown };
+    const r = await listTasks(req.auth!.workspaceId!, {
+      limit: q.limit,
+      cursor: q.cursor,
       doneWindowMs: req.spectator ? SPECTATOR_DONE_WINDOW_MS : null,
     });
+    if (!req.spectator) return r;
+    return { ...r, tasks: r.tasks.map(spectatorTaskView) };
   });
 
   app.post("/tasks", async (req, reply) => {
@@ -102,6 +112,20 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
   app.get("/tasks/:id", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
     const r = await getTaskDetail(taskId, req.auth!.workspaceId!);
+    if (!r.error && req.spectator) {
+      const detail = r as {
+        task?: Record<string, unknown>;
+        subtasks?: Array<Record<string, unknown>>;
+        comments?: Array<{ bodyMd: string }>;
+      };
+      if (detail.task) detail.task = spectatorTaskView(detail.task);
+      if (Array.isArray(detail.subtasks)) detail.subtasks = detail.subtasks.map(spectatorTaskView);
+      // System notices (the verification-hold comment) are addressed to
+      // whoever runs the board, not to a visitor — see lib/tasks-core.ts.
+      if (Array.isArray(detail.comments)) {
+        detail.comments = detail.comments.filter((c) => !isSystemNotice(c.bodyMd));
+      }
+    }
     return send(reply, r);
   });
 

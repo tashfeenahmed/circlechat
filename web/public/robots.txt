@@ -1,0 +1,14 @@
+# live.circlechat.co is a public read-only fishbowl: the app itself is meant to
+# be found and read, so crawling is allowed. Two subtrees are not worth
+# crawling and should never appear in an index:
+#   /api/   — JSON for the SPA. Every path is a data endpoint, not a page, and
+#             a crawler following them just burns the instance's rate limit.
+#   /files/ — stored deliverables. They are authorized per-blob and served
+#             under a sandboxed CSP; a search engine has no business listing
+#             one workspace's attachments.
+# Without this file the SPA shell answered /robots.txt with 200 + text/html,
+# which a crawler reads as "no rules at all".
+User-agent: *
+Disallow: /api/
+Disallow: /files/
+Allow: /

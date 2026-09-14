@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireWorkspace } from "../auth/session.js";
+import { spectatorGoalView } from "../lib/agent-view.js";
 import {
   GOAL_STATUSES,
   GOAL_KINDS,
@@ -53,8 +54,13 @@ function send(reply: import("fastify").FastifyReply, result: { error?: string; [
 export default async function goalsRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireWorkspace);
 
+  // Paginated the same way as /tasks — `?limit=` (default 100, max 500) plus
+  // `?cursor=` from the previous page's `nextCursor`.
   app.get("/goals", async (req) => {
-    return await listGoals(req.auth!.workspaceId!);
+    const q = req.query as { limit?: unknown; cursor?: unknown };
+    const r = await listGoals(req.auth!.workspaceId!, q);
+    if (!req.spectator) return r;
+    return { ...r, goals: r.goals.map(spectatorGoalView) };
   });
 
   app.post("/goals", async (req, reply) => {
@@ -66,6 +72,11 @@ export default async function goalsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/goals/:id", async (req, reply) => {
     const goalId = (req.params as { id: string }).id;
     const r = await getGoalDetail(goalId, req.auth!.workspaceId!);
+    if (!r.error && req.spectator) {
+      const detail = r as { goal?: Record<string, unknown>; subGoals?: Array<Record<string, unknown>> };
+      if (detail.goal) detail.goal = spectatorGoalView(detail.goal);
+      if (Array.isArray(detail.subGoals)) detail.subGoals = detail.subGoals.map(spectatorGoalView);
+    }
     return send(reply, r);
   });
 
