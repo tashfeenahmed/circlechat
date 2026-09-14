@@ -126,6 +126,10 @@ export async function scheduleAgentHeartbeat(agentId: string, everySec: number):
     { agentId, runId: "", trigger: "scheduled" as const },
     {
       repeat: { every: ms },
+      // Fixed, but safe: on a repeatable this id names the SCHEDULE, and each
+      // tick is added under its own `repeat:<id>:<ms>` job id, so a completed
+      // heartbeat never blocks the next one. (Contrast the one-off plan jobs in
+      // lib/goal-queue.ts — see lib/queue-dedupe.ts.)
       jobId: REPEAT_KEY(agentId),
     },
   );

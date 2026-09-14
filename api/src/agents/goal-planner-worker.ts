@@ -18,7 +18,11 @@ import { RETENTION_INTERVAL_MS, runRetentionSweep, shouldRunNow } from "../lib/r
 import { envInt, envNum } from "../lib/env.js";
 
 // Give up after this many failed planning attempts (the sweeper is the retry
-// driver, so each attempt is one sweep tick apart — backoff for free).
+// driver, so each attempt is one sweep tick apart — backoff for free). That
+// retry loop is only real because enqueueGoalPlan clears a finished plan job
+// before re-adding it: a fixed BullMQ jobId whose job is still in the completed
+// set makes add() a silent no-op, which turned this "retry driver" into a
+// black hole for 70 minutes on live.
 const MAX_PLAN_ATTEMPTS = envInt("GOAL_MAX_PLAN_ATTEMPTS", 3, { min: 1 });
 // A goal stuck in `planning` longer than this had its worker die mid-plan —
 // reset it to `open` so the sweeper re-plans it.
@@ -154,6 +158,8 @@ async function handleSweep(): Promise<void> {
     );
     for (const c of candidates) {
       if (withTasks.has(c.id)) continue; // already planned
+      // This IS the retry path — it only lands because enqueueGoalPlan refuses
+      // to let a finished job squat on the goal's jobId.
       await enqueueGoalPlan(c.id, c.workspaceId, true);
     }
   }
