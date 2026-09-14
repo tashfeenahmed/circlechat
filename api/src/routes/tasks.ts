@@ -6,6 +6,7 @@ import { tasks, taskAssignees, boardStages } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { SPECTATOR_DONE_WINDOW_MS } from "../lib/retention.js";
 import { spectatorTaskView } from "../lib/agent-view.js";
+import { scrubPublicBody } from "../lib/public-text.js";
 import {
   STATUSES,
   listTasks,
@@ -123,7 +124,11 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
       // System notices (the verification-hold comment) are addressed to
       // whoever runs the board, not to a visitor — see lib/tasks-core.ts.
       if (Array.isArray(detail.comments)) {
-        detail.comments = detail.comments.filter((c) => !isSystemNotice(c.bodyMd));
+        detail.comments = detail.comments
+          .filter((c) => !isSystemNotice(c.bodyMd))
+          // Historical comment bodies predate the write-side guard and still
+          // carry credentials, digests, ids and pasted diffs — scrub on read.
+          .map((c) => ({ ...c, bodyMd: scrubPublicBody(c.bodyMd) }));
       }
     }
     return send(reply, r);

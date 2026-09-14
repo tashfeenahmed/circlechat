@@ -3,7 +3,7 @@ import { eq, and, inArray, or, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agentRuns, agents, conversationMembers, presence } from "../db/schema.js";
 import { COOKIE_NAME, loadSession, loadSpectatorAuth } from "../auth/session.js";
-import { subscribe, unsubscribeAll } from "./bus.js";
+import { markSpectator, subscribe, unsubscribeAll } from "./bus.js";
 import { CONV_CHANNEL, WORKSPACE_CHANNEL, USER_CHANNEL, GLOBAL_CHANNEL, publishGlobal } from "../lib/events.js";
 
 // Upsert the persistent presence row alongside the live broadcast. The table
@@ -82,6 +82,9 @@ export default async function eventsWs(app: FastifyInstance): Promise<void> {
         .where(eq(conversationMembers.memberId, memberId));
 
       if (!isOpen()) return;
+      // Mark before the first subscription, so no frame can reach this socket
+      // unscrubbed.
+      if (isSpectator) markSpectator(socket);
       await subscribe(socket, USER_CHANNEL(memberId));
       await subscribe(socket, GLOBAL_CHANNEL);
       if (s.workspaceId) await subscribe(socket, WORKSPACE_CHANNEL(s.workspaceId));

@@ -11,6 +11,7 @@ import {
   agents,
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
+import { scrubPublicBody } from "../lib/public-text.js";
 
 const QuerySchema = z.object({
   q: z.string().min(2).max(200),
@@ -140,6 +141,7 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
       }),
     );
 
+    const forPublic = req.spectator === true;
     return {
       matches: rows.map((r) => {
         const c = convById.get(r.conversationId) ?? null;
@@ -149,7 +151,7 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
           id: r.id,
           conversationId: r.conversationId,
           parentId: r.parentId,
-          bodyMd: r.bodyMd,
+          bodyMd: forPublic ? scrubPublicBody(r.bodyMd) : r.bodyMd,
           ts: r.ts,
           conversation: c
             ? { id: c.id, kind: c.kind, name: c.name, otherMemberId }

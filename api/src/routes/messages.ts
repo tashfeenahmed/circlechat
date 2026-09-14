@@ -20,6 +20,7 @@ import { fireChannelPostTrigger, resolveHandlesToMemberIds } from "../agents/men
 import { notifyForMessage } from "../lib/notifications.js";
 import { sanitizeAttachments } from "../agents/executor.js";
 import { redactDeleted } from "../lib/deleted-rows.js";
+import { scrubPublicBody } from "../lib/public-text.js";
 
 // Query-string helpers: `Number("abc")` is NaN and `new Date("garbage")` is an
 // Invalid Date — both used to flow straight into the SQL builder and 500.
@@ -119,15 +120,23 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       rxMap.set(r.messageId, list);
     }
 
+    // The public identity reads the scrubbed body of every message, new and
+    // old — the write-side reply guard only ever saw the new ones. Members and
+    // agents get the stored text. See lib/public-text.ts.
+    const forPublic = req.spectator === true;
     return {
       // A soft-deleted message stays in the list (the client renders a
       // tombstone and thread counts stay right) but its body/attachments never
       // leave the server — see lib/deleted-rows.ts.
-      messages: rows.map((m) => ({
-        ...redactDeleted(m),
-        reactions: rxMap.get(m.id) ?? [],
-        replyCount: tcMap.get(m.id) ?? 0,
-      })),
+      messages: rows.map((m) => {
+        const row = redactDeleted(m);
+        return {
+          ...row,
+          bodyMd: forPublic ? scrubPublicBody(row.bodyMd) : row.bodyMd,
+          reactions: rxMap.get(m.id) ?? [],
+          replyCount: tcMap.get(m.id) ?? 0,
+        };
+      }),
       hasMore,
     };
   });

@@ -1,4 +1,4 @@
-import { and, eq, inArray, asc, desc, or, sql as dsql } from "drizzle-orm";
+import { and, eq, gte, inArray, asc, desc, ne, or, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   tasks,
@@ -27,7 +27,7 @@ import {
 import { recordProgress } from "./ledger-core.js";
 import { audit } from "./audit.js";
 import { evaluateStageRules, StageRulesSchema } from "./p1-platform.js";
-import { clampLimit, decodeCursor, encodeCursor, takePage } from "./list-page.js";
+import { clampLimit, decodeCursor, encodeCursor, keysetCondition, takePage } from "./list-page.js";
 
 export const STATUSES = ["backlog", "in_progress", "blocked", "review", "done"] as const;
 export type Status = (typeof STATUSES)[number];
@@ -337,14 +337,20 @@ export async function listTasks(
   const after = decodeCursor(opts.cursor, 4);
   const conds = [eq(tasks.workspaceId, workspaceId), eq(tasks.archived, false)];
   if (opts.doneWindowMs != null) {
+    // Drizzle operators, not a raw template: `gte` maps the Date through the
+    // column's driver mapper, a `sql` template would hand postgres.js the Date
+    // itself and 500. See lib/list-page.ts.
     const cutoff = new Date(Date.now() - opts.doneWindowMs);
-    conds.push(dsql`(${tasks.status} <> 'done' or ${tasks.updatedAt} >= ${cutoff})` as never);
+    conds.push(or(ne(tasks.status, "done"), gte(tasks.updatedAt, cutoff)) as never);
   }
   if (after) {
-    const [status, position, createdAt, taskId] = after;
-    conds.push(
-      dsql`(${tasks.status}, ${tasks.position}, ${tasks.createdAt}, ${tasks.id}) > (${String(status)}, ${Number(position)}, ${new Date(String(createdAt))}, ${String(taskId)})` as never,
+    const cond = keysetCondition(
+      [tasks.status, tasks.position, tasks.createdAt, tasks.id],
+      after,
+      "after",
+      [2],
     );
+    if (cond) conds.push(cond as never);
   }
   const rows = await db
     .select()

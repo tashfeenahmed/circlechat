@@ -195,3 +195,18 @@ export function spectatorGoalView<T extends Record<string, unknown>>(goal: T): T
   const { lastPlanError: _err, planAttempts: _n, ...rest } = goal;
   return rest as T;
 }
+
+// ─────────────── archived goals on the public demo ───────────────
+// The one goal status the public identity never sees. `parked` stays visible
+// on purpose: web/src/pages/Goals.tsx renders a parked goal (with its "Parked"
+// label) to everyone and only hides the Resume button from a spectator, so
+// hiding the row would blank a goal the page is built to show. `archived` is
+// the opposite — Goals.tsx filters it out for every identity, so no client
+// loses anything by the server never sending it, and on live 9 of the 32 goals
+// in the public payload were retired ones.
+export const SPECTATOR_HIDDEN_GOAL_STATUS = "archived";
+
+// Pure: is this goal row one the public identity must not be shown?
+export function hiddenFromSpectators(status: string | null | undefined): boolean {
+  return status === SPECTATOR_HIDDEN_GOAL_STATUS;
+}

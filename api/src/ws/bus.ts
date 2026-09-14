@@ -1,9 +1,18 @@
 import { sub } from "../lib/redis.js";
+import { scrubPublicEvent } from "../lib/public-text.js";
 import type { WebSocket } from "ws";
 
 type Client = WebSocket;
 const channelToClients = new Map<string, Set<Client>>();
 const clientToChannels = new WeakMap<Client, Set<string>>();
+// Sockets riding the anonymous spectator identity. They get the public copy of
+// every broadcast body — the same text GET /conversations/:id/messages serves
+// them — so an open tab can't read what the REST endpoint redacts.
+const spectatorClients = new WeakSet<Client>();
+
+export function markSpectator(ws: Client): void {
+  spectatorClients.add(ws);
+}
 
 let initialized = false;
 function init(): void {
@@ -12,9 +21,17 @@ function init(): void {
   sub.on("message", (channel, message) => {
     const set = channelToClients.get(channel);
     if (!set) return;
+    // Scrubbed at most once per frame, and only when a spectator is actually
+    // subscribed to this channel — a members-only room pays nothing.
+    let publicFrame: string | null = null;
     for (const ws of set) {
       try {
-        ws.send(message);
+        if (spectatorClients.has(ws)) {
+          if (publicFrame === null) publicFrame = scrubPublicEvent(message);
+          ws.send(publicFrame);
+        } else {
+          ws.send(message);
+        }
       } catch {
         // drop silently
       }
