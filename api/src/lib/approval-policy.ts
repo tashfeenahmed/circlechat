@@ -303,6 +303,12 @@ export async function unblockTasksForApproval(
 // id (agents write "blocked pending approval of ap_…" on the card), collects
 // the goals behind them, and records the dead-end on each ledger.
 // Best-effort: a goal with no ledger row is simply skipped.
+//
+// Returns the goals whose ledger this call actually CHANGED, not every goal it
+// looked at — a goal that already carries this exact note (a re-run, a restart,
+// the backfill walking a card the sweep already handled) is not a goal that was
+// cleared, and counting it made both the backfill log line and the
+// `goalsCleared` audit field overstate the work.
 export async function clearApprovalFromGoalState(
   approvalId: string,
   workspaceId: string,
@@ -325,8 +331,11 @@ export async function clearApprovalFromGoalState(
     .catch(() => [] as Array<{ goalId: string | null }>);
   const goalIds = Array.from(new Set(rows.map((r) => r.goalId).filter((g): g is string => !!g)));
   const note = approvalDeadEndNote(approvalId, scope, outcome);
-  for (const goalId of goalIds) await appendDeadEnd(goalId, note).catch(() => {});
-  return goalIds;
+  const touched: string[] = [];
+  for (const goalId of goalIds) {
+    if (await appendDeadEnd(goalId, note).catch(() => false)) touched.push(goalId);
+  }
+  return touched;
 }
 
 // ───────────────── one-off dead-end backfill ─────────────────
@@ -372,6 +381,8 @@ export async function backfillApprovalDeadEnds(limit: number = DEAD_END_BACKFILL
     const goalIds = await clearApprovalFromGoalState(ap.id, ap.workspaceId, ap.scope, outcome).catch(
       () => [] as string[],
     );
+    // Ledgers actually written, not approvals we tried: the backfill is
+    // idempotent by design, so on a second run this is legitimately 0.
     goalsTouched += goalIds.length;
   }
   if (rows.length) {

@@ -1,7 +1,8 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireWorkspace } from "../auth/session.js";
-import { hiddenFromSpectators, spectatorGoalView } from "../lib/agent-view.js";
+import { hiddenFromSpectators, spectatorGoalView, spectatorTaskView } from "../lib/agent-view.js";
+import { spectatorGoalText, spectatorTaskText } from "../lib/public-text.js";
 import {
   GOAL_STATUSES,
   GOAL_KINDS,
@@ -67,7 +68,10 @@ export default async function goalsRoutes(app: FastifyInstance): Promise<void> {
       includeArchived: !req.spectator,
     });
     if (!req.spectator) return r;
-    return { ...r, goals: r.goals.map(spectatorGoalView) };
+    // `spectatorGoalView` drops the planner's bookkeeping; `spectatorGoalText`
+    // cleans the goal's own title and body, which an agent writes in the same
+    // prose it writes a card in. See lib/public-text.ts.
+    return { ...r, goals: r.goals.map(spectatorGoalView).map(spectatorGoalText) };
   });
 
   app.post("/goals", async (req, reply) => {
@@ -83,17 +87,25 @@ export default async function goalsRoutes(app: FastifyInstance): Promise<void> {
       const detail = r as {
         goal?: Record<string, unknown>;
         subGoals?: Array<Record<string, unknown>>;
+        tasks?: Array<Record<string, unknown>>;
       };
       // Same rule as the list: an archived goal does not exist as far as the
       // public identity is concerned, by id or as somebody's sub-goal.
       if (hiddenFromSpectators(detail.goal?.status as string | undefined)) {
         return reply.code(404).send({ error: "not_found" });
       }
-      if (detail.goal) detail.goal = spectatorGoalView(detail.goal);
+      if (detail.goal) detail.goal = spectatorGoalText(spectatorGoalView(detail.goal));
       if (Array.isArray(detail.subGoals)) {
         detail.subGoals = detail.subGoals
           .filter((g) => !hiddenFromSpectators(g.status as string | undefined))
-          .map(spectatorGoalView);
+          .map((g) => spectatorGoalText(spectatorGoalView(g)));
+      }
+      // The goal's cards come back hydrated here, so this response is a second
+      // door onto every task title and body `GET /tasks` serves — and onto the
+      // judge's rationale, which /tasks has stripped since #64 and this never
+      // did.
+      if (Array.isArray(detail.tasks)) {
+        detail.tasks = detail.tasks.map((t) => spectatorTaskText(spectatorTaskView(t)));
       }
     }
     return send(reply, r);

@@ -18,6 +18,7 @@ import {
 import { requireWorkspace } from "../auth/session.js";
 import { approvalExpiresAt, isCredentialAsk } from "../lib/approval-policy.js";
 import { SPECTATOR_VERIFICATION_DETAIL, filterForSpectator, stalledDetail } from "../lib/needs-you-copy.js";
+import { spectatorNeedsYouItem } from "../lib/public-text.js";
 import { MIN_SUBSTANTIVE_BYTES } from "../lib/task-artifacts.js";
 
 type ReviewItem = {
@@ -107,9 +108,15 @@ export default async function needsYouRoutes(app: FastifyInstance): Promise<void
     items.sort((a, b) => priority[a.priority] - priority[b.priority] || Date.parse(b.createdAt) - Date.parse(a.createdAt));
 
     // The public read-only visitor gets the actionable slice, not the backlog
-    // — see lib/needs-you-copy.ts for the three rules and why.
+    // — see lib/needs-you-copy.ts for the three rules and why. That decides
+    // WHICH items a visitor sees; the scrub decides what they READ, because
+    // both strings on an item are built out of agent prose — a card title, a
+    // workflow run's raw `errorText`, a connector's `lastError` — and get the
+    // same treatment as a message body.
     const shown = req.spectator
-      ? filterForSpectator(items, await tasksWithVerifiedDeliverable(items))
+      ? filterForSpectator(items, await tasksWithVerifiedDeliverable(items)).map(
+          spectatorNeedsYouItem,
+        )
       : items;
     return { items: shown, counts: { total: shown.length, critical: shown.filter((item) => item.priority === "critical").length, high: shown.filter((item) => item.priority === "high").length } };
   });
