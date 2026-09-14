@@ -44,18 +44,31 @@ const ANCILLARY_TOKENS = [
   "verification",
   "verifications",
   "verify",
+  "verifying",
   "verified",
+  "reverification",
+  "revalidation",
+  "validation",
+  "validated",
   "audit",
   "audits",
+  "audited",
   "qa",
+  "qc",
+  "testreport",
   "report",
   "reports",
+  "reporting",
   "research",
   "notes",
   "note",
   "manifest",
+  "manifests",
+  "checklist",
+  "checklists",
   "checksum",
   "checksums",
+  "hashes",
   "sha256",
   "sha256sums",
   "sha1sums",
@@ -63,12 +76,21 @@ const ANCILLARY_TOKENS = [
   "changelog",
   "readme",
   "summary",
+  "summaries",
   "log",
   "logs",
+  "logfile",
   "postmortem",
   "retro",
   "handoff",
+  "handover",
+  "signoff",
   "status",
+  "evidence",
+  "proof",
+  "confirmation",
+  "completion",
+  "findings",
   "plan",
   "planning",
   "todo",
@@ -147,14 +169,97 @@ function expectedExtensions(kinds: string[]): Set<string> {
   return out;
 }
 
-// Does this file name read as paperwork about the work? `asked` is the brief's
-// own vocabulary: a brief that says "audit report" makes audit-report.md the
-// deliverable, not paperwork, so those tokens are forgiven.
+// Only these extensions can be paperwork. A report ABOUT the work is prose:
+// it arrives as .md/.txt/SHA256SUMS/manifest.json, never as the running
+// artifact itself. Gating on the extension is what keeps a legitimately-named
+// deliverable ("final-dashboard.html", "audit-tool.ts", "status-board.html")
+// out of the paperwork bucket no matter which tokens its name happens to use.
+const PAPERWORK_EXTENSIONS = new Set([
+  "", // SHA256SUMS, CHECKSUMS, NOTES — no extension at all
+  "md",
+  "markdown",
+  "txt",
+  "text",
+  "rst",
+  "log",
+  "json",
+  "pdf",
+  "doc",
+  "docx",
+]);
+
+// A brief only "asks for" paperwork when it asks for it as a DELIVERABLE —
+// "write a competitor research report", "produce an audit". Merely USING the
+// vocabulary does not count, and that distinction is the whole bug: live task
+// task_9533y8685y7zginrepvk is titled "Deploy and Verify the Live Dashboard"
+// and its body says "Re-verification complete … both implemented and verified",
+// so the old rule (any brief token forgives the matching name token) forgave
+// "verify" and "verification" and handed the judge four of the agent's own
+// verification write-ups alongside dashboard.html.
+const DELIVERABLE_VERBS =
+  "write|writing|produce|producing|deliver|delivering|create|creating|draft|drafting|compile|compiling|prepare|preparing|provide|providing|submit|submitting|generate|generating|publish|publishing|author|authoring|attach|attaching|include|including";
+
+/**
+ * The paperwork tokens this brief genuinely asked for as a deliverable. Pure.
+ * A token qualifies when a producing verb appears within a short span before
+ * it in the same sentence ("write the Q3 audit report" → audit, report).
+ */
+export function paperworkAskedFor(title: string, bodyMd: string): Set<string> {
+  const hay = `${title || ""}\n${bodyMd || ""}`.toLowerCase();
+  const out = new Set<string>();
+  for (const tok of ANCILLARY_TOKENS) {
+    const re = new RegExp(`\\b(?:${DELIVERABLE_VERBS})\\b[^.\\n]{0,40}?\\b${tok}s?\\b`);
+    if (re.test(hay)) out.add(tok);
+  }
+  return out;
+}
+
+// Does this file name read as paperwork about the work? `asked` is what the
+// brief explicitly requested as a deliverable (see paperworkAskedFor): a brief
+// that says "write the audit report" makes audit-report.md the deliverable, not
+// paperwork, so those tokens are forgiven.
 // Over-flagging is cheap: when EVERY candidate looks like paperwork the filter
 // falls back to the full ranked list, so the worst case is that the ordinary
 // signals (requested extension, title echo, size) decide on their own.
 export function isAncillaryName(name: string, asked: Set<string>): boolean {
+  if (!PAPERWORK_EXTENSIONS.has(extensionOf(name))) return false;
   return nameTokens(name).some((t) => ANCILLARY_TOKENS.includes(t) && !asked.has(t));
+}
+
+// Lines that are the agent ticking its own boxes rather than the work: bare
+// hashes, checkmarks, "200 OK"/HTTP status roll-calls, "VERIFIED"/"MATCH"
+// stamps. A file that is MOSTLY these is a self-written report whatever it is
+// called — live had `backend-full-verification-2026-09-13.md`, 3 KB of
+// "27/27 endpoints 200 OK" and "4/4 footer hashes MATCH", and the judge's pass
+// rationale quoted it back as if it were evidence.
+const PAPERWORK_LINE_RES: RegExp[] = [
+  /\b[0-9a-f]{32,64}\b/i, // md5/sha1/sha256 digests
+  /^[\s>*\-+#|]*[\u2705\u2714\u2713\u274c\u2717\u2716\u2718]/u, // leading ✅ ✔ ✓ ❌ ✗ ✘
+  /[\u2705\u2714\u274c]/u, // a checkmark/cross anywhere on the line
+  /\b(?:200\s*OK|HTTP\/\d(?:\.\d)?\s*200|status[:=]\s*200)\b/i,
+  /\b(?:verified|verification|re-?verified|validated|confirmed|matches?|match(?:ed)?|pass(?:ed)?|ok)\b\s*[.:!]?\s*$/i,
+  /^\s*\d+\s*\/\s*\d+\b/, // "27/27 endpoints", "4/4 hashes"
+];
+
+/** Minimum non-empty lines before the content check is allowed to decide. */
+const PAPERWORK_MIN_LINES = 4;
+
+/**
+ * Pure: does this file's BODY read as the agent's own report about the work
+ * (mostly hashes / checkmarks / "200 OK" / "verified" lines) rather than the
+ * work itself? Deliberately conservative — it needs a real majority, and the
+ * caller only ever uses it to drop a file when a non-paperwork deliverable is
+ * also on the task.
+ */
+export function looksLikePaperworkText(text: string): boolean {
+  const lines = (text || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length < PAPERWORK_MIN_LINES) return false;
+  let marked = 0;
+  for (const line of lines) if (PAPERWORK_LINE_RES.some((re) => re.test(line))) marked++;
+  return marked / lines.length > 0.5;
 }
 
 // Collapse each distinct name to the single version that should be judged.
@@ -196,7 +301,7 @@ export function scoreDeliverables(
   if (!collapsed.length) return [];
   const kinds = expectedKinds(title, bodyMd);
   const wantExt = expectedExtensions(kinds);
-  const asked = briefTokens(`${title} ${bodyMd}`);
+  const asked = paperworkAskedFor(title, bodyMd);
   const titleToks = briefTokens(title);
   const maxSize = Math.max(...collapsed.map((r) => r.size), 1);
 
@@ -245,6 +350,12 @@ export interface DeliverableSelection {
   set: DeliverableCandidate[];
   /** Ranked view including what was demoted, for logging/debugging. */
   ranked: ScoredDeliverable[];
+  /**
+   * Paperwork that was EXCLUDED from the judged set because real work exists.
+   * The judge is told these names — "the agent's own reports about the work,
+   * not evidence" — so it can see what was attached without reading it.
+   */
+  paperwork: DeliverableCandidate[];
 }
 
 // How many artifacts the judge is shown at once. More than this and the
@@ -259,7 +370,7 @@ export function selectDeliverables(
   bodyMd: string,
 ): DeliverableSelection {
   const ranked = scoreDeliverables(rows, title, bodyMd);
-  if (!ranked.length) return { primary: null, set: [], ranked };
+  if (!ranked.length) return { primary: null, set: [], ranked, paperwork: [] };
   // A stub is never the deliverable while something substantial is on the
   // task, whatever its extension says. (A 500-byte manifest.json must not beat
   // a 4 KB write-up just because the brief mentioned an inventory.)
@@ -270,8 +381,11 @@ export function selectDeliverables(
   // whether the dashboard was built.
   const substantive = bySize.filter((s) => !s.ancillary);
   const pool = substantive.length ? substantive : bySize;
+  // When real work exists the paperwork is not merely ranked last — it leaves
+  // the judged set entirely and is only NAMED in the prompt.
+  const paperwork = substantive.length ? ranked.filter((s) => s.ancillary).map((s) => s.row) : [];
   const set = pool.slice(0, MAX_JUDGED_ARTIFACTS).map((s) => s.row);
-  return { primary: set[0] ?? null, set, ranked };
+  return { primary: set[0] ?? null, set, ranked, paperwork };
 }
 
 // Stable identity for a deliverable SET. Two judge runs over the same set of

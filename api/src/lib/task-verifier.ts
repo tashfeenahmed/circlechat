@@ -18,6 +18,7 @@ import { liveArtifactRows, isSubstantiveArtifact, isTextualContentType } from ".
 import {
   selectDeliverables,
   deliverableSetKey,
+  looksLikePaperworkText,
   type DeliverableCandidate,
 } from "./deliverable-select.js";
 import { readObject } from "./storage.js";
@@ -347,10 +348,26 @@ export async function countVerdictsForSet(
 // its name and size so the model can tell the work product from the supporting
 // files, and splits the character budget across them (the primary — the
 // highest-ranked artifact — always gets the largest share).
+export const PAPERWORK_PROMPT_LINE =
+  "These are the agent's own reports about the work; they are not evidence. Judge only the deliverables.";
+
+// The block that NAMES the excluded paperwork without showing a byte of it.
+// Listing it matters: the judge should know four verification write-ups were
+// attached (and that they prove nothing) rather than wonder what it is missing.
+export function renderPaperworkNotice(names: readonly string[]): string {
+  if (!names.length) return "";
+  return (
+    `\nNOT EVIDENCE — the agent's own paperwork about this task, excluded from the deliverables above ` +
+    `(${names.length} file${names.length === 1 ? "" : "s"}): ${names.join(", ")}\n` +
+    `${PAPERWORK_PROMPT_LINE}\n`
+  );
+}
+
 export function renderDeliverableSet(
   items: ReadonlyArray<{ row: { name: string; contentType: string; size: number }; text: string }>,
+  paperworkNames: readonly string[] = [],
 ): string {
-  if (!items.length) return "DELIVERABLES: (none)\n";
+  if (!items.length) return `DELIVERABLES: (none)\n${renderPaperworkNotice(paperworkNames)}`;
   const budgets = splitBudget(MAX_DELIVERABLE_CHARS, items.length);
   const header =
     items.length === 1
@@ -361,7 +378,7 @@ export function renderDeliverableSet(
     const truncated = it.text.length > budgets[i] ? `\n…[truncated, full file is ${it.row.size} bytes]` : "";
     return `--- FILE ${i + 1}: ${it.row.name} (${it.row.contentType}, ${it.row.size} bytes) ---\n${body}${truncated}`;
   });
-  return `${header}:\n${blocks.join("\n\n")}\n`;
+  return `${header}:\n${blocks.join("\n\n")}\n${renderPaperworkNotice(paperworkNames)}`;
 }
 
 // Primary gets half the budget, the rest share the remainder evenly.
@@ -413,15 +430,27 @@ export async function verifyTaskForDone(
 
   // Read the chosen set. A blob that has vanished from storage is dropped
   // rather than judged as an empty file.
-  const readable: Array<{ row: TaskArtifact; text: string }> = [];
+  const fetched: Array<{ row: TaskArtifact; text: string }> = [];
   for (const cand of selection.set) {
     const row = textual.find((r) => r.id === cand.id);
     if (!row) continue;
     const buf = await readObject(row.storageKey);
     if (!buf) continue;
-    readable.push({ row, text: buf.toString("utf8") });
+    fetched.push({ row, text: buf.toString("utf8") });
   }
-  if (!readable.length) return null;
+  if (!fetched.length) return null;
+
+  // SECOND paperwork pass, on the CONTENT this time. A name-based filter only
+  // catches paperwork that is named like paperwork; a file called
+  // `endpoints-2026-09-13.md` that is 40 lines of "200 OK" and "hash MATCH" is
+  // still the agent marking its own homework. Drop those too — but only while
+  // something that is NOT paperwork survives, so a doc-only task still gets
+  // judged on the doc it shipped.
+  const paperworkNames = selection.paperwork.map((r) => r.name);
+  const byContent = fetched.filter((f) => looksLikePaperworkText(f.text));
+  const realWork = fetched.filter((f) => !byContent.includes(f));
+  const readable = realWork.length ? realWork : fetched;
+  if (realWork.length) for (const f of byContent) paperworkNames.push(f.row.name);
   const chosen = readable[0].row;
   const judgedSet = readable.map((r) => r.row);
   const setKey = deliverableSetKey(judgedSet as unknown as DeliverableCandidate[]);
@@ -434,6 +463,8 @@ export async function verifyTaskForDone(
     demoted: selection.ranked
       .filter((c) => !judgedSet.some((j) => j.id === c.row.id))
       .map((c) => ({ name: c.row.name, score: Number(c.score.toFixed(2)), why: c.reasons.join("; ") })),
+    // The agent's own reports, named for the judge but never read to it.
+    paperwork: paperworkNames,
   };
 
   const taskType = inferType(chosen.name, chosen.contentType);
@@ -495,6 +526,9 @@ export async function verifyTaskForDone(
           "PASS if the set together satisfies the acceptance criteria. Supporting material " +
           "(notes, a verification write-up, a manifest) alongside the real work product is normal " +
           "and is NOT a reason to fail — judge the work product, not the paperwork about it. " +
+          "Files listed under NOT EVIDENCE are the agent's OWN reports about this task and have been " +
+          "withheld on purpose: never treat an agent's claim that it verified, tested, deployed or " +
+          "hash-checked something as proof that it happened. " +
           'Return ONLY a JSON object: {"meets_acceptance_criteria":0..1,' +
           '"artifact_present_substantive":true|false,"not_fabricated":true|false,' +
           '"verdict":"pass"|"fail","score":0..1,"rationale":"one short paragraph"}',
@@ -504,7 +538,7 @@ export async function verifyTaskForDone(
         content:
           `TASK TITLE: ${opts.title}\n` +
           `ACCEPTANCE CRITERIA / DESCRIPTION:\n${opts.bodyMd || "(none stated — judge against the title)"}\n\n` +
-          renderDeliverableSet(readable) +
+          renderDeliverableSet(readable, paperworkNames) +
           renderBlock,
       },
     ],

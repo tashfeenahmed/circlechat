@@ -89,13 +89,29 @@ export async function appendProgressNote(goalId: string, by: string, note: strin
     .catch(() => {});
 }
 
+/**
+ * Pure: the new dead-end list, or null when there is nothing to write — the
+ * note is blank, or this exact note is already recorded. That null is what
+ * makes appendDeadEnd (and the expired/denied-approval backfill that calls it
+ * for every closed card) idempotent: re-running it writes nothing.
+ */
+export function mergeDeadEnd(
+  existing: readonly string[],
+  deadEnd: string,
+  max: number = MAX_DEAD_ENDS,
+): string[] | null {
+  const d = (deadEnd || "").trim();
+  if (!d) return null;
+  if (existing.includes(d)) return null;
+  return [...existing, d].slice(-max);
+}
+
 export async function appendDeadEnd(goalId: string, deadEnd: string): Promise<void> {
-  const d = deadEnd.trim();
-  if (!d) return;
+  if (!deadEnd.trim()) return;
   const led = await loadLedger(goalId);
   if (!led) return;
-  if (led.triedDeadEnds.includes(d)) return;
-  const triedDeadEnds = [...led.triedDeadEnds, d].slice(-MAX_DEAD_ENDS);
+  const triedDeadEnds = mergeDeadEnd(led.triedDeadEnds, deadEnd);
+  if (!triedDeadEnds) return;
   await db
     .update(goalLedgers)
     .set({ triedDeadEnds, updatedAt: new Date() })
