@@ -28,6 +28,9 @@ export async function enqueueWorkflowRun(
   await workflowQueue.add(
     `workflow:${runId}`,
     { runId, reason, resumeStepId: opts.resumeStepId },
+    // A FRESH id per enqueue, never a fixed one keyed on runId: a fixed jobId
+    // whose job is still in the completed set makes add() a silent no-op (see
+    // lib/queue-dedupe.ts), which would strand every later wake of that run.
     { jobId: id("wfjob"), delay: Math.max(0, opts.delayMs ?? 0) },
   );
 }

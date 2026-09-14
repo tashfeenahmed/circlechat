@@ -71,6 +71,8 @@ export async function enqueueAgentEvent(
       workflowStepId: ev.workflowStepId,
       stageExecution: ev.stageExecution,
     } satisfies AgentJobPayload,
+    // runId is minted per call, so this id is never reused — a finished job
+    // can't block a later run (the trap documented in lib/queue-dedupe.ts).
     { jobId: runId },
   );
   return runId;

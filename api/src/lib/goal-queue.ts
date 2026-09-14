@@ -1,6 +1,7 @@
 import { Queue } from "bullmq";
 import { redis } from "./redis.js";
 import { envNum } from "./env.js";
+import { clearFinishedJob } from "./queue-dedupe.js";
 
 // Queue that drives automatic goal planning. Three job shapes:
 //   { kind: "plan", goalId, workspaceId } — decompose one goal (debounced on create)
@@ -17,9 +18,14 @@ export interface GoalPlanJob {
 export const goalQueue = new Queue<GoalPlanJob>(GOAL_QUEUE, {
   connection: redis,
   defaultJobOptions: {
-    // The sweeper is the retry mechanism (it re-enqueues open goals), so a
-    // single plan job doesn't need BullMQ-level retries.
+    // The sweeper is the retry driver (it re-enqueues open goals every 3 min),
+    // so a single plan job doesn't need BullMQ-level retries. That only works
+    // because a finished plan job is deleted immediately — see enqueueGoalPlan;
+    // while finished plan jobs lingered here, every sweeper re-enqueue was
+    // silently discarded as a duplicate id.
     attempts: 1,
+    // History kept for the repeatable sweep/mission jobs, which use BullMQ's
+    // own per-iteration ids and so can never block a later run.
     removeOnComplete: 200,
     removeOnFail: 200,
   },
@@ -31,12 +37,28 @@ const PLAN_DEBOUNCE_MS = envNum("GOAL_PLAN_DEBOUNCE_MS", 20_000, { min: 0 });
 
 // Enqueue (or re-enqueue) a plan for one goal. jobId = goalId dedupes: a goal
 // already waiting to be planned won't pile up duplicate jobs.
+//
+// The dedupe must cover IN-FLIGHT jobs only. BullMQ's fixed-jobId check is
+// plain key existence, and a finished job keeps its key while it sits in the
+// completed/failed set — so a plan that ran and returned early (deferred, or
+// the LLM gateway unreachable: both COMPLETE, they don't fail) used to make
+// every later add() for that goal a silent no-op, and the sweeper re-enqueued
+// into a black hole for as long as the completed set held the job. Two live
+// goals went 70 minutes unplanned that way.
+//
+// Two guards, deliberately both:
+//   • removeOnComplete/removeOnFail true — a plan job's key is gone the moment
+//     it finishes, so the id is free for the next attempt;
+//   • clearFinishedJob before the add — clears jobs already parked in the
+//     completed set (from an older build, or added under other options).
 export async function enqueueGoalPlan(goalId: string, workspaceId: string, immediate = false): Promise<void> {
+  // BullMQ custom job ids must not contain ':'. jobId = one pending plan/goal.
+  const jobId = `plan_${goalId}`;
+  await clearFinishedJob(goalQueue, jobId);
   await goalQueue.add(
     "plan",
     { kind: "plan", goalId, workspaceId },
-    // BullMQ custom job ids must not contain ':'. jobId = one pending plan/goal.
-    { jobId: `plan_${goalId}`, delay: immediate ? 0 : PLAN_DEBOUNCE_MS },
+    { jobId, delay: immediate ? 0 : PLAN_DEBOUNCE_MS, removeOnComplete: true, removeOnFail: true },
   );
 }
 
@@ -44,6 +66,9 @@ const SWEEP_KEY = "goal-sweep";
 const SWEEP_EVERY_MS = envNum("GOAL_SWEEP_EVERY_MS", 180_000, { min: 1 }); // 3 min
 
 // Install the repeatable sweeper job. Called once at worker boot.
+// (Safe from the fixed-jobId trap above: for a repeatable, BullMQ uses this id
+// to name the SCHEDULE and gives each iteration its own `repeat:<id>:<ms>` job
+// id, so a completed tick never blocks the next one.)
 export async function scheduleGoalSweep(): Promise<void> {
   // Clear any stale repeatable first so the interval can't double up.
   for (const r of await goalQueue.getRepeatableJobs()) {
