@@ -119,4 +119,30 @@ describe("dead-end backfill (pure parts)", () => {
     expect(merged[29]).toBe("the newest one");
     expect(merged[0]).toBe("dead end 1");
   });
+
+  // "6 closed approval(s) scanned, 4 goal ledger(s) touched" — but only three
+  // ledgers changed. The count was of goals LOOKED AT, and one of the four
+  // already carried this exact note, so mergeDeadEnd returned null and nothing
+  // was written. appendDeadEnd now reports whether it wrote, and
+  // clearApprovalFromGoalState returns only the goals it changed; this is that
+  // arithmetic, over the one function that decides it.
+  it("counts the ledgers that changed, not the goals it looked at", () => {
+    const note = approvalDeadEndNote("ap_1xe7eca8xa4xyqrwbeuq", "vercel_token", "expired");
+    const ledgers: Record<string, string[]> = {
+      goal_a: [],
+      goal_b: [],
+      goal_c: ["something else"],
+      goal_d: [note], // already backfilled on an earlier pass
+    };
+    let touched = 0;
+    for (const goalId of Object.keys(ledgers)) {
+      const next = mergeDeadEnd(ledgers[goalId], note);
+      if (!next) continue;
+      ledgers[goalId] = next;
+      touched++;
+    }
+    expect(touched).toBe(3);
+    // And replaying the whole sweep now touches nothing at all.
+    expect(Object.keys(ledgers).filter((g) => mergeDeadEnd(ledgers[g], note))).toEqual([]);
+  });
 });

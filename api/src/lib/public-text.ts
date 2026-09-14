@@ -228,3 +228,118 @@ export function scrubPublicEvent(raw: string): string {
     return raw;
   }
 }
+
+// ────────────── titles, names and the rest of the public surface ──────────────
+//
+// #64 wired `scrubPublicBody` to the three surfaces that obviously carry an
+// agent's prose: chat messages, task comments and search hits. But an agent
+// writes the same prose into a card TITLE, a goal BODY and a "Needs you"
+// DETAIL line, and those responses still went out verbatim. On live today,
+// with no session at all:
+//
+//   GET /api/tasks   → "**Implementation**: backend/server.js (28575B, 706
+//                       lines) at /workspace/backend/server.js"
+//                    → "root cause was a stale server snapshot from
+//                       /opt/data/workspace/backend"
+//                    → "Deploy still blocked on VERCEL_TOKEN."
+//                    → "task_lngbpbh19kbvv7w3lxhp unblocked."
+//
+// The web never showed any of it — web/src/lib/md.ts (`scrubIds`) cleans these
+// exact strings at render — which is precisely why it survived: the leak is
+// invisible in the browser and complete in the JSON. The API is the public
+// surface, so the scrub belongs here too.
+//
+// Same rule as everywhere else in this file: the stored bytes never change,
+// members and agents read the original, and only `req.spectator` gets this.
+
+// What a title becomes when the scrub removes all of it — a card whose title
+// was nothing but a container path still has to render as something.
+export const SCRUBBED_TITLE_FALLBACK = "Untitled";
+
+/**
+ * A title is prose that has to stay on one line. Same vocabulary as
+ * `scrubPublicBody`, then newlines collapse to spaces. An empty title in,
+ * empty title out — we do not invent one — but a title the scrub empties
+ * becomes the fallback rather than a blank card.
+ */
+export function scrubPublicTitle(text: string | null | undefined): string {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return raw;
+  const cleaned = scrubPublicBody(raw).replace(/\s+/g, " ").trim();
+  return cleaned || SCRUBBED_TITLE_FALLBACK;
+}
+
+/**
+ * A filename is not prose: it has no sentences to tidy and its digests and
+ * hex runs are part of its identity (`auditor_manifest_sha256.json` must stay
+ * that, not become `auditor_manifest_.json`). So a name only loses its mount
+ * point — the same rewrite the file-serve path already applies to a public
+ * read of a text deliverable.
+ */
+export function scrubPublicName(name: string | null | undefined): string {
+  const raw = String(name ?? "");
+  if (!raw) return raw;
+  const cleaned = scrubInternalPaths(raw).trim();
+  return cleaned || "file";
+}
+
+// Copy a row with the named string fields rewritten. Only strings are touched,
+// so a null `conversationName` stays null and a numeric field is left alone.
+function scrubFields<T extends Record<string, unknown>>(
+  row: T,
+  titles: readonly string[],
+  bodies: readonly string[],
+): T {
+  if (!row || typeof row !== "object") return row;
+  const out: Record<string, unknown> = { ...row };
+  for (const k of titles) if (typeof out[k] === "string") out[k] = scrubPublicTitle(out[k] as string);
+  for (const k of bodies) if (typeof out[k] === "string") out[k] = scrubPublicBody(out[k] as string);
+  return out as T;
+}
+
+/** Every authored text field on a task row, as the public identity may read it. */
+export function spectatorTaskText<T extends Record<string, unknown>>(task: T): T {
+  return scrubFields(task, ["title"], ["bodyMd", "description"]);
+}
+
+/** The same for a goal row (`GET /goals`, `GET /goals/:id`). */
+export function spectatorGoalText<T extends Record<string, unknown>>(goal: T): T {
+  return scrubFields(goal, ["title"], ["bodyMd", "description"]);
+}
+
+/**
+ * A "Needs you" item. `detail` is the worst of the three: for a failed
+ * workflow it is the run's raw `errorText`, and for a broken connector the
+ * provider's `lastError`.
+ */
+export function spectatorNeedsYouItem<T extends Record<string, unknown>>(item: T): T {
+  return scrubFields(item, ["title"], ["detail"]);
+}
+
+// The text fields of a file-directory row. Named explicitly rather than
+// indexed, because the row is a declared interface in routes/files.ts, not a
+// bag — a new text column has to be added here deliberately.
+export interface PublicFileFields {
+  name?: string;
+  description?: string | null;
+  taskTitle?: string | null;
+  conversationName?: string | null;
+}
+
+/**
+ * A row of the file directory. `key` and `url` are storage paths we minted
+ * (`u/<rand>/<name>`), not container paths, so they are left alone; the
+ * borrowed text — the attachment's own name, the card it hangs off, the
+ * channel it was posted in — is not.
+ */
+export function spectatorFileRow<T extends PublicFileFields>(row: T): T {
+  if (!row || typeof row !== "object") return row;
+  const out = { ...row };
+  if (typeof out.name === "string") out.name = scrubPublicName(out.name);
+  if (typeof out.description === "string") out.description = scrubPublicBody(out.description);
+  if (typeof out.taskTitle === "string") out.taskTitle = scrubPublicTitle(out.taskTitle);
+  if (typeof out.conversationName === "string") {
+    out.conversationName = scrubPublicTitle(out.conversationName);
+  }
+  return out;
+}

@@ -6,7 +6,7 @@ import { tasks, taskAssignees, boardStages } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { SPECTATOR_DONE_WINDOW_MS } from "../lib/retention.js";
 import { spectatorTaskView } from "../lib/agent-view.js";
-import { scrubPublicBody } from "../lib/public-text.js";
+import { scrubPublicBody, spectatorTaskText } from "../lib/public-text.js";
 import {
   STATUSES,
   listTasks,
@@ -101,7 +101,11 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
       doneWindowMs: req.spectator ? SPECTATOR_DONE_WINDOW_MS : null,
     });
     if (!req.spectator) return r;
-    return { ...r, tasks: r.tasks.map(spectatorTaskView) };
+    // `spectatorTaskView` drops the judge's rationale; `spectatorTaskText`
+    // cleans the card's own title and body, which until now shipped raw —
+    // "/workspace/backend/server.js" and "blocked on VERCEL_TOKEN" were both
+    // live in this response. See lib/public-text.ts.
+    return { ...r, tasks: r.tasks.map(spectatorTaskView).map(spectatorTaskText) };
   });
 
   app.post("/tasks", async (req, reply) => {
@@ -117,10 +121,19 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
       const detail = r as {
         task?: Record<string, unknown>;
         subtasks?: Array<Record<string, unknown>>;
+        links?: Array<{ linked?: Record<string, unknown> | null }>;
         comments?: Array<{ bodyMd: string }>;
       };
-      if (detail.task) detail.task = spectatorTaskView(detail.task);
-      if (Array.isArray(detail.subtasks)) detail.subtasks = detail.subtasks.map(spectatorTaskView);
+      const publicTask = (t: Record<string, unknown>) => spectatorTaskText(spectatorTaskView(t));
+      if (detail.task) detail.task = publicTask(detail.task);
+      if (Array.isArray(detail.subtasks)) detail.subtasks = detail.subtasks.map(publicTask);
+      // A linked card is a whole task row, title and body included — the same
+      // text, reached by a different field.
+      if (Array.isArray(detail.links)) {
+        detail.links = detail.links.map((l) =>
+          l && l.linked ? { ...l, linked: publicTask(l.linked) } : l,
+        );
+      }
       // System notices (the verification-hold comment) are addressed to
       // whoever runs the board, not to a visitor — see lib/tasks-core.ts.
       if (Array.isArray(detail.comments)) {

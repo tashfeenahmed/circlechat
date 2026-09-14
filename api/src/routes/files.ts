@@ -15,7 +15,7 @@ import {
 import { requireAuth, requireWorkspace, loadSession, loadSpectatorAuth } from "../auth/session.js";
 import { statObject, streamObject, readObject, deleteObject } from "../lib/storage.js";
 import { contentTypeForName, isScrubbableTextType } from "../lib/content-type.js";
-import { MAX_SCRUB_BYTES, scrubInternalPaths } from "../lib/public-text.js";
+import { MAX_SCRUB_BYTES, scrubInternalPaths, spectatorFileRow } from "../lib/public-text.js";
 import { workspaceMembers } from "../db/schema.js";
 import { artifactByStorageKey } from "../lib/task-artifacts.js";
 
@@ -511,7 +511,12 @@ export async function fileDirectoryRoutes(app: FastifyInstance): Promise<void> {
       }
       byKey.set(row.key, { ...row, alsoAttachedTo: 0 });
     }
-    return { files: Array.from(byKey.values()) };
+    const files = Array.from(byKey.values());
+    // A directory row is mostly borrowed text: the attachment's own name, the
+    // title of the card it hangs off, the name of the channel it was posted
+    // in. The serve path has scrubbed a public read of the file's CONTENTS
+    // since #64; the listing that points at it had not. See lib/public-text.ts.
+    return { files: req.spectator ? files.map(spectatorFileRow) : files };
   });
 
   // Delete an attachment. The key identifies the file; we find the message OR

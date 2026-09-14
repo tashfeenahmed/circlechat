@@ -106,17 +106,28 @@ export function mergeDeadEnd(
   return [...existing, d].slice(-max);
 }
 
-export async function appendDeadEnd(goalId: string, deadEnd: string): Promise<void> {
-  if (!deadEnd.trim()) return;
+/**
+ * Returns true only when this ledger actually changed. Most calls do nothing —
+ * the goal has no ledger row, or `mergeDeadEnd` recognised a note the ledger
+ * already carries — and a caller that counts these has to be able to tell the
+ * difference. `[approvals] dead-end backfill: 6 closed approval(s) scanned, 4
+ * goal ledger(s) touched` was a count of ATTEMPTS: three ledgers changed.
+ */
+export async function appendDeadEnd(goalId: string, deadEnd: string): Promise<boolean> {
+  if (!deadEnd.trim()) return false;
   const led = await loadLedger(goalId);
-  if (!led) return;
+  if (!led) return false;
   const triedDeadEnds = mergeDeadEnd(led.triedDeadEnds, deadEnd);
-  if (!triedDeadEnds) return;
+  if (!triedDeadEnds) return false;
+  let wrote = true;
   await db
     .update(goalLedgers)
     .set({ triedDeadEnds, updatedAt: new Date() })
     .where(eq(goalLedgers.goalId, goalId))
-    .catch(() => {});
+    .catch(() => {
+      wrote = false;
+    });
+  return wrote;
 }
 
 // Real forward motion happened (a task advanced): reset the stall AND loop

@@ -75,6 +75,23 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
 
     const limit = parseLimit(q.limit, 50, 200);
     const where = [eq(messages.conversationId, convId)];
+    // A soft-deleted message is not part of the transcript. It used to be
+    // returned as a tombstone — the row with `bodyMd: ""` — on the theory that
+    // the client renders something for it, but nothing ever did: the board
+    // drops soft-deleted comments in SQL (lib/tasks-core.ts), search already
+    // filters `deleted_at is null`, and web/src/components/MessageList.tsx
+    // throws the rows away before it renders. So every tombstone was pure
+    // waste, and worse than waste on the public board: today's cleanup
+    // soft-deleted 230 leak posts, and `GET /conversations/c_k4j…/messages
+    // ?limit=200` came back with 76 of its 200 rows empty — 38 % of an
+    // anonymous visitor's page, spent on messages that are gone. (Empty and
+    // deleted are the same set, not two overlapping ones: that channel holds
+    // 1 643 rows, 544 with `deleted_at` set and 544 with an empty body.)
+    //
+    // Filtering HERE rather than after the query is what makes `limit` honest:
+    // the page holds `limit` real messages, and `before` still pages correctly
+    // because the cursor is the ts of a row we actually returned.
+    where.push(isNull(messages.deletedAt));
     if (q.parent_id) where.push(eq(messages.parentId, q.parent_id));
     else where.push(isNull(messages.parentId));
     // `before` is a keyset cursor (the ts of the oldest message the client
@@ -108,7 +125,10 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
             ct: dsql<number>`count(*)::int`.as("ct"),
           })
           .from(messages)
-          .where(inArray(messages.parentId, ids))
+          // Count the replies the thread will actually show. Counting deleted
+          // children too is how a "3 replies" chip opened a thread with one
+          // message in it.
+          .where(and(inArray(messages.parentId, ids), isNull(messages.deletedAt)))
           .groupBy(messages.parentId)
       : [];
 
@@ -125,9 +145,10 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
     // agents get the stored text. See lib/public-text.ts.
     const forPublic = req.spectator === true;
     return {
-      // A soft-deleted message stays in the list (the client renders a
-      // tombstone and thread counts stay right) but its body/attachments never
-      // leave the server — see lib/deleted-rows.ts.
+      // Deleted rows were filtered in SQL above; `redactDeleted` stays as the
+      // backstop for anything that reaches here with a `deletedAt` anyway (an
+      // in-flight delete racing this read), so a body can never ride out on a
+      // deleted row whatever the query did. See lib/deleted-rows.ts.
       messages: rows.map((m) => {
         const row = redactDeleted(m);
         return {
