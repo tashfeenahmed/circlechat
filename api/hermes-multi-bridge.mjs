@@ -33,28 +33,86 @@ const CONTAINER_OPENCLAW_HOME = "/root/.openclaw";
 
 // ── Container shutdown grace ──────────────────────────────────────────────
 // Each turn is a `docker run --rm` of the hermes-agent image, which boots a
-// full s6-overlay supervision tree (gateway + cron scheduler) and tears it down
-// again when `hermes chat` returns. s6's default service grace time is 3 s, and
-// the gateway's cron scheduler needs longer than that to finish an in-flight
-// job: on live, `gateway-exit-diag.log` recorded 207 consecutive `exit_nonzero`
-// where s6-supervise SIGTERM'd the gateway 12–55 s into the run with "1
-// in-flight cron job(s)" — the SAME job id every time, because each dirty
-// shutdown left the session suspended and the next boot picked it straight back
-// up. The run itself was still recorded as status=ok.
+// full s6-overlay supervision tree and tears it down again when `hermes chat`
+// returns. s6's default service grace time is 3 s, which is not enough for a
+// supervised service that is mid-write, so give the tree a real window.
 //
-// Two fixes, both here: give the tree a real grace period so the job drains,
-// and (below) stop reporting a non-zero container exit as a healthy run.
+// This grace period is NOT, however, what produced the `exit_nonzero` entries
+// in `gateway-exit-diag.log`. That was misdiagnosed. The gateway's own log at
+// every one of those timestamps reads:
+//
+//   Shutdown phase: drain done at +0.00s (drain took 0.00s, timed_out=False,
+//     active_at_start=0, active_now=0, cron_at_start=0, cron_now=0, …)
+//   Gateway stopped (total teardown 0.21s)
+//   Exiting with code 1 (signal-initiated shutdown without restart request)
+//     so systemd Restart=on-failure can revive the gateway.
+//
+// Nothing was draining, nothing timed out, teardown took 0.21 s. Hermes
+// reports a signal-stop as exit 1 *by design*, so that a supervisor revives
+// it. In a one-shot container there is nothing to revive, so it is noise, and
+// no grace period can make it go away. The operator fix is to stop
+// auto-starting a gateway in an ephemeral home (`gateway_state.json`:
+// `desired_state: stopped`) — which is how the other agent homes already run.
 const STOP_GRACE_SEC = Math.max(5, Number(process.env.CC_AGENT_STOP_GRACE_SEC) || 45);
 const STOP_GRACE_MS = STOP_GRACE_SEC * 1000;
 
 // Turn a container exit into a run error string, or null when it exited clean.
-// Exported for tests: a non-zero exit is a FAILED run even when the agent
-// produced usable text on the way out, because the shutdown that produced it
-// interrupted work the next boot has to redo.
+//
+// SCOPE, so this is not over-read: `exitCode` is the exit status of
+// `docker run`, i.e. of the container's CMD (`hermes chat`). The hermes-agent
+// image runs that CMD as s6-overlay's main program and supervises the gateway
+// separately, so a gateway that exits 1 during teardown does NOT show up here.
+// This catches the container failing — image pull, OOM kill, a `hermes chat`
+// crash — which is worth failing a run over. It is deliberately not a detector
+// for anything happening inside the supervision tree.
 export function gatewayExitError(exitCode, signal) {
   if (signal) return `gateway_interrupted: killed by ${signal}`;
   if (exitCode == null || exitCode === 0) return null;
   return `gateway_exit_nonzero: exit ${exitCode}`;
+}
+
+// ── One turn at a time per agent ──────────────────────────────────────────
+// Every turn bind-mounts the SAME HERMES_HOME into a fresh container, so two
+// concurrent turns for one handle share state.db, the session store, the cron
+// ticker lock and the gateway lock. Observed live: two `ambient` runs for
+// @miles started 60 s apart (17:21:00 and 17:22:00) and overlapped; the second
+// container's `hermes gateway run --replace` killed the first one's gateway
+// mid-turn (`gateway.previous_unclean_exit … prior_pid: 146`) and that turn's
+// 1885-char reply never reached the channel.
+//
+// The double dispatch is legitimate from the api's point of view: the ambient
+// per-agent cooldown is process-local in-memory state (`lastFiredByAgent` in
+// api/src/agents/ambient.ts), so it is lost on restart and not shared across
+// processes — a deploy that briefly overlaps two api processes will hand the
+// same agent two ambient beats seconds apart. The worker then runs them
+// concurrently (concurrency: 10, no per-agent key). The bridge is the only
+// component that knows a given HERMES_HOME is busy, so it is where the mutex
+// belongs.
+const inFlight = new Map(); // handle → Promise that settles when its turn ends
+
+// Background beats are DROPPED when the agent is already mid-turn: by the time
+// the running turn finishes, the beat's context packet is stale, and re-running
+// it just pays for the same wake twice. Triggers where a human or a decision is
+// waiting are not dropped — those are reported so the run is recorded honestly
+// rather than silently swallowed.
+const DROPPABLE_WHEN_BUSY = new Set(["scheduled", "ambient"]);
+
+// Exported for tests. Returns null when the handle is free (and marks it busy
+// until `done()` is called), or a reason string when a turn is already running.
+export function claimAgentSlot(handle, trigger, now = Date.now()) {
+  const held = inFlight.get(handle);
+  if (!held) {
+    inFlight.set(handle, { trigger, startedAt: now });
+    return { ok: true, done: () => inFlight.delete(handle) };
+  }
+  return {
+    ok: false,
+    droppable: DROPPABLE_WHEN_BUSY.has(trigger),
+    reason:
+      `agent_busy: a ${held.trigger} turn for @${handle} has been running for ` +
+      `${Math.round((now - held.startedAt) / 1000)}s; refusing to start a second ` +
+      `container on the same HERMES_HOME`,
+  };
 }
 
 // Per-handle connection registry so reconcile() can add/remove agents on the
@@ -1725,6 +1783,22 @@ function connect(entry) {
       `[${entry.handle}] ${trigger} ${conv ? `conv=${conv.conversationId} body="${String(last?.bodyMd ?? "(quiet)").slice(0, 50)}"` : `task-only (${p.myTasks?.length ?? 0} open)`}`,
     );
 
+    // One container at a time per HERMES_HOME. See claimAgentSlot above: a
+    // second concurrent container `--replace`s the first one's gateway and
+    // loses its reply.
+    const slot = claimAgentSlot(entry.handle, trigger);
+    if (!slot.ok) {
+      console.warn(`[${entry.handle}] ${trigger} → ${slot.reason}`);
+      // A stale background beat is dropped outright; anything a human or a
+      // decision is waiting on is reported so the run is recorded as failed
+      // instead of vanishing.
+      return reply(
+        slot.droppable
+          ? { status: "HEARTBEAT_OK", trace: [slot.reason] }
+          : { error: slot.reason, trace: [slot.reason] },
+      );
+    }
+
     const prompt = buildPrompt(entry, p);
     try {
       const isOpenClaw = entry.kind === "openclaw" || typeof entry.openclawHome === "string";
@@ -1889,6 +1963,10 @@ function connect(entry) {
         error: `bridge_error: ${e.message.split("\n")[0].slice(0, 200)}`,
         trace: [`${entry.handle} error: ${e.message.slice(0, 200)}`],
       });
+    } finally {
+      // Release the home for the next turn on every path — reply, empty
+      // reply, timeout, or throw. A leaked slot would silence the agent.
+      slot.done();
     }
   });
 
