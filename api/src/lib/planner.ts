@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import { goals, tasks, agents, workspaces } from "../db/schema.js";
 import { loadOrgNodes } from "../routes/org.js";
-import { chatJson, plannerEnabled } from "./completion.js";
+import { chatJsonOutcome, plannerEnabled } from "./completion.js";
 import { createTask, addLink, startBacklogTask, logActivity } from "./tasks-core.js";
 import { writePlan, loadLedger } from "./ledger-core.js";
 import { setGoalStatus } from "./goal-status.js";
@@ -82,7 +82,18 @@ export type PlanError =
   | "no_roster"
   | "plan_generation_failed"
   | "empty_plan"
-  | "cyclic_plan";
+  | "cyclic_plan"
+  // The gateway never answered (429 / 5xx / timeout / network). NOT the goal's
+  // fault and NOT a failed plan attempt — see goal-planner-worker's
+  // countsAsPlanAttempt. An hour of exhausted free-tier quota used to spend
+  // GOAL_MAX_PLAN_ATTEMPTS on every open goal and abandon all of them.
+  | "planner_transport";
+
+/** What planGoal gives back on failure; `transport` is set only for "planner_transport". */
+export interface PlanFailure {
+  error: PlanError;
+  transport?: { status: number; retryAfterMs: number | null };
+}
 
 // Build a teammate's capability profile from the strongest signals available:
 // the skills they've actually installed (name + description — the Agent-Skills
@@ -337,7 +348,7 @@ export async function planGoal(params: {
   // guard and feed the ledger's known dead-ends/facts into the prompt so the
   // planner produces a DIFFERENT plan instead of re-proposing what failed.
   isReplan?: boolean;
-}): Promise<{ plan: PlanResult } | { error: PlanError }> {
+}): Promise<{ plan: PlanResult } | PlanFailure> {
   const { goalId, workspaceId, actorMemberId, isReplan = false } = params;
 
   const [goal] = await db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
@@ -379,10 +390,32 @@ export async function planGoal(params: {
   // board frame); see lib/goal-status.ts.
   await setGoalStatus({ goalId, workspaceId, to: "planning", actorMemberId, reason: "plan_started" });
 
-  const raw = await chatJson<unknown>(
+  const outcome = await chatJsonOutcome<unknown>(
     buildMessages(goal.title, goal.bodyMd, ws?.mission ?? "", roster, replanNote),
     { temperature: 0.2, maxTokens: 4000, timeoutMs: 150_000 },
   );
+
+  // TRANSPORT failure: the router is rate-limited or down, so there is no model
+  // output to judge. Put the goal back to `open` (so the next sweep re-plans it
+  // rather than waiting out GOAL_STUCK_PLANNING_MS) and tell the caller this
+  // must not count as an attempt.
+  if (outcome.kind === "transport") {
+    const wait = outcome.retryAfterMs == null ? "" : `, retry after ~${Math.round(outcome.retryAfterMs / 1000)}s`;
+    console.warn(
+      `[planner] transport failure (${outcome.status}), will retry next sweep — goal ${goalId}${wait}` +
+        (outcome.detail ? ` — ${outcome.detail.slice(0, 200)}` : ""),
+    );
+    await setGoalStatus({ goalId, workspaceId, to: "open", actorMemberId, reason: "plan_deferred", meta: { transport: outcome.status } });
+    return { error: "planner_transport", transport: { status: outcome.status, retryAfterMs: outcome.retryAfterMs } };
+  }
+  // Configuration vanished mid-flight (plannerEnabled() passed above). Also not
+  // this goal's fault — don't spend an attempt on it.
+  if (outcome.kind === "unconfigured") {
+    await setGoalStatus({ goalId, workspaceId, to: "open", actorMemberId, reason: "plan_deferred", meta: { error: "planner_unconfigured" } });
+    return { error: "planner_unconfigured" };
+  }
+
+  const raw = outcome.kind === "ok" ? outcome.value : null;
   const parsed = PlanSchema.safeParse(raw);
   if (!parsed.success) {
     // Observability: this used to fail silently, leaving only the bare
@@ -391,7 +424,7 @@ export async function planGoal(params: {
     console.error(
       `[planner] plan_generation_failed for ${goalId}: ` +
         (raw === null
-          ? "chatJson returned null (LLM unreachable/timeout or no JSON in reply)"
+          ? `the model answered but the reply was unusable (${outcome.kind === "invalid" ? outcome.detail : "no JSON"})`
           : `schema rejected: ${parsed.error.issues
               .slice(0, 3)
               .map((i) => `${i.path.join(".")}: ${i.message}`)

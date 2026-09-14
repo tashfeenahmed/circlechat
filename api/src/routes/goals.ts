@@ -45,6 +45,10 @@ const PLAN_ERR_CODE: Record<PlanError, number> = {
   plan_generation_failed: 502,
   empty_plan: 502,
   cyclic_plan: 422,
+  // The LLM gateway was rate-limited/unreachable — nothing wrong with the goal
+  // or the request, so it reads as "try again later", like any other upstream
+  // outage. The sweep re-plans it without spending an attempt.
+  planner_transport: 503,
 };
 
 function send(reply: import("fastify").FastifyReply, result: { error?: string; [k: string]: unknown }) {
