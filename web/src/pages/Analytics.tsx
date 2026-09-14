@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { BarChart3, CheckCircle2, Zap, PlayCircle, ListTodo } from "lucide-react";
-import { useAnalytics } from "../lib/hooks";
+import { useAnalytics, useSpectator } from "../lib/hooks";
 import Segmented from "../components/Segmented";
 import Avatar from "../components/Avatar";
 import type { AnalyticsAgent } from "../api/client";
@@ -34,6 +34,11 @@ export default function AnalyticsPage() {
   const [range, setRange] = useState<Range>("30");
   const q = useAnalytics(Number(range));
   const data = q.data;
+  // The public read-only visitor sees what the agents shipped, not what the
+  // workspace paid or how often the harness tripped over itself. The server
+  // already omits these fields for a spectator (routes/analytics.ts); this
+  // drops the tiles and columns that would otherwise render blanks.
+  const spectator = useSpectator();
 
   const colorByAgent = useMemo(() => {
     const m = new Map<string, string>();
@@ -85,7 +90,7 @@ export default function AnalyticsPage() {
         {data && (
           <>
             {/* totals strip */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className={`grid grid-cols-2 gap-3 ${spectator ? "md:grid-cols-4" : "md:grid-cols-5"}`}>
               <StatCard
                 icon={<CheckCircle2 size={15} strokeWidth={2} />}
                 label="Tasks completed by agents"
@@ -112,13 +117,15 @@ export default function AnalyticsPage() {
                 value={data.totals.openTasks}
                 tone="warn"
               />
-              <StatCard
-                icon={<Zap size={15} strokeWidth={2} />}
-                label="Model spend this month"
-                value={fmtUsd(data.totals.costUsdMonth)}
-                sub={`${fmtUsd(data.totals.costUsdRange)} in range`}
-                tone="muted"
-              />
+              {!spectator && (
+                <StatCard
+                  icon={<Zap size={15} strokeWidth={2} />}
+                  label="Model spend this month"
+                  value={fmtUsd(data.totals.costUsdMonth ?? 0)}
+                  sub={`${fmtUsd(data.totals.costUsdRange ?? 0)} in range`}
+                  tone="muted"
+                />
+              )}
             </div>
 
             {/* daily completions chart */}
@@ -189,13 +196,15 @@ export default function AnalyticsPage() {
                         <th>Msgs</th>
                         <th>Comments</th>
                         <th>Approvals</th>
-                        <th title="Reported model spend where available; otherwise the platform estimate">Spend (mo)</th>
+                        {!spectator && (
+                          <th title="Reported model spend where available; otherwise the platform estimate">Spend (mo)</th>
+                        )}
                         <th>Last active</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.agents.map((a) => (
-                        <AgentRowView key={a.id} a={a} />
+                        <AgentRowView key={a.id} a={a} spectator={spectator} />
                       ))}
                     </tbody>
                   </table>
@@ -203,7 +212,9 @@ export default function AnalyticsPage() {
               )}
             </section>
 
-            {/* debugging */}
+            {/* debugging — operator-only: error/skip bookkeeping and the raw
+                run-error taxonomy are harness diagnostics, not a demo. */}
+            {!spectator && (
             <section className="mt-6">
               <h2 className="ana-h">Debugging</h2>
               <div className="ana-table-wrap">
@@ -231,13 +242,13 @@ export default function AnalyticsPage() {
                             .join(" · ") || "—"}
                         </td>
                         <td className="ana-num" title="Heartbeats skipped because nothing changed — no LLM call made">
-                          {a.skippedRuns}
+                          {a.skippedRuns ?? 0}
                           {a.runs.total > 0 && (
-                            <span className="text-[var(--color-muted-2)]"> ({Math.round((a.skippedRuns / a.runs.total) * 100)}%)</span>
+                            <span className="text-[var(--color-muted-2)]"> ({Math.round(((a.skippedRuns ?? 0) / a.runs.total) * 100)}%)</span>
                           )}
                         </td>
-                        <td className={`ana-num ${a.runsWithErrors > 0 ? "text-[var(--color-warn)]" : ""}`}>
-                          {a.runsWithErrors}
+                        <td className={`ana-num ${(a.runsWithErrors ?? 0) > 0 ? "text-[var(--color-warn)]" : ""}`}>
+                          {a.runsWithErrors ?? 0}
                         </td>
                         <td className={`ana-num ${a.runs.failed > 0 ? "text-[var(--color-err)]" : ""}`}>
                           {a.runs.failed}
@@ -263,6 +274,7 @@ export default function AnalyticsPage() {
                 </div>
               )}
             </section>
+            )}
 
             {/* recent completions */}
             <section className="mt-6 pb-8">
@@ -331,8 +343,9 @@ function StatCard({
   );
 }
 
-function AgentRowView({ a }: { a: AnalyticsAgent }) {
+function AgentRowView({ a, spectator }: { a: AnalyticsAgent; spectator: boolean }) {
   const open = a.tasksOpen.backlog + a.tasksOpen.in_progress + a.tasksOpen.review;
+  const costMonth = a.costUsdMonth ?? 0;
   return (
     <tr>
       <td>
@@ -365,29 +378,31 @@ function AgentRowView({ a }: { a: AnalyticsAgent }) {
           0
         )}
       </td>
-      <td
-        className="ana-num"
-        title={
-          a.budgetUsdMonth != null
-            ? `$${a.costUsdMonth.toFixed(2)} of $${a.budgetUsdMonth.toFixed(2)} monthly budget (reported where available; otherwise estimated)`
-            : "Model spend this month — reported where available; otherwise estimated"
-        }
-      >
-        {fmtUsd(a.costUsdMonth)}
-        {a.budgetUsdMonth != null && (
-          <span
-            className={
-              a.pauseReason === "budget" || a.costUsdMonth >= a.budgetUsdMonth
-                ? "text-[var(--color-err)]"
-                : a.costUsdMonth >= a.budgetUsdMonth * 0.8
-                  ? "text-[var(--color-warn)]"
-                  : "text-[var(--color-muted-2)]"
-            }
-          >
-            {" "}/ {fmtUsd(a.budgetUsdMonth)}
-          </span>
-        )}
-      </td>
+      {!spectator && (
+        <td
+          className="ana-num"
+          title={
+            a.budgetUsdMonth != null
+              ? `$${costMonth.toFixed(2)} of $${a.budgetUsdMonth.toFixed(2)} monthly budget (reported where available; otherwise estimated)`
+              : "Model spend this month — reported where available; otherwise estimated"
+          }
+        >
+          {fmtUsd(costMonth)}
+          {a.budgetUsdMonth != null && (
+            <span
+              className={
+                a.pauseReason === "budget" || costMonth >= a.budgetUsdMonth
+                  ? "text-[var(--color-err)]"
+                  : costMonth >= a.budgetUsdMonth * 0.8
+                    ? "text-[var(--color-warn)]"
+                    : "text-[var(--color-muted-2)]"
+              }
+            >
+              {" "}/ {fmtUsd(a.budgetUsdMonth)}
+            </span>
+          )}
+        </td>
+      )}
       <td className="text-[11.5px] font-mono text-[var(--color-muted-2)]">{fmtAgo(a.lastActiveAt)}</td>
     </tr>
   );

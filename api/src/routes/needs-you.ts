@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, gt, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   agents,
@@ -8,6 +8,7 @@ import {
   goalLedgers,
   goals,
   hostedApps,
+  taskArtifacts,
   taskVerifications,
   tasks,
   workflowRuns,
@@ -16,7 +17,8 @@ import {
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { approvalExpiresAt, isCredentialAsk } from "../lib/approval-policy.js";
-import { SPECTATOR_VERIFICATION_DETAIL, stalledDetail } from "../lib/needs-you-copy.js";
+import { SPECTATOR_VERIFICATION_DETAIL, filterForSpectator, stalledDetail } from "../lib/needs-you-copy.js";
+import { MIN_SUBSTANTIVE_BYTES } from "../lib/task-artifacts.js";
 
 type ReviewItem = {
   id: string;
@@ -103,6 +105,39 @@ export default async function needsYouRoutes(app: FastifyInstance): Promise<void
 
     const priority = { critical: 0, high: 1, normal: 2 } as const;
     items.sort((a, b) => priority[a.priority] - priority[b.priority] || Date.parse(b.createdAt) - Date.parse(a.createdAt));
-    return { items, counts: { total: items.length, critical: items.filter((item) => item.priority === "critical").length, high: items.filter((item) => item.priority === "high").length } };
+
+    // The public read-only visitor gets the actionable slice, not the backlog
+    // — see lib/needs-you-copy.ts for the three rules and why.
+    const shown = req.spectator
+      ? filterForSpectator(items, await tasksWithVerifiedDeliverable(items))
+      : items;
+    return { items: shown, counts: { total: shown.length, critical: shown.filter((item) => item.priority === "critical").length, high: shown.filter((item) => item.priority === "high").length } };
   });
+}
+
+// Task ids among the queue's `verification_failed` items that already carry a
+// deliverable: a live (not soft-deleted) artifact with a content hash, over the
+// stub floor. Those rows are the judge-outage false negatives that filled the
+// public queue — the work is on disk and hashed, only the judge was down.
+async function tasksWithVerifiedDeliverable(
+  items: ReviewItem[],
+): Promise<Set<string>> {
+  const taskIds = Array.from(
+    new Set(items.filter((i) => i.kind === "verification_failed").map((i) => i.targetId)),
+  );
+  if (!taskIds.length) return new Set();
+  const rows = await db
+    .select({ taskId: taskArtifacts.taskId })
+    .from(taskArtifacts)
+    .where(
+      and(
+        inArray(taskArtifacts.taskId, taskIds),
+        isNull(taskArtifacts.deletedAt),
+        gte(taskArtifacts.size, MIN_SUBSTANTIVE_BYTES),
+        // A hash is what "verified on disk" means here: the bytes were read
+        // and digested when the artifact was stored.
+        isNotNull(taskArtifacts.sha256),
+      ),
+    );
+  return new Set(rows.map((r) => r.taskId));
 }

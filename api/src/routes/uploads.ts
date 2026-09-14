@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { putObject, publicUrl } from "../lib/storage.js";
 import { requireAuth } from "../auth/session.js";
 import { id } from "../lib/ids.js";
+import { contentTypeForName } from "../lib/content-type.js";
 
 export default async function uploadRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireAuth);
@@ -16,7 +17,9 @@ export default async function uploadRoutes(app: FastifyInstance): Promise<void> 
     return {
       key,
       name: data.filename,
-      contentType: data.mimetype,
+      // Derived from the extension rather than trusting the browser's
+      // declared mimetype — see lib/content-type.ts.
+      contentType: contentTypeForName(data.filename, data.mimetype),
       size: buf.length,
       url: publicUrl(key),
     };

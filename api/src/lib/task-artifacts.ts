@@ -7,6 +7,7 @@ import { id as makeId } from "./ids.js";
 import type { Attachment } from "../db/schema.js";
 import { ingestKnowledge } from "./knowledge.js";
 import { audit } from "./audit.js";
+import { contentTypeForName } from "./content-type.js";
 import { recordProgress } from "./ledger-core.js";
 
 // Hard limits — mirror the agent attachment ingest (executor.ts) so artifacts
@@ -110,7 +111,11 @@ export async function createArtifact(opts: {
     name,
     version,
     storageKey,
-    contentType: (opts.contentType || "").split(";")[0].trim() || "application/octet-stream",
+    // The sanitized filename decides the type; the caller's declared mimetype
+    // is only a fallback for extensions we don't know (lib/content-type.ts).
+    // Every upload path shares this, so a .md artifact can't be stored as
+    // application/octet-stream by one route and text/markdown by another.
+    contentType: contentTypeForName(name, opts.contentType),
     size: opts.buffer.length,
     sha256,
     createdBy: opts.createdBy,

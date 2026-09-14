@@ -358,9 +358,32 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
     }
 
     const agentCompleted = agentsOut.reduce((s, a) => s + a.tasksCompleted, 0);
+    // What the public demo publishes. A visitor should see that the agents are
+    // working; the operator's own numbers are not part of that story:
+    //   • model spend (per agent, month-to-date and in range) and the budget
+    //     caps behind it are commercial detail about one workspace;
+    //   • runs-with-errors / skipped-runs / the normalized error taxonomy are
+    //     harness diagnostics ("post_message rejected: tool_call_syntax"),
+    //     written for whoever debugs the runtime.
+    // Omitted server-side, not just hidden in the UI — Analytics.tsx had no
+    // spectator guard at all, and a hidden field is still a served field.
+    const publicOnly = req.spectator === true;
+    const shapedAgents = publicOnly
+      ? agentsOut.map(
+          ({
+            costUsdRange: _range,
+            costUsdMonth: _month,
+            budgetUsdMonth: _budget,
+            runsWithErrors: _errs,
+            skippedRuns: _skipped,
+            pauseReason: _pause,
+            ...rest
+          }) => rest,
+        )
+      : agentsOut;
     return {
       days,
-      agents: agentsOut,
+      agents: shapedAgents,
       series,
       totals: {
         tasksCompleted: agentCompleted,
@@ -369,10 +392,14 @@ export default async function analyticsRoutes(app: FastifyInstance): Promise<voi
         runs: agentsOut.reduce((s, a) => s + a.runs.total, 0),
         failedRuns: agentsOut.reduce((s, a) => s + a.runs.failed, 0),
         openTasks: openTotal?.n ?? 0,
-        costUsdRange: agentsOut.reduce((s, a) => s + a.costUsdRange, 0),
-        costUsdMonth: agentsOut.reduce((s, a) => s + a.costUsdMonth, 0),
+        ...(publicOnly
+          ? {}
+          : {
+              costUsdRange: agentsOut.reduce((s, a) => s + a.costUsdRange, 0),
+              costUsdMonth: agentsOut.reduce((s, a) => s + a.costUsdMonth, 0),
+            }),
       },
-      topErrors,
+      topErrors: publicOnly ? [] : topErrors,
       recentCompletions: recent.map((r) => {
         const who = handleByMember.get(r.actorMemberId);
         return {

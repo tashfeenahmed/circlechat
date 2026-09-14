@@ -27,6 +27,7 @@ import {
 import { recordProgress } from "./ledger-core.js";
 import { audit } from "./audit.js";
 import { evaluateStageRules, StageRulesSchema } from "./p1-platform.js";
+import { clampLimit, decodeCursor, encodeCursor, takePage } from "./list-page.js";
 
 export const STATUSES = ["backlog", "in_progress", "blocked", "review", "done"] as const;
 export type Status = (typeof STATUSES)[number];
@@ -320,22 +321,46 @@ async function executeStageEntry(
  * while the API shipped every one of them; for the public/spectator identity
  * there is no toggle to press, so the cap is enforced server-side and those
  * rows are simply never sent.
+ *
+ * Paginated on (status, position, createdAt, id) — the same order the board
+ * renders in — with the cursor carrying that tuple for the page's last row,
+ * compared row-wise so the next page starts exactly after it. `id` is in the
+ * tuple purely as a tiebreaker: two cards can share a status, a position and a
+ * created_at, and without it a page boundary landing between them would drop
+ * or repeat one. See lib/list-page.ts for why keyset rather than OFFSET.
  */
 export async function listTasks(
   workspaceId: string,
-  opts: { doneWindowMs?: number | null } = {},
+  opts: { doneWindowMs?: number | null; limit?: unknown; cursor?: unknown } = {},
 ) {
+  const limit = clampLimit(opts.limit);
+  const after = decodeCursor(opts.cursor, 4);
   const conds = [eq(tasks.workspaceId, workspaceId), eq(tasks.archived, false)];
   if (opts.doneWindowMs != null) {
     const cutoff = new Date(Date.now() - opts.doneWindowMs);
     conds.push(dsql`(${tasks.status} <> 'done' or ${tasks.updatedAt} >= ${cutoff})` as never);
   }
+  if (after) {
+    const [status, position, createdAt, taskId] = after;
+    conds.push(
+      dsql`(${tasks.status}, ${tasks.position}, ${tasks.createdAt}, ${tasks.id}) > (${String(status)}, ${Number(position)}, ${new Date(String(createdAt))}, ${String(taskId)})` as never,
+    );
+  }
   const rows = await db
     .select()
     .from(tasks)
     .where(and(...conds))
-    .orderBy(asc(tasks.status), asc(tasks.position), asc(tasks.createdAt));
-  return { tasks: await hydrateTasks(rows) };
+    .orderBy(asc(tasks.status), asc(tasks.position), asc(tasks.createdAt), asc(tasks.id))
+    .limit(limit + 1);
+  const { page, hasMore } = takePage(rows, limit);
+  const last = page[page.length - 1];
+  return {
+    tasks: await hydrateTasks(page),
+    nextCursor:
+      hasMore && last
+        ? encodeCursor([last.status, last.position, last.createdAt.toISOString(), last.id])
+        : null,
+  };
 }
 
 export async function getTaskDetail(taskId: string, workspaceId: string) {
@@ -1157,6 +1182,17 @@ export async function deleteComment(taskId: string, commentId: string, actorMemb
 // retried flip would add another "still waiting" line. Authored by the acting
 // agent (the one whose flip was held); there is no system member.
 export const VERIFICATION_HOLD_PREFIX = "⏸ Verification on hold";
+
+// The hold comment is a SYSTEM notice, not a teammate's message. It exists so
+// whoever owns the board knows why a card is stuck; to a visitor on the public
+// demo it is an unexplained failure notice attributed to an agent, and 18
+// copies of it were the single largest source of environment-variable names in
+// the workspace. The prefix doubles as its marker — it is already the dedupe
+// key, so no schema change is needed to recognise one — and the spectator view
+// filters these out (see routes/tasks.ts).
+export function isSystemNotice(bodyMd: string): boolean {
+  return String(bodyMd ?? "").trimStart().startsWith(VERIFICATION_HOLD_PREFIX);
+}
 async function postVerificationHoldComment(
   taskId: string,
   actorMemberId: string,
@@ -1176,8 +1212,11 @@ async function postVerificationHoldComment(
   if (existing) return;
   await addComment(
     taskId,
-    `${VERIFICATION_HOLD_PREFIX} — the deliverable verifier (LLM judge) could not be reached, so this task stays in review ` +
-      `(VERIFY_FAIL_MODE=hold). A human can review the deliverable and mark it done, or the flip will be retried once the judge recovers.`,
+    // Written for a person: what happened, what it means for the card, and
+    // what they can do. No environment variable, no "judge", no "flip".
+    `${VERIFICATION_HOLD_PREFIX} — the automated check that reviews deliverables is unavailable right now, ` +
+      `so this card stays in review instead of moving to done. You can review the deliverable yourself and mark it done, ` +
+      `or leave it: the check runs again automatically once it is back.`,
     [],
     actorMemberId,
     workspaceId,

@@ -254,6 +254,48 @@ function looksLikeCodeDiffDump(s: string): boolean {
   return plainDiff >= 4 && plainDiff >= Math.ceil(nonEmpty.length * 0.6);
 }
 
+// The verifier's own JSON verdict, posted as a comment body. Two live
+// comments one minute apart were the raw judge payload, escape sequences and
+// all ({"verdict": "pass", "score": 1, "rationale": "…\\u2014…"}). The verdict
+// already renders as a badge on the card; the JSON is the machinery behind it.
+const VERIFIER_JSON_RE = /^\s*\{[\s\S]{0,600}["“]verdict["”]\s*:\s*["“](?:pass|fail|error)["”]/i;
+
+// A body that is nothing but JSON, without even a fence around it. The fenced
+// form is caught by PURE_JSON_FENCE_RE; this is the bare one.
+const BARE_JSON_BODY_RE = /^\s*[[{][\s\S]*[\]}]\s*$/;
+
+// A body whose every line is a diff line. looksLikeCodeDiffDump needs three or
+// four of them plus a shape match, which let single-line hunks through
+// verbatim ("+placeholder — comment body lives in the actions block") and
+// two-line markdown hunks ("+## 2026-09-10 · @iris" / "+Backend restarted…").
+// If there is no prose at all, the body is a patch, not a message. "+1" and a
+// bare "-" separator are excluded by the length floor.
+function isDiffOnlyBody(s: string): boolean {
+  const t = s.trim();
+  if (t.length <= 20) return false;
+  if (/^[+-]\d+$/.test(t)) return false;
+  const nonEmpty = t.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!nonEmpty.length) return false;
+  return nonEmpty.every((l) => /^[+-](?:\S|\s*$)/.test(l));
+}
+
+// Agent messages that carry no information: "test comment", "source attached",
+// a lone "👍". 27 such comments and 6 single-emoji messages are sitting in the
+// live workspace. A human's "ok" is fine — nothing here runs on human input —
+// but an agent posting one has simply burned a turn, and on the public demo it
+// reads as noise. An attachment changes that: "source attached" WITH the
+// source attached is a real message, so the floor only applies when the action
+// carried no file.
+export const MIN_AGENT_BODY_CHARS = 15;
+const EMOJI_ONLY_RE =
+  /^(?:[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D\p{Emoji_Modifier}\s+]|[\u{1F1E6}-\u{1F1FF}])+$/u;
+function isEmojiOnly(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/[\p{Letter}\p{Number}]/u.test(t)) return false;
+  return EMOJI_ONLY_RE.test(t);
+}
+
 function scrubSecrets(s: string): string {
   // Shared redaction (provider token shapes, key=value assignments, PEM, JWT)
   // plus the two chat-specific shapes that predate it.
@@ -451,9 +493,62 @@ export function stripLeakedScaffolding(s: string): ScaffoldStrip {
 // unpaired tags a truncated generation leaves behind.
 const PROSE_TOOL_BLOCK_RE =
   /<tool_call\b[^>]*>[\s\S]*?<\/tool_call>|<function=[^>\n]*>[\s\S]*?<\/function>|<parameter=[^>\n]*>[\s\S]*?<\/parameter>|<\/?tool_call\b[^>]*>|<function=[^>\n]*>|<\/?function\b[^>]*>|<parameter=[^>\n]*>|<\/?parameter\b[^>]*>/gi;
-// Gateway / runtime log lines that end up inside a reply.
+// Runtime log lines that end up inside a reply. Originally anchored to the
+// `gateway.` logger, which is not where the leaks came from: the four live
+// posts carrying log lines used `tools.registry` ("check_fn
+// check_focus_pane_requirements returned False; dependent tools will be
+// unavailable today") and `agent.tool_executor` ("Tool terminal returned error
+// (0.62s): {\"output\": …"). Match ANY dotted logger name — that shape
+// (LEVEL + module.path + colon) is a Python logger and never organic chat.
+//
+// The trailing group swallows the timestamped tool-output block that follows:
+// the executor's error payload is a transcript of `[00:27:32] Agent status
+// integration — cron tick` lines, which are as much machinery as the line that
+// introduced them.
 const PROSE_LOG_LINE_RE =
-  /(?:^|\n)[ \t]*(?:WARNING|WARN|ERROR|INFO|DEBUG)[ \t]+gateway\.[\w.]+[^\n]*/gi;
+  /(?:^|\n)[ \t]*(?:WARNING|WARN|ERROR|INFO|DEBUG|CRITICAL|FATAL|TRACE)[ \t]+[a-z_][\w]*(?:\.[\w]+)+[ \t]*:[^\n]*(?:\n[ \t]*\[\d{2}:\d{2}:\d{2}\][^\n]*)*/gi;
+// A standalone run of timestamped tool-output lines — the same transcript
+// arriving without its log-line header. Two or more consecutive lines, so a
+// human writing "[14:30:00] standup" once is untouched.
+const PROSE_TIMESTAMP_BLOCK_RE =
+  /(?:^|\n)[ \t]*\[\d{2}:\d{2}:\d{2}\][^\n]*(?:\n[ \t]*\[\d{2}:\d{2}:\d{2}\][^\n]*)+/g;
+
+// ── Hermes background-task / subagent notices ──
+// Runtime status lines the harness prints around an async turn. Both were
+// posted verbatim into #general (12 posts over five weeks), four of them as
+// the ENTIRE message, and two with the same line repeated twice in one body:
+//   "↩ Background task running — I'll resume when it finishes. Keep chatting."
+//   "[subagent-0] ⚡ Interrupted during API call."
+// Neither says anything to a teammate.
+const PROSE_BACKGROUND_TASK_RE =
+  /(?:^|\n)[ \t]*[↩⤴↪]?[ \t]*Background task running\b[^\n]*/gi;
+const PROSE_SUBAGENT_NOTICE_RE = /(?:^|\n)[ \t]*\[subagent-\d+\][^\n]*/gi;
+
+// ── chat-template role tags ──
+// Closing role tags from the model's own chat template, emitted as if they
+// were part of the reply. Four live posts carried `</assistant>` or `</body>`;
+// one task comment WAS `</assistant>` and nothing else. `<|im_end|>`-style
+// control tokens are already handled by PROSE_MODEL_TOKEN_RE; this covers the
+// XML-shaped family. Fenced blocks are exempt (an agent quoting HTML in a
+// ```fence``` is showing a snippet), so a real `</body>` in a code sample is
+// safe.
+const PROSE_ROLE_TAG_RE =
+  /<\/(?:assistant|user|system|human|tool|tool_response|s|body|html|head)\s*>|<(?:assistant|user|system|human|tool_response)\s*>|<\|[\w.-]{1,32}\|>/gi;
+
+// ── raw artifact / message ids in prose ──
+// `task_…`, `ap_…` and `goal_…` are rendered as titled chips by the web client
+// (web/src/lib/md.ts) — they point at something a reader can open. `art_…` and
+// `m_…` do not: there is no artifact page and no message page, so they are
+// pure machine identifiers sitting mid-sentence (22 and 9 live posts).
+const PROSE_ARTIFACT_ID_RE = /\bart_[a-z0-9]{12,28}\b/g;
+const PROSE_MESSAGE_ID_RE = /\bm_[a-z0-9]{16,28}\b/g;
+
+// ── environment variables ──
+// `VERIFY_FAIL_MODE=hold`, `HERMES_WRITE_SAFE_ROOT=/opt/data`: deployment
+// knobs. 21 live posts carried one, 19 of them the canned verification-hold
+// comment. An assignment tells a reader nothing and invites them to think they
+// should go and change it.
+const PROSE_ENV_ASSIGN_RE = /\b[A-Z][A-Z0-9_]{3,}=(?:"[^"\n]*"|'[^'\n]*'|\S+)/g;
 const PROSE_INVALID_TOOL_CALL_RE = /(?:^|\n)[^\n]*Model generated invalid tool call[^\n]*/gi;
 const PROSE_OUTPUT_ERROR_RE = /(?:^|\n)[ \t]*\*{0,2}OUTPUT_ERROR\*{0,2}[^\n]*/gi;
 // HEARTBEAT_OK and its misspellings (HEARTBERAT_OK observed live). The strict
@@ -473,6 +568,10 @@ const PROSE_TASK_ONLY_MODE_RE = /(?:^|\n)[^\n]*HERMES IS IN TASK-ONLY MODE[^\n]*
 const PROSE_BLOCKS: Array<{ re: RegExp; reason: string }> = [
   { re: PROSE_TOOL_BLOCK_RE, reason: "tool_call_markup" },
   { re: PROSE_LOG_LINE_RE, reason: "runtime_log_line" },
+  { re: PROSE_TIMESTAMP_BLOCK_RE, reason: "tool_output_transcript" },
+  { re: PROSE_BACKGROUND_TASK_RE, reason: "background_task_notice" },
+  { re: PROSE_SUBAGENT_NOTICE_RE, reason: "subagent_notice" },
+  { re: PROSE_ROLE_TAG_RE, reason: "chat_template_tag" },
   { re: PROSE_INVALID_TOOL_CALL_RE, reason: "invalid_tool_call_notice" },
   { re: PROSE_OUTPUT_ERROR_RE, reason: "output_error_notice" },
   { re: PROSE_HEARTBEAT_VARIANT_RE, reason: "heartbeat_leaked" },
@@ -483,12 +582,36 @@ const PROSE_BLOCKS: Array<{ re: RegExp; reason: string }> = [
 // ── (b) rewrites ──
 // Absolute container paths → the bare filename in backticks. `/workspace` and
 // `/opt/data` are the agent's mounts; a teammate can't open either.
-const PROSE_PATH_RE = /(^|[\s("'[<])(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?/g;
+//
+// A path written INSIDE a code span gets its own rule, and it has to run
+// first. The delimiter class below never contained a backtick, so every
+// `` `/workspace/backend` `` and `` `/opt/data/…` `` sailed through untouched
+// — which is how all nine of the recent live leaks were written. Rewriting
+// the whole span (rather than the path inside it) also avoids emitting a
+// nested pair of backticks.
+const PROSE_BACKTICK_PATH_RE =
+  /`[ \t]*(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?[ \t]*`/g;
+const PROSE_PATH_RE = /(^|[\s("'`[<])(\/(?:opt\/data|workspace|tmp)(?:\/[\w.@%+-]+)*)\/?/g;
 // Local endpoints and port mentions.
 const PROSE_LOCALHOST_RE =
   /\b(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d{2,5})?(?:\/[\w./?=&%-]*)?/gi;
-const PROSE_ON_PORT_RE = /\s*\b(?:on|at|via)\s+port\s+\d{2,5}\b/gi;
-const PROSE_BARE_PORT_RE = /(^|[\s(])::?\d{2,5}\b/g;
+const PROSE_ON_PORT_RE = /\s*\b(?:on|at|via|from)\s+port\s+\d{2,5}\b/gi;
+// A bare ":3000" — and the preposition in front of it, when there is one.
+// Deleting only the port is what produced the broken sentences the live demo
+// is full of: "running on: GET /bridge/status", "Backend restarted on (node
+// server.js)", "server live on, GET". Take "on :3000" out as one unit and the
+// sentence closes up cleanly.
+const PROSE_BARE_PORT_RE = /(^|\s)(?:\b(?:on|at|via|from|to)\s+)?::?\d{2,5}\b/gi;
+// A preposition left hanging in front of punctuation or a line end because
+// whatever followed it was rewritten away ("…and running on, GET /status").
+// Only ever applied to a chunk we actually rewrote — otherwise it would eat
+// the "on" out of "turn it on."
+const DANGLING_PREPOSITION_RE = /\s+\b(?:on|at|in|from|to|under|via)\b(?=\s*(?:[,.;:—–)\]]|$))/gi;
+// The vocabulary table can land next to a word the author already wrote
+// ("Auto-verifier" after "Automated" → "Automated automated check") or fire on
+// text the bridge already rewrote. Collapse the doubled word.
+const REWRITE_DOUBLE_RE =
+  /\b(automated|check|status|moved|moving|moves|today|runtime)\s+\1\b/gi;
 
 // Harness vocabulary → what a colleague would say. Ordered: the multi-word
 // phrases must run before the single words they contain.
@@ -530,20 +653,59 @@ function outsideFences(s: string, fn: (chunk: string) => string): string {
 
 // Pure: apply the path / port / vocabulary rewrites to one non-fenced chunk.
 // Exported for tests and mirrored by the bridge.
+// The filename a reader can act on, or "" when the path names nothing but a
+// mount point ("/workspace", "/opt/data/", "/tmp").
+function bareFilename(path: string): string {
+  const last = path.split("/").filter(Boolean).pop() ?? "";
+  return last && last !== "workspace" && last !== "tmp" && last !== "data" ? last : "";
+}
+
 export function applyProseRewrites(chunk: string): string {
   let out = chunk;
+  let rewrote = false;
+  // Backticked paths first, span and all.
+  out = out.replace(PROSE_BACKTICK_PATH_RE, (_m: string, p: string) => {
+    rewrote = true;
+    const last = bareFilename(p);
+    return last ? `\`${last}\`` : "";
+  });
   out = out.replace(PROSE_PATH_RE, (m: string, pre: string, p: string) => {
+    rewrote = true;
     // A path written with a trailing slash is a directory — there is no
     // filename worth showing, so it goes entirely.
     if (m.endsWith("/")) return pre;
-    const last = p.split("/").filter(Boolean).pop() ?? "";
-    const bare = last && last !== "workspace" && last !== "tmp" && last !== "data";
-    return bare ? `${pre}\`${last}\`` : pre;
+    const last = bareFilename(p);
+    return last ? `${pre}\`${last}\`` : pre;
   });
-  out = out.replace(PROSE_LOCALHOST_RE, "the server");
-  out = out.replace(PROSE_ON_PORT_RE, "");
-  out = out.replace(PROSE_BARE_PORT_RE, "$1");
+  out = out.replace(PROSE_LOCALHOST_RE, () => {
+    rewrote = true;
+    return "the server";
+  });
+  out = out.replace(PROSE_ON_PORT_RE, () => {
+    rewrote = true;
+    return "";
+  });
+  out = out.replace(PROSE_BARE_PORT_RE, (_m: string, pre: string) => {
+    rewrote = true;
+    return pre;
+  });
+  // Environment variables and ids that point at nothing a reader can open.
+  out = out.replace(PROSE_ENV_ASSIGN_RE, () => {
+    rewrote = true;
+    return "";
+  });
+  out = out.replace(PROSE_ARTIFACT_ID_RE, "the attached file");
+  out = out.replace(PROSE_MESSAGE_ID_RE, "an earlier message");
   for (const [re, to] of PROSE_VOCAB) out = out.replace(re, to);
+  out = out.replace(REWRITE_DOUBLE_RE, "$1");
+  // Only repair grammar in a chunk we actually cut something out of.
+  if (rewrote) out = out.replace(DANGLING_PREPOSITION_RE, "");
+  // Close up the gaps the removals left. sanitizeAgentProse tidies the whole
+  // body afterwards too, but doing it here keeps this function's own output
+  // readable — it is what the tests assert and what the bridge logs.
+  if (rewrote) {
+    out = out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([,.;:!?])/g, "$1");
+  }
   return out;
 }
 
@@ -572,6 +734,25 @@ function isSubstantive(s: string, strippedAnything: boolean): boolean {
   return true;
 }
 
+// Collapse a line (or paragraph) repeated back-to-back. The harness notices
+// arrive doubled — two live messages carried "↩ Background task running…"
+// twice and "[subagent-0] ⚡ Interrupted…" twice — and stripping the notices
+// can also leave two copies of the same surviving sentence adjacent. Only
+// CONSECUTIVE repeats go: a refrain that recurs later in a long update is the
+// author's choice, and runaway repetition has its own (rejecting) rule.
+// Exported for tests.
+export function dedupeConsecutiveLines(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    const key = line.trim();
+    const prev = out.length ? out[out.length - 1].trim() : null;
+    if (key && prev === key) continue;
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 export function sanitizeAgentProse(text: string): ProseSanitize {
   const stripped: string[] = [];
   let out = String(text ?? "");
@@ -589,6 +770,7 @@ export function sanitizeAgentProse(text: string): ProseSanitize {
     if (hit) stripped.push(reason);
   }
   out = outsideFences(out, applyProseRewrites);
+  out = outsideFences(out, dedupeConsecutiveLines);
   out = out
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+([,.;:!?])/g, "$1")
@@ -669,6 +851,19 @@ export function guardRejectHint(reason: string): string {
       return " Your reply contained model control tokens (e.g. <｜…｜>) — the generation broke down. Re-read the last message and answer in plain English.";
     case "task_only_mode_banner":
       return " Your reply was the runtime's task-only-mode banner. That's internal state, not a message — post the work outcome on the card instead.";
+    case "tool_output_transcript":
+      return " Your reply was a tool-output transcript (timestamped `[HH:MM:SS]` lines). That's the runtime talking to itself. Say what the run actually established, in one or two sentences.";
+    case "background_task_notice":
+    case "subagent_notice":
+      return " Your reply was a runtime status notice (a background-task or subagent line), not a message. Wait for the work to finish and post the outcome; if there is nothing to say yet, stay silent with exactly HEARTBEAT_OK.";
+    case "chat_template_tag":
+      return " Your reply carried chat-template markup (`</assistant>`, `</body>`, `<|im_end|>`). Those belong to the model's own prompt format and must never be typed into a message — write plain sentences only.";
+    case "verifier_json_leak":
+      return " You posted the verifier's raw JSON verdict as a comment. The verdict already shows on the card as a badge. If you want to add something, write one sentence about what the check found.";
+    case "emoji_only":
+      return " Your whole message was an emoji. Use a reaction for that — a message should say something.";
+    case "too_short":
+      return " Your message was too short to be worth a post (under 15 characters, no file attached). Say the concrete outcome, attach the deliverable, or stay silent with exactly HEARTBEAT_OK.";
     case "signoff_only":
       return " Your reply was only a signature/sign-off. Chat messages carry no sign-offs, no name/title lines, no hash footers — say the one new fact, then stop.";
     default:
@@ -730,8 +925,22 @@ export function checkReplyBody(
   if (PURE_JSON_FENCE_RE.test(trimmed) && trimmed.length > 400) {
     return { ok: false, reason: "pure_json_dump" };
   }
+  if (VERIFIER_JSON_RE.test(trimmed)) return { ok: false, reason: "verifier_json_leak" };
+  if (BARE_JSON_BODY_RE.test(trimmed) && trimmed.length > 60) {
+    return { ok: false, reason: "pure_json_dump" };
+  }
+  if (isDiffOnlyBody(trimmed)) return { ok: false, reason: "code_diff_leak" };
   if (opts && opts.hasAttachments === false && ATTACHMENT_CLAIM_RE.test(trimmed)) {
     return { ok: false, reason: "attachment_claim_no_file" };
+  }
+  // Junk floor. Checked against the SANITIZED body: what a reader would end up
+  // seeing is what has to clear the bar, and a body that is only machinery has
+  // already been rejected above.
+  if (!opts?.hasAttachments) {
+    if (isEmojiOnly(prose.text)) return { ok: false, reason: "emoji_only" };
+    if (prose.text.trim().length < MIN_AGENT_BODY_CHARS) {
+      return { ok: false, reason: "too_short" };
+    }
   }
   return { ok: true, bodyMd: prose.text };
 }

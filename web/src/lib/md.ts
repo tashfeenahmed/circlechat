@@ -48,6 +48,10 @@ export function scrubIds(text: string): string {
   out = out.replace(/\btask_[a-z0-9]{12,28}\b/g, "this card");
   out = out.replace(/\bap_[a-z0-9]{12,28}\b/g, "an approval");
   out = out.replace(/\bgoal_[a-z0-9]{12,28}\b/g, "this goal");
+  // Artifact and message ids have no page to open — unlike a card, an approval
+  // or a goal, there is nothing for a chip to link to, so they just go.
+  out = out.replace(/\bart_[a-z0-9]{12,28}\b/g, "the attached file");
+  out = out.replace(/\bm_[a-z0-9]{16,28}\b/g, "an earlier message");
   // Content digests / commit hashes → a short, still-recognisable prefix.
   out = out.replace(/\b([0-9a-f]{32,64})\b/g, (_m, h: string) => `${h.slice(0, 8)}…`);
   // Container paths → the bare filename. `/workspace/backend/server.js` is
@@ -84,6 +88,9 @@ function chipIds(html: string, resolveTask?: TaskResolver): string {
   });
   out = out.replace(/(?:<code>)?\b(ap_[a-z0-9]{12,28})\b(?:<\/code>)?/g, '<a class="idchip approval" href="/approvals" title="Open approvals">✓ approval</a>');
   out = out.replace(/(?:<code>)?\b(goal_[a-z0-9]{12,28})\b(?:<\/code>)?/g, '<a class="idchip goal" href="/goals" title="Open goals">◎ goal</a>');
+  // No artifact page exists, so these get a plain label rather than a link.
+  out = out.replace(/(?:<code>)?\bart_[a-z0-9]{12,28}\b(?:<\/code>)?/g, '<span class="idchip">▤ file</span>');
+  out = out.replace(/(?:<code>)?\bm_[a-z0-9]{16,28}\b(?:<\/code>)?/g, '<span class="idchip">▸ message</span>');
   // 32+ hex chars = SHA-1/SHA-256 style digests; keep the first 8 for eyeballing.
   out = out.replace(/(?:<code>)?\b([0-9a-f]{32,64})\b(?:<\/code>)?/g, (_m, h: string) => `<code class="hash" title="${h}">${h.slice(0, 8)}…</code>`);
   return out;

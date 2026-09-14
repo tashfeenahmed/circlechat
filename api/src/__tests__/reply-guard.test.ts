@@ -126,12 +126,14 @@ describe("checkReplyBody — leak classes observed in production", () => {
     });
   }
 
-  const pass: Array<{ name: string; body: string }> = [
+  const pass: Array<{ name: string; body: string; hasAttachments?: boolean }> = [
     { name: "normal reply", body: "Thanks — I'll review the scroll animations and report back." },
     { name: "one foreign name is not garbage", body: "Met with 王 about the Q3 deal; all good." },
     { name: "legit mention of heartbeat-like word", body: "The heartbeat monitor is green and the deploy looks healthy." },
-    // Sparse +/- lines in normal prose must not read as a diff dump.
-    { name: "a +1 ack", body: "+1" },
+    // Sparse +/- lines in normal prose must not read as a diff dump. ("+1" on
+    // its own now trips the agent junk floor — see the too_short case below —
+    // but it must still not be mistaken for a DIFF.)
+    { name: "a +1 ack with an attachment", body: "+1", hasAttachments: true },
     { name: "phone number line", body: "Reached the vendor:\n+353 1 234 5678\nThey'll confirm pricing tomorrow." },
     {
       name: "prose with --- separators",
@@ -140,7 +142,7 @@ describe("checkReplyBody — leak classes observed in production", () => {
   ];
   for (const c of pass) {
     it(`allows ${c.name}`, () => {
-      expect(checkReplyBody(c.body).ok).toBe(true);
+      expect(checkReplyBody(c.body, { hasAttachments: c.hasAttachments }).ok).toBe(true);
     });
   }
 
@@ -176,7 +178,7 @@ describe("checkReplyBody — tool-narration replies", () => {
 
   // Legitimate first-person work updates must pass — these were the exact
   // examples flagged as false-positive risks.
-  const pass: Array<{ name: string; body: string }> = [
+  const pass: Array<{ name: string; body: string; hasAttachments?: boolean }> = [
     { name: "sharing a brief", body: "Sharing showcase brief for review." },
     { name: "created + attached a file", body: "I've created a simple HTML file for the showcase page and attached it to the task." },
     { name: "browser compatibility is not narration", body: "The browser compatibility looks fine across Chrome and Safari." },
@@ -184,7 +186,7 @@ describe("checkReplyBody — tool-narration replies", () => {
   ];
   for (const c of pass) {
     it(`allows ${c.name}`, () => {
-      expect(checkReplyBody(c.body).ok).toBe(true);
+      expect(checkReplyBody(c.body, { hasAttachments: c.hasAttachments }).ok).toBe(true);
     });
   }
 
@@ -211,13 +213,13 @@ describe("checkReplyBody — provider/gateway error echoes on the reply path", (
     });
   }
 
-  const pass: Array<{ name: string; body: string }> = [
+  const pass: Array<{ name: string; body: string; hasAttachments?: boolean }> = [
     { name: "discussing an HTTP error mid-sentence", body: "I hit an HTTP 500 on deploy, retrying with a smaller payload now." },
     { name: "mentioning an API error in prose", body: "Heads up: the vendor returned an API error 503 earlier, but it recovered." },
   ];
   for (const c of pass) {
     it(`allows ${c.name}`, () => {
-      expect(checkReplyBody(c.body).ok).toBe(true);
+      expect(checkReplyBody(c.body, { hasAttachments: c.hasAttachments }).ok).toBe(true);
     });
   }
 

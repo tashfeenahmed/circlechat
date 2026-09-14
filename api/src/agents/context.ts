@@ -20,6 +20,7 @@ import {
 } from "../db/schema.js";
 import { loadReportingFor, type ReportingBundle } from "../routes/org.js";
 import { listGoals, getGoalAncestry } from "../lib/goals-core.js";
+import { MAX_PAGE_LIMIT } from "../lib/list-page.js";
 import { loadLedgers } from "../lib/ledger-core.js";
 import { ensureAndLoadBlocks } from "../lib/memory-blocks.js";
 import { loadTaskSummary, maybeSummarizeTaskThread } from "../lib/task-condenser.js";
@@ -680,7 +681,9 @@ export async function buildContext(opts: {
   ]);
 
   // Active goals (not done/archived), most recent first, bounded for prompt size.
-  const allGoals = (await listGoals(a.workspaceId)).goals;
+  // listGoals pages at 100 by default; ask for the full page size so a
+  // workspace with a long tail of finished goals still surfaces its live ones.
+  const allGoals = (await listGoals(a.workspaceId, { limit: MAX_PAGE_LIMIT })).goals;
   const activeGoalsRaw = allGoals
     .filter((g) => g.status !== "done" && g.status !== "archived")
     .slice(0, 10);

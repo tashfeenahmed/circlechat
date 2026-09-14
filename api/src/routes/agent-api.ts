@@ -38,8 +38,9 @@ import { createHash } from "node:crypto";
 import { publishToConversation } from "../lib/events.js";
 import { notifyForMessage } from "../lib/notifications.js";
 import { checkReplyBody, guardRejectHint } from "../agents/reply-guard.js";
+import { contentTypeForName } from "../lib/content-type.js";
 import { redactDeleted } from "../lib/deleted-rows.js";
-import { checkRecentDuplicate } from "../agents/dedupe.js";
+import { checkRecentDuplicate, checkRecentDuplicateTaskComment } from "../agents/dedupe.js";
 import { sanitizeAttachments, applyActions, type AgentAction } from "../agents/executor.js";
 import {
   STATUSES,
@@ -322,7 +323,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     return {
       key,
       name: data.filename,
-      contentType: data.mimetype,
+      contentType: contentTypeForName(data.filename, data.mimetype),
       size: buf.length,
       url: publicUrl(key),
     };
@@ -373,7 +374,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
       );
       return reply.code(422).send({ error: "reply_rejected", reason: guard.reason, hint: guardRejectHint(guard.reason).trim() });
     }
-    const dup = await checkRecentDuplicate(body.conversationId, guard.bodyMd);
+    const dup = await checkRecentDuplicate(body.conversationId, guard.bodyMd, req.agentCtx!.memberId);
     if (!dup.ok) {
       req.log.warn(
         {
@@ -756,7 +757,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
   app.get("/agent-api/goals", async (req, reply) => {
     const ws = await agentWorkspaceId(req.agentCtx!.agentId);
     if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
-    return await listGoals(ws);
+    return await listGoals(ws, req.query as { limit?: unknown; cursor?: unknown });
   });
   app.get("/agent-api/goals/:id", async (req, reply) => {
     const goalId = (req.params as { id: string }).id;
@@ -790,7 +791,7 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
   app.get("/agent-api/tasks", async (req, reply) => {
     const ws = await agentWorkspaceId(req.agentCtx!.agentId);
     if (!ws) return reply.code(500).send({ error: "agent_workspace_missing" });
-    return await listTasks(ws);
+    return await listTasks(ws, req.query as { limit?: unknown; cursor?: unknown });
   });
   app.get("/agent-api/tasks/:id", async (req, reply) => {
     const taskId = (req.params as { id: string }).id;
@@ -924,6 +925,21 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
         "task_comment_guard_rejected",
       );
       return reply.code(422).send({ error: "comment_rejected", reason: guard.reason, hint: guardRejectHint(guard.reason).trim() });
+    }
+    // The chat post route has deduped since the begging loop moved here; this
+    // one never did, which is how the same comment landed on four sibling
+    // cards inside 69 ms.
+    const dup = await checkRecentDuplicateTaskComment(taskId, guard.bodyMd, req.agentCtx!.memberId);
+    if (!dup.ok) {
+      req.log.warn(
+        { agentId: req.agentCtx!.agentId, taskId, againstId: dup.againstId, score: dup.score },
+        "task_comment_duplicate_rejected",
+      );
+      return reply.code(422).send({
+        error: "comment_rejected",
+        reason: dup.reason,
+        hint: "You already posted this. Say something new, or say nothing.",
+      });
     }
     return taskSend(
       reply,
@@ -1194,7 +1210,8 @@ async function resolveArtifactInput(
       return null;
     }
     const buffer = await data.toBuffer();
-    return { buffer, name: data.filename || "file", contentType: data.mimetype || "application/octet-stream" };
+    const name = data.filename || "file";
+    return { buffer, name, contentType: contentTypeForName(name, data.mimetype) };
   }
 
   const Body = z
@@ -1234,14 +1251,17 @@ async function resolveArtifactInput(
     } catch {
       nameHint = "";
     }
-    return { buffer, name: Body.name || nameHint || "file", contentType };
+    const fetchedName = Body.name || nameHint || "file";
+    return { buffer, name: fetchedName, contentType: contentTypeForName(fetchedName, contentType) };
   }
 
   if (typeof Body.contentText === "string") {
+    const inlineName = Body.name || "note.txt";
     return {
       buffer: Buffer.from(Body.contentText, "utf8"),
-      name: Body.name || "note.txt",
-      contentType: "text/plain; charset=utf-8",
+      name: inlineName,
+      // An inline ".md" note is markdown, not text/plain — the name decides.
+      contentType: contentTypeForName(inlineName, "text/plain; charset=utf-8"),
     };
   }
 

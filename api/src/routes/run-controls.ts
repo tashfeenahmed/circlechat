@@ -6,6 +6,7 @@ import { agentRuns, agents, workflowRuns } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { requirePermission, writeAudit } from "../lib/access-control.js";
 import { agentQueue } from "../agents/queue.js";
+import { canSeeAgentInternals, publicRunView, publicWorkflowRunView } from "../lib/agent-view.js";
 
 const ControlBody = z.discriminatedUnion("action", [
   z.object({ action: z.literal("cancel"), reason: z.string().max(1_000).optional() }),
@@ -44,10 +45,24 @@ export default async function runControlRoutes(app: FastifyInstance): Promise<vo
     const workflowRows = await db.select().from(workflowRuns)
       .where(and(eq(workflowRuns.workspaceId, req.auth!.workspaceId!), inArray(workflowRuns.status, ["queued", "running", "waiting"])))
       .orderBy(desc(workflowRuns.startedAt)).limit(100);
+    // Same rule as GET /agents/:id: a raw run row is the prompt packet + tool
+    // trace + operator steer notes. Non-admins (spectators included) get the
+    // projection from lib/agent-view.ts.
+    const full = await canSeeAgentInternals(req);
     return {
       runs: [
-        ...agentRows.map((row) => ({ type: "agent" as const, name: row.agentName, ...row.run })),
-        ...workflowRows.map((run) => ({ type: "workflow" as const, name: `Workflow ${run.workflowId}`, ...run })),
+        ...agentRows.map((row) => ({
+          type: "agent" as const,
+          name: row.agentName,
+          ...(full ? row.run : publicRunView(row.run)),
+          startedAt: row.run.startedAt,
+        })),
+        ...workflowRows.map((run) => ({
+          type: "workflow" as const,
+          name: `Workflow ${run.workflowId}`,
+          ...(full ? run : publicWorkflowRunView(run)),
+          startedAt: run.startedAt,
+        })),
       ].sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime()),
     };
   });

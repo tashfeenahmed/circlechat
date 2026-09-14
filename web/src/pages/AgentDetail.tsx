@@ -308,14 +308,20 @@ function RecentRuns({ runs }: { runs: AgentRun[] }) {
           </span>
           <span className="font-mono text-[var(--color-muted)]">{r.trigger}</span>
           <span className="flex-1">
+            {/* Admins get the raw trace / error text; everyone else gets the
+                server-built one-line summary (the trace and the error string
+                are runtime diagnostics — see lib/agent-view.ts). */}
             {r.errorText ? (
               <span className="text-[var(--color-err)]">{r.errorText}</span>
+            ) : r.traceJson?.length ? (
+              <>{r.traceJson.slice(0, 4).join(" · ")}</>
             ) : (
-              <>{(r.traceJson ?? []).slice(0, 4).join(" · ")}</>
+              <span className="text-[var(--color-muted)]">{r.summary ?? ""}</span>
             )}
           </span>
           <span className="text-[var(--color-muted)] font-mono">
             {new Date(r.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            {typeof r.durationSec === "number" ? ` · ${r.durationSec}s` : ""}
           </span>
         </div>
       ))}

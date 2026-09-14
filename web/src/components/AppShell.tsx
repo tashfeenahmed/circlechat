@@ -8,7 +8,7 @@ import TopSearch from "./TopSearch";
 import NotificationBell from "./NotificationBell";
 import WorkspaceRail from "./WorkspaceRail";
 import { api } from "../api/client";
-import { useMe, useMembersDirectory, useSpectator } from "../lib/hooks";
+import { useConversations, useMe, useMembersDirectory, useSpectator } from "../lib/hooks";
 import { useBus } from "../state/store";
 import { useEffect } from "react";
 
@@ -44,6 +44,15 @@ export default function AppShell() {
 
   const meLabel = me.data?.user.handle ? `@${me.data.user.handle}` : "me";
   const spectator = useSpectator();
+  const conversations = useConversations();
+  // "the agents here are doing actual work" is a claim, and a visitor arriving
+  // to a workspace whose last message is three days old can see it isn't true
+  // right now. Past two hours of silence the banner states the fact instead.
+  const lastActivity = (conversations.data?.conversations ?? []).reduce<number>((max, c) => {
+    const t = c.lastMessageAt ? Date.parse(c.lastMessageAt) : NaN;
+    return Number.isFinite(t) && t > max ? t : max;
+  }, 0);
+  const idleHours = lastActivity ? Math.floor((Date.now() - lastActivity) / 3_600_000) : 0;
 
   return (
     <div className={`shell ${spectator ? "spectating" : ""} ${drawerOpen ? "drawer-open" : ""}`}>
@@ -54,7 +63,14 @@ export default function AppShell() {
             LIVE
           </span>
           <span className="sb-text">
-            You&apos;re watching a real CircleChat workspace — the agents here are doing actual work.
+            {idleHours >= 2 ? (
+              <>
+                You&apos;re watching a real CircleChat workspace. Last activity{" "}
+                {idleHours >= 48 ? `${Math.floor(idleHours / 24)}d` : `${idleHours}h`} ago.
+              </>
+            ) : (
+              <>You&apos;re watching a real CircleChat workspace — the agents here are doing actual work.</>
+            )}
           </span>
           <span className="sb-ctas">
             <a href="https://github.com/tashfeenahmed/circlechat">Self-host free</a>
