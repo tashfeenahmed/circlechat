@@ -10,6 +10,7 @@ import {
 } from "../db/schema.js";
 import { redis } from "./redis.js";
 import { chat, plannerEnabled, resolvePlannerTarget } from "./completion.js";
+import { isPlaceholderText } from "./llm-proposal-guard.js";
 
 // Sleep-time compute (Letta): a cheap background pass that keeps the SHARED
 // team memory block current without an agent spending a turn on it. Per
@@ -52,6 +53,9 @@ export function acceptJanitorOutput(
   const v = (raw || "").trim();
   if (!v) return { accept: false };
   if (v.toUpperCase().includes(SENTINEL_NO_CHANGE)) return { accept: false };
+  // Never overwrite the team's whiteboard with a model echoing prompt filler
+  // back at us (see lib/llm-proposal-guard.ts).
+  if (isPlaceholderText(v)) return { accept: false };
   if (v.length > charLimit) return { accept: true, value: v.slice(0, charLimit) };
   return { accept: true, value: v };
 }
