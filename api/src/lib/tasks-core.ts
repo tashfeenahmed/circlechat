@@ -25,6 +25,7 @@ import {
   resolveFailMode,
 } from "./task-verifier.js";
 import { recordProgress } from "./ledger-core.js";
+import { audit } from "./audit.js";
 import { evaluateStageRules, StageRulesSchema } from "./p1-platform.js";
 
 export const STATUSES = ["backlog", "in_progress", "blocked", "review", "done"] as const;
@@ -542,6 +543,17 @@ export async function updateTask(taskId: string, input: UpdateTaskInput, actorMe
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
   if (input.status !== undefined && input.status !== t!.status) {
     await logActivity(taskId, actorMemberId, "status_changed", { from: t!.status, to: input.status });
+    // Governance trail (audit_events): who moved which card, and when. The
+    // activity feed is per-task and UI-facing; the audit log is the
+    // workspace-wide, exportable record the enterprise reader serves.
+    void audit({
+      workspaceId,
+      actorId: actorMemberId,
+      action: "task.status_changed",
+      targetType: "task",
+      targetId: taskId,
+      meta: { from: t!.status, to: input.status, title: t!.title, goalId: t!.goalId },
+    });
     await executeStageEntry(taskId, input.status, actorMemberId, workspaceId, t!.conversationId);
   }
   if (input.title !== undefined && input.title !== t!.title) {

@@ -1,6 +1,7 @@
 import { and, eq, inArray, desc, asc, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { goals, tasks, members, workspaces, goalLedgers } from "../db/schema.js";
+import { audit } from "./audit.js";
 import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
 import { hydrateTasks } from "./tasks-core.js";
@@ -247,6 +248,16 @@ export async function updateGoal(
       .catch(() => {});
   }
 
+  if (input.status !== undefined && input.status !== g!.status) {
+    void audit({
+      workspaceId,
+      actorId: input.ownerMemberId ?? g!.ownerMemberId ?? "system",
+      action: "goal.status_changed",
+      targetType: "goal",
+      targetId: goalId,
+      meta: { from: g!.status, to: input.status, title: g!.title },
+    });
+  }
   const [row] = await db.select().from(goals).where(eq(goals.id, goalId));
   const [hydrated] = await withCounts([row]);
   await publishToWorkspace(workspaceId, { type: "goal.updated", workspaceId, goalId, goal: hydrated });

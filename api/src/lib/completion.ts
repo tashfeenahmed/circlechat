@@ -93,6 +93,14 @@ export interface ChatOpts {
   timeoutMs?: number;
   // Which endpoint/model to call. Defaults to the planner target.
   target?: ChatTarget | null;
+  // Ask a reasoning-capable model to think as little as possible. Probing the
+  // live FreeLLMAPI gateway showed reasoning models emitting their whole chain
+  // of thought and hitting finish_reason:"length" BEFORE the answer — the
+  // caller gets a 200 with unusable content. Sent as BOTH spellings the
+  // OpenAI-compatible ecosystem uses (`reasoning_effort` and `reasoning.effort`);
+  // a gateway that rejects them with a 400 is retried once without them, so an
+  // endpoint that has never heard of reasoning params still works.
+  reasoningEffort?: string;
 }
 
 // Diagnostics for the "returned null" path. Every consumer of this client
@@ -135,11 +143,16 @@ async function chatWithModel(
   modelName: string,
   messages: ChatMessage[],
   opts: ChatOpts = {},
+  withReasoningParam = true,
 ): Promise<string | null> {
   const controller = new AbortController();
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const t = setTimeout(() => controller.abort(), timeoutMs);
   const at = { ...target, model: modelName };
+  const reasoning =
+    withReasoningParam && opts.reasoningEffort
+      ? { reasoning_effort: opts.reasoningEffort, reasoning: { effort: opts.reasoningEffort } }
+      : {};
   try {
     const res = await fetch(`${target.baseUrl}/chat/completions`, {
       method: "POST",
@@ -153,10 +166,21 @@ async function chatWithModel(
         messages,
         temperature: opts.temperature ?? 0.2,
         ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+        ...reasoning,
       }),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      // A 400 while we are sending reasoning params is most likely the gateway
+      // rejecting a param it doesn't know. Drop them and try once more before
+      // reporting the endpoint as broken.
+      if (res.status === 400 && withReasoningParam && opts.reasoningEffort) {
+        clearTimeout(t);
+        console.warn(
+          `[completion] ${target.baseUrl} rejected the reasoning parameter (400) — retrying without it (model=${modelName}).`,
+        );
+        return chatWithModel(target, modelName, messages, opts, false);
+      }
       noteChatFailure(at, `http_${res.status}`, body);
       return null;
     }

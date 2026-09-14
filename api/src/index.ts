@@ -38,6 +38,7 @@ import enterpriseRoutes, { enterprisePublicRoutes, serviceApiRoutes } from "./ro
 import { fileServeRoutes, fileDirectoryRoutes } from "./routes/files.js";
 import eventsWs from "./ws/events.js";
 import agentSocketWs from "./ws/agent-socket.js";
+import { logJudgeConfigOnce } from "./lib/task-verifier.js";
 import { config } from "./lib/config.js";
 import { startAmbientChatter } from "./agents/ambient.js";
 
@@ -221,6 +222,10 @@ if (existsSync(webDist)) {
 try {
   await app.listen({ port: config.port, host: "0.0.0.0" });
   app.log.info({ port: config.port }, "circlechat api listening");
+  // Say out loud which endpoint/model the verification judge will call. On the
+  // live box every VERIFY_JUDGE_* var was empty and the judge silently
+  // inherited the planner gateway with model "auto" — invisible in the logs.
+  logJudgeConfigOnce();
   // Ambient chatter is on by default with conservative cadence. Disable with
   // AMBIENT_CHATTER=0 (keeps the old kill-switch for debugging budget spikes).
   if (process.env.AMBIENT_CHATTER !== "0") {

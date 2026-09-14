@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, normalize, sep } from "node:path";
 import { liveArtifactRows } from "./task-artifacts.js";
+import { collapseVersions, type DeliverableCandidate } from "./deliverable-select.js";
 import { readObject } from "./storage.js";
 import type { TaskArtifact } from "../db/schema.js";
 
@@ -81,13 +82,16 @@ function spawnCapture(
   });
 }
 
-// Latest version per name, capped, with renderable assets first.
+// One version per name, capped. Uses the shared collapse so the render sees
+// the same bytes the judge does — critically, it skips a sub-1 KB newer version
+// when a substantial one exists (live had dashboard.html at 13,915 bytes with
+// 189- and 292-byte versions interleaved; rendering the stub reported a blank
+// page and hard-blocked a working deliverable).
 function pickFiles(rows: TaskArtifact[]): TaskArtifact[] {
-  const byName = new Map<string, TaskArtifact>();
-  for (const r of rows.sort((a, b) => b.version - a.version)) {
-    if (!byName.has(r.name)) byName.set(r.name, r);
-  }
-  return Array.from(byName.values()).slice(0, MAX_FILES);
+  const keep = new Set(
+    collapseVersions(rows as unknown as DeliverableCandidate[]).map((r) => r.id),
+  );
+  return rows.filter((r) => keep.has(r.id)).slice(0, MAX_FILES);
 }
 
 function chooseEntry(files: TaskArtifact[], entryName: string): string | null {

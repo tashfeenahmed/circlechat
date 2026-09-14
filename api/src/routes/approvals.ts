@@ -8,7 +8,8 @@ import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { applyApprovedActionPayload } from "../agents/executor.js";
 import { publishToConversation, publishToWorkspace } from "../lib/events.js";
 import { requirePermission, writeAudit } from "../lib/access-control.js";
-import { approvalExpiresAt } from "../lib/approval-policy.js";
+import { approvalExpiresAt, clearApprovalFromGoalState } from "../lib/approval-policy.js";
+import { audit } from "../lib/audit.js";
 import {
   deliverAgentSecrets,
   SECRET_NAME_RE,
@@ -137,6 +138,32 @@ export default async function approvalRoutes(app: FastifyInstance): Promise<void
       autoApplied = replay.applied;
     }
     const finalStatus = autoApplied ? "applied" : status;
+
+    // Governance trail: who decided what, and whether the original action was
+    // replayed server-side. Secret VALUES never appear — only the names.
+    void audit({
+      workspaceId: workspaceId!,
+      actorId: memberId!,
+      action: "approval.decided",
+      targetType: "approval",
+      targetId: apId,
+      meta: {
+        decision: body.decision,
+        status: finalStatus,
+        scope: a.scope,
+        action: a.action,
+        agentId: a.agentId,
+        autoApplied,
+        note,
+        deliveredSecretNames: deliveredSecrets ?? [],
+      },
+    });
+    // A decided card must stop being a live blocker in the agents' brief the
+    // same way an expired one does — a DENIED approval that the goal ledger
+    // still lists keeps the team waiting on an answer it already got.
+    if (finalStatus === "denied") {
+      void clearApprovalFromGoalState(apId, workspaceId!, a.scope, "denied").catch(() => {});
+    }
 
     if (finalStatus !== status || deliveredSecrets?.length) {
       await db

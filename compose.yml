@@ -113,6 +113,14 @@ services:
       VERIFY_FAIL_MODE: ${VERIFY_FAIL_MODE:-}
       VERIFY_REJUDGE_MIN_MS: ${VERIFY_REJUDGE_MIN_MS:-}
       VERIFY_JUDGE_TIMEOUT_MS: ${VERIFY_JUDGE_TIMEOUT_MS:-}
+      # Token budget for one verdict. The old hard-coded 800 was below what a
+      # reasoning model needs to finish thinking and still emit the JSON —
+      # probing the live gateway produced 0/15 parseable verdicts at 800.
+      VERIFY_JUDGE_MAX_TOKENS: ${VERIFY_JUDGE_MAX_TOKENS:-}
+      # "minimal" by default; set empty to send no reasoning parameter at all.
+      VERIFY_JUDGE_REASONING_EFFORT: ${VERIFY_JUDGE_REASONING_EFFORT:-}
+      # How many times an UNCHANGED artifact set may be re-judged (default 3).
+      VERIFY_MAX_JUDGES_PER_SET: ${VERIFY_MAX_JUDGES_PER_SET:-}
       # Approval lifecycle and auto-approval policy.
       APPROVAL_TTL_HOURS: ${APPROVAL_TTL_HOURS:-}
       APPROVAL_DENIAL_MEMORY_DAYS: ${APPROVAL_DENIAL_MEMORY_DAYS:-}
@@ -185,6 +193,14 @@ services:
       VERIFY_FAIL_MODE: ${VERIFY_FAIL_MODE:-}
       VERIFY_REJUDGE_MIN_MS: ${VERIFY_REJUDGE_MIN_MS:-}
       VERIFY_JUDGE_TIMEOUT_MS: ${VERIFY_JUDGE_TIMEOUT_MS:-}
+      # Token budget for one verdict. The old hard-coded 800 was below what a
+      # reasoning model needs to finish thinking and still emit the JSON —
+      # probing the live gateway produced 0/15 parseable verdicts at 800.
+      VERIFY_JUDGE_MAX_TOKENS: ${VERIFY_JUDGE_MAX_TOKENS:-}
+      # "minimal" by default; set empty to send no reasoning parameter at all.
+      VERIFY_JUDGE_REASONING_EFFORT: ${VERIFY_JUDGE_REASONING_EFFORT:-}
+      # How many times an UNCHANGED artifact set may be re-judged (default 3).
+      VERIFY_MAX_JUDGES_PER_SET: ${VERIFY_MAX_JUDGES_PER_SET:-}
       # Approval lifecycle and auto-approval policy.
       APPROVAL_TTL_HOURS: ${APPROVAL_TTL_HOURS:-}
       APPROVAL_DENIAL_MEMORY_DAYS: ${APPROVAL_DENIAL_MEMORY_DAYS:-}
