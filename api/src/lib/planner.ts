@@ -10,6 +10,7 @@ import { setGoalStatus } from "./goal-status.js";
 import { listAgentSkills, type AgentSkill } from "./agent-skills-fs.js";
 import { embed, cosine, embeddingsEnabled } from "./embeddings.js";
 import { envInt } from "./env.js";
+import { checkTitle, isPlaceholderText, TASK_LIMITS } from "./llm-proposal-guard.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // The goal planner — CircleChat's "auto-delegating manager".
@@ -262,6 +263,7 @@ function buildMessages(
     "For each task give a one-line `rationale`: WHY this task is needed and WHY this teammate (their skill/role fit).",
     "Return ONLY a JSON object of this exact shape, no prose, no markdown fence:",
     '{"tasks":[{"key":"t1","title":"...","description":"what done looks like","assignee":"handle","dependsOn":[],"labels":[],"rationale":"why this task + why this owner"}]}',
+    "The strings above are a SHAPE, not content — never return them verbatim.",
   ].join("\n");
 
   const user = [
@@ -305,6 +307,26 @@ function hasCycle(planned: PlannedTask[]): boolean {
   };
   for (const k of deps.keys()) if (visit(k)) return true;
   return false;
+}
+
+// Content gate over the model's decomposition — see lib/llm-proposal-guard.ts.
+// Pure + exported for tests: keeps the tasks that carry real work, blanks
+// filler descriptions/rationales, and warns once per dropped task.
+export function filterPlannedTasks(planned: PlannedTask[], goalId: string): PlannedTask[] {
+  const kept: PlannedTask[] = [];
+  for (const t of planned) {
+    const verdict = checkTitle(t.title, TASK_LIMITS);
+    if (!verdict.ok) {
+      console.warn(`[planner] rejected task proposal for ${goalId}: ${verdict.reason}`);
+      continue;
+    }
+    kept.push({
+      ...t,
+      description: isPlaceholderText(t.description ?? "") ? "" : t.description,
+      rationale: isPlaceholderText(t.rationale ?? "") ? "" : t.rationale,
+    });
+  }
+  return kept;
 }
 
 export async function planGoal(params: {
@@ -378,7 +400,13 @@ export async function planGoal(params: {
     await setGoalStatus({ goalId, workspaceId, to: "open", actorMemberId, reason: "plan_failed", meta: { error: "plan_generation_failed" } });
     return { error: "plan_generation_failed" };
   }
-  const planned = parsed.data.tasks;
+  // Same content gate as the mission planner: this prompt also hands the model
+  // an example JSON object, and a weak model sometimes returns the example's
+  // filler verbatim. Drop a task whose title is filler or too thin to be work;
+  // a filler DESCRIPTION alone just gets blanked (the title still names real
+  // work, and the description is optional anyway). All of them rejected falls
+  // through to the existing empty_plan path.
+  const planned = filterPlannedTasks(parsed.data.tasks, goalId);
   if (!planned.length) {
     await setGoalStatus({ goalId, workspaceId, to: "open", actorMemberId, reason: "plan_failed", meta: { error: "empty_plan" } });
     return { error: "empty_plan" };

@@ -6,6 +6,7 @@ import { chatJson, plannerEnabled } from "./completion.js";
 import { createGoal } from "./goals-core.js";
 import { notify } from "./notifications.js";
 import { envInt } from "./env.js";
+import { checkProposal, GOAL_LIMITS, STRICTER_RETRY_NOTE } from "./llm-proposal-guard.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // The mission planner — a daily pass that turns the workspace MISSION into
@@ -42,6 +43,8 @@ function buildMessages(
   mission: string,
   projects: Array<{ title: string }>,
   existingTitles: string[],
+  // Set on the one retry after a run where every proposal was prompt filler.
+  strictNote = "",
 ): Array<{ role: "system" | "user"; content: string }> {
   const system = [
     "You are the strategy manager for a workspace of AI agents and humans. Once a day you review the workspace MISSION and propose the next goals worth pursuing.",
@@ -51,7 +54,11 @@ function buildMessages(
     "If a PROJECT clearly covers the goal, set `project` to that project's exact title; otherwise leave it empty.",
     "Return ONLY a JSON object of this exact shape, no prose, no markdown fence:",
     '{"goals":[{"title":"...","description":"what done looks like","project":"exact project title or empty","rationale":"why this is the next move for the mission"}]}',
-  ].join("\n");
+    "The strings above are a SHAPE, not content — never return them verbatim.",
+    strictNote,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const user = [
     `WORKSPACE MISSION: ${mission}`,
@@ -96,6 +103,12 @@ async function findAdminMember(workspaceId: string): Promise<string | null> {
 
 const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
 
+// The goal body exactly as it will be stored — built once so the content gate
+// judges the same text the board would show. Exported for tests.
+export function composeBody(p: { description?: string; rationale?: string }): string {
+  return [p.description ?? "", p.rationale ? `_Why now: ${p.rationale}_` : ""].filter(Boolean).join("\n\n");
+}
+
 // One workspace: mission → up to GOALS_PER_RUN new goals. Returns #created.
 async function planWorkspace(ws: { id: string; mission: string }): Promise<number> {
   const rows = await db
@@ -115,19 +128,51 @@ async function planWorkspace(ws: { id: string; mission: string }): Promise<numbe
   // finished last week shouldn't be re-proposed this week.
   const existingTitles = live.map((g) => g.title).slice(0, 200);
 
-  const raw = await chatJson<unknown>(buildMessages(ws.mission, projects, existingTitles), {
-    temperature: 0.3,
-    maxTokens: 2000,
-    timeoutMs: 150_000,
-  });
-  const parsed = ProposalSchema.safeParse(raw);
-  if (!parsed.success) {
-    console.error(
-      `[mission-planner] proposal failed for ${ws.id}: ` +
-        (raw === null ? "chatJson returned null" : `schema rejected: ${JSON.stringify(raw).slice(0, 200)}`),
-    );
-    return 0;
+  // One completion → parsed proposals (null when the model or the schema failed).
+  const propose = async (strictNote: string): Promise<z.infer<typeof ProposalSchema>["goals"] | null> => {
+    const raw = await chatJson<unknown>(buildMessages(ws.mission, projects, existingTitles, strictNote), {
+      temperature: 0.3,
+      maxTokens: 2000,
+      timeoutMs: 150_000,
+    });
+    const parsed = ProposalSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.error(
+        `[mission-planner] proposal failed for ${ws.id}: ` +
+          (raw === null ? "chatJson returned null" : `schema rejected: ${JSON.stringify(raw).slice(0, 200)}`),
+      );
+      return null;
+    }
+    return parsed.data.goals;
+  };
+
+  // Content gate. The schema only checks shapes, so a model that echoes the
+  // prompt's example JSON back at us parses perfectly — that is how a goal
+  // titled "..." reached a live board. Drop anything that is prompt filler or
+  // too thin to be a real outcome, and say why.
+  const keep = (proposals: z.infer<typeof ProposalSchema>["goals"]) =>
+    proposals.filter((p) => {
+      const body = composeBody(p);
+      const verdict = checkProposal({ title: p.title, body }, GOAL_LIMITS);
+      if (!verdict.ok) console.warn(`[mission-planner] rejected proposal: ${verdict.reason}`);
+      return verdict.ok;
+    });
+
+  let proposed = await propose("");
+  if (!proposed) return 0;
+  let usable = keep(proposed);
+  // All filler (but the model did propose something) — one stricter retry, then
+  // give up for this run rather than putting junk on someone's board.
+  if (proposed.length && !usable.length) {
+    console.warn(`[mission-planner] ${ws.id}: every proposal rejected, retrying once with stricter instructions`);
+    proposed = await propose(STRICTER_RETRY_NOTE);
+    usable = proposed ? keep(proposed) : [];
+    if (!usable.length) {
+      console.warn(`[mission-planner] ${ws.id}: retry still produced no usable proposal, no goal created`);
+      return 0;
+    }
   }
+  if (!usable.length) return 0; // model returned an empty list — nothing to do
 
   const actor = await findAdminMember(ws.id);
   if (!actor) {
@@ -138,12 +183,10 @@ async function planWorkspace(ws: { id: string; mission: string }): Promise<numbe
   const seen = new Set(live.map((g) => norm(g.title)));
   const projectByTitle = new Map(projects.map((p) => [norm(p.title), p]));
   const createdTitles: string[] = [];
-  for (const p of parsed.data.goals.slice(0, GOALS_PER_RUN)) {
+  for (const p of usable.slice(0, GOALS_PER_RUN)) {
     if (seen.has(norm(p.title))) continue; // model ignored the dedupe instruction
     const project = projectByTitle.get(norm(p.project));
-    const body = [p.description, p.rationale ? `_Why now: ${p.rationale}_` : ""]
-      .filter(Boolean)
-      .join("\n\n");
+    const body = composeBody(p);
     const r = await createGoal(
       { title: p.title, bodyMd: body, parentGoalId: project?.id ?? null, kind: "goal" },
       actor,
