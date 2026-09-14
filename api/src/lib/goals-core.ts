@@ -1,4 +1,4 @@
-import { and, eq, inArray, desc, asc, sql as dsql } from "drizzle-orm";
+import { and, eq, inArray, desc, asc, ne, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { goals, tasks, members, workspaces, goalLedgers } from "../db/schema.js";
 import { audit } from "./audit.js";
@@ -6,7 +6,9 @@ import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
 import { hydrateTasks } from "./tasks-core.js";
 import { enqueueGoalPlan } from "./goal-queue.js";
-import { clampLimit, decodeCursor, encodeCursor, takePage } from "./list-page.js";
+import { clampLimit, decodeCursor, encodeCursor, keysetCondition, takePage } from "./list-page.js";
+import { SPECTATOR_HIDDEN_GOAL_STATUS } from "./agent-view.js";
+import { envNum } from "./env.js";
 
 // `parked` is the auto-parking terminal-until-resumed state: a goal whose tasks
 // have not moved for GOAL_PARK_AFTER_MS. It is deliberately NOT `in_progress`
@@ -20,9 +22,9 @@ export type GoalStatus = (typeof GOAL_STATUSES)[number];
 // How long a goal may go without any task movement before it is auto-parked.
 // 14 days by default: on live, 9 of 11 in-progress goals were 17–72 days stale
 // and between them drove every stall notification in the system.
-export const GOAL_PARK_AFTER_MS = Number(
-  process.env.GOAL_PARK_AFTER_MS ?? 14 * 24 * 60 * 60 * 1000,
-);
+export const GOAL_PARK_AFTER_MS = envNum("GOAL_PARK_AFTER_MS", 14 * 24 * 60 * 60 * 1000, {
+  min: 1,
+});
 
 export interface ParkCandidate {
   status: string;
@@ -188,16 +190,22 @@ export async function workspaceAutoPlan(workspaceId: string): Promise<string> {
 // the same millisecond (the planner materialises a tree in one go).
 export async function listGoals(
   workspaceId: string,
-  opts: { limit?: unknown; cursor?: unknown } = {},
+  opts: { limit?: unknown; cursor?: unknown; includeArchived?: boolean } = {},
 ) {
   const limit = clampLimit(opts.limit);
   const after = decodeCursor(opts.cursor, 2);
   const conds = [eq(goals.workspaceId, workspaceId)];
+  // An archived goal is retired work. The Goals page has always dropped it
+  // client-side, so nobody ever saw one — but the API shipped every row, and
+  // on the public fishbowl that meant 9 of 32 goals in the payload were
+  // retired ones an anonymous visitor could read straight out of devtools.
+  // Members/agents still get them (an operator can need the history).
+  if (opts.includeArchived === false) {
+    conds.push(ne(goals.status, SPECTATOR_HIDDEN_GOAL_STATUS));
+  }
   if (after) {
-    const [createdAt, goalId] = after;
-    conds.push(
-      dsql`(${goals.createdAt}, ${goals.id}) < (${new Date(String(createdAt))}, ${String(goalId)})` as never,
-    );
+    const cond = keysetCondition([goals.createdAt, goals.id], after, "before", [0]);
+    if (cond) conds.push(cond as never);
   }
   const rows = await db
     .select()

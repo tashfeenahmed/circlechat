@@ -9,6 +9,7 @@ import {
 } from "../db/schema.js";
 import { enqueueAgentEvent } from "./enqueue.js";
 import { heartbeatBackoffRemainingMs } from "./scheduler.js";
+import { envNum } from "../lib/env.js";
 
 // Background "water-cooler" loop: picks one random active agent + one of
 // their channels every MIN..MAX minutes and enqueues an `ambient` trigger.
@@ -21,18 +22,18 @@ import { heartbeatBackoffRemainingMs } from "./scheduler.js";
 // agent can't fire more than once every 15 min. Most ticks pick a different
 // agent anyway; the cooldown only matters on pool sizes of 1–2.
 
-const TICK_MIN_MS = Number(process.env.AMBIENT_TICK_MIN_MS ?? 15 * 60 * 1000);
-const TICK_MAX_MS = Number(process.env.AMBIENT_TICK_MAX_MS ?? 25 * 60 * 1000);
-const PER_AGENT_COOLDOWN_MS = Number(process.env.AMBIENT_AGENT_COOLDOWN_MS ?? 15 * 60 * 1000);
+const TICK_MIN_MS = envNum("AMBIENT_TICK_MIN_MS", 15 * 60 * 1000, { min: 1 });
+const TICK_MAX_MS = envNum("AMBIENT_TICK_MAX_MS", 25 * 60 * 1000, { min: 1 });
+const PER_AGENT_COOLDOWN_MS = envNum("AMBIENT_AGENT_COOLDOWN_MS", 15 * 60 * 1000, { min: 0 });
 // Skip the tick entirely if the chosen channel has had any message in the
 // last CHANNEL_QUIET_MS window — active humans don't want ambient noise
 // piled on top.
-const CHANNEL_QUIET_MS = Number(process.env.AMBIENT_CHANNEL_QUIET_MS ?? 6 * 60 * 1000);
+const CHANNEL_QUIET_MS = envNum("AMBIENT_CHANNEL_QUIET_MS", 6 * 60 * 1000, { min: 0 });
 // A water-cooler needs people at it. Only fire into a channel where a HUMAN
 // has posted within this window — otherwise agents chat to each other in a
 // room nobody reads (505 ambient runs/week on the fishbowl, every one of them
 // an LLM call producing filler nobody asked for). 0 disables the check.
-const HUMAN_ACTIVE_MS = Number(process.env.AMBIENT_HUMAN_ACTIVE_MS ?? 24 * 60 * 60 * 1000);
+const HUMAN_ACTIVE_MS = envNum("AMBIENT_HUMAN_ACTIVE_MS", 24 * 60 * 60 * 1000, { min: 0 });
 
 const lastFiredByAgent = new Map<string, number>();
 let timer: NodeJS.Timeout | null = null;

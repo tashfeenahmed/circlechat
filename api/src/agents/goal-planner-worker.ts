@@ -15,33 +15,34 @@ import { runMemoryJanitor } from "../lib/memory-janitor.js";
 import { GOAL_PARK_AFTER_MS, shouldParkGoal } from "../lib/goals-core.js";
 import { publishToWorkspace } from "../lib/events.js";
 import { RETENTION_INTERVAL_MS, runRetentionSweep, shouldRunNow } from "../lib/retention.js";
+import { envInt, envNum } from "../lib/env.js";
 
 // Give up after this many failed planning attempts (the sweeper is the retry
 // driver, so each attempt is one sweep tick apart — backoff for free).
-const MAX_PLAN_ATTEMPTS = Number(process.env.GOAL_MAX_PLAN_ATTEMPTS ?? 3);
+const MAX_PLAN_ATTEMPTS = envInt("GOAL_MAX_PLAN_ATTEMPTS", 3, { min: 1 });
 // A goal stuck in `planning` longer than this had its worker die mid-plan —
 // reset it to `open` so the sweeper re-plans it.
-const STUCK_PLANNING_MS = Number(process.env.GOAL_STUCK_PLANNING_MS ?? 300_000); // 5 min
+const STUCK_PLANNING_MS = envNum("GOAL_STUCK_PLANNING_MS", 300_000, { min: 1 }); // 5 min
 // Cap goals planned per sweep tick — a coarse rate limit until real budgets land.
-const SWEEP_BATCH = Number(process.env.GOAL_SWEEP_BATCH ?? 20);
+const SWEEP_BATCH = envInt("GOAL_SWEEP_BATCH", 20, { min: 1 });
 // Stall machinery: a goal whose ledger hasn't recorded forward progress within
 // this window — yet still has open, non-done tasks (work is supposedly
 // happening) — counts as stalled. After STALL_REPLAN_THRESHOLD consecutive
 // stalled sweeps, auto re-plan; after MAX_REPLANS, hand it to a human.
-const STALL_WINDOW_MS = Number(process.env.GOAL_STALL_WINDOW_MS ?? 900_000); // 15 min
-const STALL_REPLAN_THRESHOLD = Number(process.env.GOAL_STALL_REPLAN_THRESHOLD ?? 3);
-const MAX_REPLANS = Number(process.env.GOAL_MAX_REPLANS ?? 2);
+const STALL_WINDOW_MS = envNum("GOAL_STALL_WINDOW_MS", 900_000, { min: 1 }); // 15 min
+const STALL_REPLAN_THRESHOLD = envInt("GOAL_STALL_REPLAN_THRESHOLD", 3, { min: 1 });
+const MAX_REPLANS = envInt("GOAL_MAX_REPLANS", 2, { min: 0 });
 // Loop machinery: an ACTIVE goal (recent touches) that keeps repeating the same
 // step without advancing is "in a loop" — caught by the typed Progress Ledger,
 // not the wall-clock stall gate. After this many consecutive in-loop sweeps it
 // escalates the same way a stall does (notify, or re-plan if GOAL_STALL_REPLAN).
-const LOOP_REPLAN_THRESHOLD = Number(process.env.GOAL_LOOP_REPLAN_THRESHOLD ?? 2);
+const LOOP_REPLAN_THRESHOLD = envInt("GOAL_LOOP_REPLAN_THRESHOLD", 2, { min: 1 });
 // Review-queue SLA: a task sitting in `review` longer than this with nobody
 // flipping it has fallen through the cracks — escalate to a human so the board
 // doesn't freeze with finished-but-uncertified work (3 tasks sat 30h+ in
 // practice). Dedup is via touching updated_at, so a task re-escalates at most
 // once per SLA period.
-const REVIEW_SLA_MS = Number(process.env.REVIEW_SLA_MS ?? 6 * 60 * 60 * 1000); // 6h
+const REVIEW_SLA_MS = envNum("REVIEW_SLA_MS", 6 * 60 * 60 * 1000, { min: 1 }); // 6h
 
 // Errors that mean "stop, don't count an attempt" (nothing to retry).
 const TERMINAL_NO_COUNT = new Set(["already_planned", "goal_not_found", "wrong_workspace"]);

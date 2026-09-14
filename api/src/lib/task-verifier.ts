@@ -21,6 +21,7 @@ import {
   type DeliverableCandidate,
 } from "./deliverable-select.js";
 import { readObject } from "./storage.js";
+import { coerceInt, envNum } from "./env.js";
 import { renderWebDeliverable, type RenderObservation } from "./deliverable-render.js";
 import { audit } from "./audit.js";
 import { db } from "../db/index.js";
@@ -68,8 +69,7 @@ export function verifierEnabled(): boolean {
 // deliverable; the only live outage reason after the 5 Sep deploy was
 // `timeout_60000ms`. Override with VERIFY_JUDGE_TIMEOUT_MS.
 export function judgeTimeoutMs(env: Record<string, string | undefined> = process.env): number {
-  const n = Number(env.VERIFY_JUDGE_TIMEOUT_MS);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 180_000;
+  return coerceInt(env.VERIFY_JUDGE_TIMEOUT_MS, 180_000, { min: 1 });
 }
 
 export type VerifyFailMode = "open" | "closed" | "hold";
@@ -90,8 +90,7 @@ export function decideOnJudgeOutage(mode: VerifyFailMode): { block: boolean; com
 // were observed); each retry cost a 60s judge call against a rate-limited
 // gateway, which is how the judge ended up "unreachable" most of the time.
 function rejudgeMinMs(): number {
-  const n = Number(process.env.VERIFY_REJUDGE_MIN_MS);
-  return Number.isFinite(n) && n >= 0 ? n : 10 * 60 * 1000;
+  return envNum("VERIFY_REJUDGE_MIN_MS", 10 * 60 * 1000, { min: 0 });
 }
 export function shouldReuseVerdict(
   last: { artifactId: string | null; verdict: string; createdAt: Date } | null | undefined,
@@ -104,8 +103,9 @@ export function shouldReuseVerdict(
   return now - last.createdAt.getTime() < minMs;
 }
 function passThreshold(): number {
-  const n = Number(process.env.VERIFIER_PASS_THRESHOLD);
-  return Number.isFinite(n) ? n : 0.6;
+  // An EMPTY VERIFIER_PASS_THRESHOLD used to become a threshold of 0 — every
+  // deliverable passing the judge. See lib/env.ts.
+  return envNum("VERIFIER_PASS_THRESHOLD", 0.6, { min: 0, max: 1 });
 }
 // The execution check (headless render) is separately opt-in: it spawns a
 // Chromium subprocess, so it must never surprise a deployment that didn't ask
@@ -239,8 +239,7 @@ export function logJudgeConfigOnce(force = false): void {
 // produced parseable JSON at 800 tokens. Raise it. Override with
 // VERIFY_JUDGE_MAX_TOKENS.
 export function judgeMaxTokens(env: Record<string, string | undefined> = process.env): number {
-  const n = Number(env.VERIFY_JUDGE_MAX_TOKENS);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3000;
+  return coerceInt(env.VERIFY_JUDGE_MAX_TOKENS, 3000, { min: 1 });
 }
 
 // Reasoning effort asked of the judge. The verdict is a short rubric call — it
@@ -255,8 +254,7 @@ export function judgeReasoningEffort(env: Record<string, string | undefined> = p
 // How many times one UNCHANGED artifact set may be judged before the verifier
 // stops calling out. Guards the re-judge loop (125 verdicts on one live task).
 export function maxJudgesPerSet(env: Record<string, string | undefined> = process.env): number {
-  const n = Number(env.VERIFY_MAX_JUDGES_PER_SET);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+  return coerceInt(env.VERIFY_MAX_JUDGES_PER_SET, 3, { min: 1 });
 }
 
 // Pure: given what we already know about this artifact set, should the judge

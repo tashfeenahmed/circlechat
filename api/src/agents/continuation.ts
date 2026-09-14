@@ -1,4 +1,5 @@
 import type { AgentAction } from "./executor.js";
+import { envInt } from "../lib/env.js";
 
 // Agent-requested follow-up turns (Letta v3 continuation rule): after a run
 // that advanced the board, the worker grants an IMMEDIATE next turn instead of
@@ -24,8 +25,7 @@ export function continuationEnabled(): boolean {
 }
 
 export function continuationMax(): number {
-  const n = Number(process.env.CC_CONTINUATION_MAX ?? "2");
-  return Number.isFinite(n) && n >= 0 ? n : 2;
+  return envInt("CC_CONTINUATION_MAX", 2, { min: 0 });
 }
 
 export function shouldContinue(

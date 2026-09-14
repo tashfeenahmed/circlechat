@@ -10,6 +10,7 @@ import {
 } from "../db/schema.js";
 import { enqueueAgentEvent } from "./enqueue.js";
 import { isTrivialInput } from "../lib/trivial-input.js";
+import { envNum } from "../lib/env.js";
 
 // Extract @handles from a message body. Case-insensitive, returns lowercased
 // handles. `@everyone` / `@channel` are kept in the list so callers can
@@ -76,8 +77,8 @@ export async function resolveHandlesToMemberIds(
   return out;
 }
 
-const SLOT_MS = Number(process.env.BROADCAST_SLOT_MS ?? 22_000);
-const JITTER_MS = Number(process.env.BROADCAST_JITTER_MS ?? 8_000);
+const SLOT_MS = envNum("BROADCAST_SLOT_MS", 22_000, { min: 0 });
+const JITTER_MS = envNum("BROADCAST_JITTER_MS", 8_000, { min: 0 });
 
 // Fire the downstream triggers that a newly-posted message should cause:
 //   • DM: wake every agent in the conversation
@@ -180,7 +181,7 @@ export async function fireMentionTriggers(params: {
     .where(eq(members.id, authorMemberId))
     .limit(1);
   const authorIsAgent = authorKindRow?.kind === "agent";
-  const COOLDOWN_MS = Number(process.env.AGENT_MENTION_COOLDOWN_MS ?? 120_000);
+  const COOLDOWN_MS = envNum("AGENT_MENTION_COOLDOWN_MS", 120_000, { min: 0 });
   const cooldownCutoff = new Date(Date.now() - COOLDOWN_MS);
 
   // Direct / broadcast mentions on a channel. Direct fires immediately;

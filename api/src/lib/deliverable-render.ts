@@ -20,6 +20,7 @@ import { liveArtifactRows } from "./task-artifacts.js";
 import { collapseVersions, type DeliverableCandidate } from "./deliverable-select.js";
 import { readObject } from "./storage.js";
 import type { TaskArtifact } from "../db/schema.js";
+import { envNum } from "./env.js";
 
 export type RenderObservation = {
   ok: boolean; // chromium produced a non-trivial DOM
@@ -34,8 +35,7 @@ function chromiumBin(): string {
   return process.env.CHROMIUM_BIN || "/usr/bin/chromium";
 }
 function timeoutMs(): number {
-  const n = Number(process.env.VERIFY_EXEC_TIMEOUT_MS);
-  return Number.isFinite(n) && n > 0 ? n : 8000;
+  return envNum("VERIFY_EXEC_TIMEOUT_MS", 8000, { min: 1 });
 }
 
 const MAX_DOM_BYTES = 256 * 1024; // cap captured stdout

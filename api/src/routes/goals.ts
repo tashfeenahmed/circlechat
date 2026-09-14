@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireWorkspace } from "../auth/session.js";
-import { spectatorGoalView } from "../lib/agent-view.js";
+import { hiddenFromSpectators, spectatorGoalView } from "../lib/agent-view.js";
 import {
   GOAL_STATUSES,
   GOAL_KINDS,
@@ -58,7 +58,14 @@ export default async function goalsRoutes(app: FastifyInstance): Promise<void> {
   // `?cursor=` from the previous page's `nextCursor`.
   app.get("/goals", async (req) => {
     const q = req.query as { limit?: unknown; cursor?: unknown };
-    const r = await listGoals(req.auth!.workspaceId!, q);
+    // Archived goals are filtered in SQL, not here: the page is a keyset page,
+    // so dropping rows after the query would return short pages and a cursor
+    // that skips whatever the filter removed.
+    const r = await listGoals(req.auth!.workspaceId!, {
+      limit: q.limit,
+      cursor: q.cursor,
+      includeArchived: !req.spectator,
+    });
     if (!req.spectator) return r;
     return { ...r, goals: r.goals.map(spectatorGoalView) };
   });
@@ -73,9 +80,21 @@ export default async function goalsRoutes(app: FastifyInstance): Promise<void> {
     const goalId = (req.params as { id: string }).id;
     const r = await getGoalDetail(goalId, req.auth!.workspaceId!);
     if (!r.error && req.spectator) {
-      const detail = r as { goal?: Record<string, unknown>; subGoals?: Array<Record<string, unknown>> };
+      const detail = r as {
+        goal?: Record<string, unknown>;
+        subGoals?: Array<Record<string, unknown>>;
+      };
+      // Same rule as the list: an archived goal does not exist as far as the
+      // public identity is concerned, by id or as somebody's sub-goal.
+      if (hiddenFromSpectators(detail.goal?.status as string | undefined)) {
+        return reply.code(404).send({ error: "not_found" });
+      }
       if (detail.goal) detail.goal = spectatorGoalView(detail.goal);
-      if (Array.isArray(detail.subGoals)) detail.subGoals = detail.subGoals.map(spectatorGoalView);
+      if (Array.isArray(detail.subGoals)) {
+        detail.subGoals = detail.subGoals
+          .filter((g) => !hiddenFromSpectators(g.status as string | undefined))
+          .map(spectatorGoalView);
+      }
     }
     return send(reply, r);
   });

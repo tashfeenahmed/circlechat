@@ -2,6 +2,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agents, agentRuns, workspaces } from "../db/schema.js";
 import { notifyMany, adminMemberIds } from "./notifications.js";
+import { envNum } from "./env.js";
 
 // Monthly spend budgets with hard stops, modeled on Paperclip's budget scopes:
 // soft warning at 80%, hard stop at 100%. Two scopes — per-agent (pauses that
@@ -18,12 +19,10 @@ import { notifyMany, adminMemberIds } from "./notifications.js";
 export const WARN_RATIO = 0.8;
 
 const costPerMtokUsd = (): number => {
-  const v = Number(process.env.CC_COST_PER_MTOK_USD ?? "0.5");
-  return Number.isFinite(v) && v >= 0 ? v : 0.5;
+  return envNum("CC_COST_PER_MTOK_USD", 0.5, { min: 0 });
 };
 const runMultiplier = (): number => {
-  const v = Number(process.env.CC_COST_RUN_MULTIPLIER ?? "3");
-  return Number.isFinite(v) && v >= 1 ? v : 3;
+  return envNum("CC_COST_RUN_MULTIPLIER", 3, { min: 1 });
 };
 
 export function estimateRunCost(
