@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 const TOKEN = process.env.CC_BOT_TOKEN;
 const WSS = process.env.CC_WSS_URL ?? "ws://localhost:3300/agent-socket";
 const API_BASE = process.env.CC_API_BASE ?? "http://localhost:3300/api";
-const HERMES_TIMEOUT = Number(process.env.HERMES_TIMEOUT ?? 180);
+const HERMES_TIMEOUT = Number(process.env.HERMES_TIMEOUT) || 180; // seconds; empty/invalid → default
 const PROFILE = process.env.HERMES_PROFILE; // optional
 
 if (!TOKEN) {

@@ -2,6 +2,7 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agents, agentRuns } from "../db/schema.js";
 import { publishToConversation, publishGlobal } from "./events.js";
+import { envNum } from "./env.js";
 
 // Crash recovery for the run loop. When a worker dies mid-run the run row
 // stays 'running' and the agent stays 'working' forever: the UI shows a
@@ -13,7 +14,7 @@ import { publishToConversation, publishGlobal } from "./events.js";
 
 // BullMQ's lockDuration is 240s and a stalled job gets one retry, so any run
 // legitimately alive is well under this.
-const STUCK_RUN_MS = Number(process.env.CC_STUCK_RUN_MS ?? 15 * 60 * 1000);
+const STUCK_RUN_MS = envNum("CC_STUCK_RUN_MS", 15 * 60 * 1000, { min: 1 });
 
 export async function reapStuckRuns(): Promise<number> {
   const cutoff = new Date(Date.now() - STUCK_RUN_MS);

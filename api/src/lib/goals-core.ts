@@ -8,6 +8,7 @@ import { hydrateTasks } from "./tasks-core.js";
 import { enqueueGoalPlan } from "./goal-queue.js";
 import { clampLimit, decodeCursor, encodeCursor, keysetCondition, takePage } from "./list-page.js";
 import { SPECTATOR_HIDDEN_GOAL_STATUS } from "./agent-view.js";
+import { envNum } from "./env.js";
 
 // `parked` is the auto-parking terminal-until-resumed state: a goal whose tasks
 // have not moved for GOAL_PARK_AFTER_MS. It is deliberately NOT `in_progress`
@@ -21,9 +22,9 @@ export type GoalStatus = (typeof GOAL_STATUSES)[number];
 // How long a goal may go without any task movement before it is auto-parked.
 // 14 days by default: on live, 9 of 11 in-progress goals were 17–72 days stale
 // and between them drove every stall notification in the system.
-export const GOAL_PARK_AFTER_MS = Number(
-  process.env.GOAL_PARK_AFTER_MS ?? 14 * 24 * 60 * 60 * 1000,
-);
+export const GOAL_PARK_AFTER_MS = envNum("GOAL_PARK_AFTER_MS", 14 * 24 * 60 * 60 * 1000, {
+  min: 1,
+});
 
 export interface ParkCandidate {
   status: string;

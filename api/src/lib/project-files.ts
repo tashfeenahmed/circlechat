@@ -1,6 +1,7 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { embed, cosine, embeddingsEnabled } from "./embeddings.js";
 import { findNearDuplicate } from "./text-similarity.js";
+import { envNum } from "./env.js";
 
 // ─────────────────────────── Shared project memory ───────────────────────────
 // A file-based "blackboard" the agents form and manage themselves: multiple
@@ -491,8 +492,7 @@ export function matchProjectFiles(projects: ProjectInfo[], triggerText: string):
 // in the always-injected index. Raise PROJECT_SEM_FLOOR for stricter, lower for
 // more recall.
 function semFloor(): number {
-  const v = Number(process.env.PROJECT_SEM_FLOOR);
-  return Number.isFinite(v) && process.env.PROJECT_SEM_FLOOR ? v : 0.6;
+  return envNum("PROJECT_SEM_FLOOR", 0.6, { min: 0, max: 1 });
 }
 const SEM_TOP_N = 3; // most semantic additions per turn (budget still caps reads)
 const SEM_MAX_CANDIDATES = 30; // bound embedding cost on a large tree

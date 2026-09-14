@@ -5,6 +5,7 @@ import { goals, workspaces, workspaceMembers, members } from "../db/schema.js";
 import { chatJson, plannerEnabled } from "./completion.js";
 import { createGoal } from "./goals-core.js";
 import { notify } from "./notifications.js";
+import { envInt } from "./env.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // The mission planner — a daily pass that turns the workspace MISSION into
@@ -18,10 +19,10 @@ import { notify } from "./notifications.js";
 
 // New goals per workspace per run — deliberately small so a mission drips
 // steady work onto the board instead of flooding it.
-const GOALS_PER_RUN = Number(process.env.MISSION_GOALS_PER_RUN ?? 2);
+const GOALS_PER_RUN = envInt("MISSION_GOALS_PER_RUN", 2, { min: 1 });
 // Backpressure: skip a workspace that already has this many non-done goals.
 // The mission shouldn't pile new intent onto a board the team can't clear.
-const MAX_OPEN_GOALS = Number(process.env.MISSION_MAX_OPEN_GOALS ?? 12);
+const MAX_OPEN_GOALS = envInt("MISSION_MAX_OPEN_GOALS", 12, { min: 1 });
 
 const ProposalSchema = z.object({
   goals: z

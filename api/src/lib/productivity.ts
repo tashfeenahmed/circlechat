@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { agents, agentRuns } from "../db/schema.js";
 import { redis } from "./redis.js";
 import { notifyAdmins } from "./budgets.js";
+import { envInt } from "./env.js";
 
 // Productivity review (Paperclip-style): an agent that keeps making real LLM
 // runs while applying zero actions is spinning — every reply is getting
@@ -14,8 +15,7 @@ import { notifyAdmins } from "./budgets.js";
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const minRuns = (): number => {
-  const v = Number(process.env.CC_PRODUCTIVITY_MIN_RUNS_24H ?? "12");
-  return Number.isFinite(v) && v >= 1 ? v : 12;
+  return envInt("CC_PRODUCTIVITY_MIN_RUNS_24H", 12, { min: 1 });
 };
 
 // Pure: flag when the agent did a meaningful amount of real work-attempts and

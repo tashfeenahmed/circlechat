@@ -5,6 +5,7 @@ import { agentRuns } from "../db/schema.js";
 import { publishGlobal } from "../lib/events.js";
 import { redis } from "../lib/redis.js";
 import { heartbeatBackoffMs, noopStreakBackoffMs } from "../lib/run-outcome.js";
+import { envInt, envNum } from "../lib/env.js";
 
 const REPEAT_KEY = (agentId: string): string => `hb:${agentId}`;
 
@@ -20,7 +21,7 @@ const REPEAT_KEY = (agentId: string): string => `hb:${agentId}`;
 const STREAK_KEY = (agentId: string): string => `cc:hb:streak:${agentId}`;
 const UNTIL_KEY = (agentId: string): string => `cc:hb:until:${agentId}`;
 const STREAK_TTL_MS = 24 * 60 * 60 * 1000;
-const BACKOFF_CAP_MS = Number(process.env.CC_HEARTBEAT_BACKOFF_CAP_MS ?? 6 * 60 * 60 * 1000);
+const BACKOFF_CAP_MS = envNum("CC_HEARTBEAT_BACKOFF_CAP_MS", 6 * 60 * 60 * 1000, { min: 1 });
 
 export async function noteHeartbeatOutcome(
   agentId: string,
@@ -71,8 +72,8 @@ export async function clearHeartbeatBackoff(agentId: string): Promise<void> {
 // appears (a human message/comment/assignment) or a run applies anything.
 const SKIP_STREAK_KEY = (agentId: string): string => `cc:sched:skip:${agentId}`;
 const SKIP_UNTIL_KEY = (agentId: string): string => `cc:sched:until:${agentId}`;
-const SKIP_MIN_STREAK = Number(process.env.CC_SCHEDULED_SKIP_STREAK ?? 3);
-const SKIP_CAP_MS = Number(process.env.CC_SCHEDULED_BACKOFF_CAP_MS ?? 6 * 60 * 60 * 1000);
+const SKIP_MIN_STREAK = envInt("CC_SCHEDULED_SKIP_STREAK", 3, { min: 1 });
+const SKIP_CAP_MS = envNum("CC_SCHEDULED_BACKOFF_CAP_MS", 6 * 60 * 60 * 1000, { min: 1 });
 
 export async function noteScheduledSkip(
   agentId: string,

@@ -1,3 +1,5 @@
+import { coerceInt, coerceNum, envInt } from "./env.js";
+
 const required = (name: string, fallback?: string): string => {
   const v = process.env[name] ?? fallback;
   if (!v) throw new Error(`Missing env: ${name}`);
@@ -6,12 +8,13 @@ const required = (name: string, fallback?: string): string => {
 
 export const config = {
   env: process.env.NODE_ENV ?? "development",
-  port: Number(process.env.PORT ?? 3000),
+  port: envInt("PORT", 3000, { min: 1 }),
   databaseUrl: required("DATABASE_URL", "postgres://postgres:circlechat@localhost:5432/circlechat"),
   redisUrl: required("REDIS_URL", "redis://localhost:6379"),
   sessionSecret: required("SESSION_SECRET", "dev-secret-change-me-at-least-32-chars-long"),
   publicBaseUrl: required("PUBLIC_BASE_URL", "http://localhost:5173"),
-  apiInternalUrl: process.env.API_INTERNAL_URL ?? `http://localhost:${Number(process.env.PORT ?? 3000)}`,
+  apiInternalUrl:
+    process.env.API_INTERNAL_URL ?? `http://localhost:${envInt("PORT", 3000, { min: 1 })}`,
   storageDir: process.env.STORAGE_DIR ?? "./storage",
   smtpUrl: process.env.SMTP_URL ?? "",
   // CORS compares origins, not full URLs (PUBLIC_BASE_URL may include a path
@@ -27,12 +30,8 @@ export const config = {
 // denials are remembered (so agents can't re-ask), and nothing is
 // auto-approved unless an operator lists it.
 
-const num = (name: string, fallback: number, min = 0): number => {
-  const raw = process.env[name];
-  if (raw == null || raw.trim() === "") return fallback;
-  const v = Number(raw);
-  return Number.isFinite(v) && v >= min ? v : fallback;
-};
+const num = (name: string, fallback: number, min = 0): number =>
+  coerceNum(process.env[name], fallback, { min });
 
 // Hours a pending approval may wait for a human before it is marked
 // `expired`, the agent is woken with approval_response status "expired", and
@@ -67,8 +66,7 @@ export function autoApproveScopes(): string[] {
 // long tool-using run dies as `dispatch_504` while Hermes is still working.
 // Explicit CC_DISPATCH_TIMEOUT_MS wins; otherwise HERMES_TIMEOUT + 60 s.
 export function dispatchTimeoutMs(env: Record<string, string | undefined> = process.env): number {
-  const explicit = Number(env.CC_DISPATCH_TIMEOUT_MS);
-  if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
-  const hermesSec = Number(env.HERMES_TIMEOUT);
-  return ((Number.isFinite(hermesSec) && hermesSec > 0 ? hermesSec : 480) + 60) * 1000;
+  const explicit = coerceInt(env.CC_DISPATCH_TIMEOUT_MS, 0, { min: 1 });
+  if (explicit > 0) return explicit;
+  return (coerceNum(env.HERMES_TIMEOUT, 480, { min: 1 }) + 60) * 1000;
 }

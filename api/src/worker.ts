@@ -2,6 +2,7 @@ import { Worker } from "bullmq";
 import { eq, desc, and, ne, gt, sql, inArray } from "drizzle-orm";
 import { AGENT_QUEUE, type AgentJobPayload } from "./agents/queue.js";
 import { redis } from "./lib/redis.js";
+import { envNum } from "./lib/env.js";
 import { db } from "./db/index.js";
 import {
   agents,
@@ -696,7 +697,7 @@ async function emitFinished(
 // Time without the agent's own comment that re-qualifies an in-flight task as
 // "needs a progress beat". Configurable; 10 min default keeps existing cadence,
 // the non-productive backoff (scheduler.ts) is what stops it churning.
-const STALE_TASK_MS = Number(process.env.CC_STALE_TASK_MS ?? 10 * 60 * 1000);
+const STALE_TASK_MS = envNum("CC_STALE_TASK_MS", 10 * 60 * 1000, { min: 1 });
 
 // Why a scheduled heartbeat should run, or null = nothing to do (skip).
 //   human_message   — a HUMAN posted in one of the agent's conversations

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { envNum } from "./env.js";
 
 // Sandboxed code execution (CodeAct / OpenHands action-execution server, in the
 // safe-by-construction form for this box). Agent code must run NOWHERE near the
@@ -33,8 +34,7 @@ function sandboxImage(): string {
   return process.env.CC_RUNCODE_IMAGE || "python:3.12-slim";
 }
 function timeoutMs(): number {
-  const n = Number(process.env.CC_RUNCODE_TIMEOUT_MS);
-  return Number.isFinite(n) && n > 0 ? n : 15_000;
+  return envNum("CC_RUNCODE_TIMEOUT_MS", 15_000, { min: 1 });
 }
 function memLimit(): string {
   return process.env.CC_RUNCODE_MEM || "256m";

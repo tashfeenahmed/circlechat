@@ -8,6 +8,7 @@ import { createTask, addLink, startBacklogTask, logActivity } from "./tasks-core
 import { writePlan, loadLedger } from "./ledger-core.js";
 import { listAgentSkills, type AgentSkill } from "./agent-skills-fs.js";
 import { embed, cosine, embeddingsEnabled } from "./embeddings.js";
+import { envInt } from "./env.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // The goal planner — CircleChat's "auto-delegating manager".
@@ -342,7 +343,7 @@ export async function planGoal(params: {
   let replanNote = "";
   if (isReplan) {
     const led = await loadLedger(goalId).catch(() => null);
-    const maxReplans = Number(process.env.GOAL_MAX_REPLANS ?? 2);
+    const maxReplans = envInt("GOAL_MAX_REPLANS", 2, { min: 0 });
     replanNote = buildReplanNote(
       led?.facts ?? [],
       led?.triedDeadEnds ?? [],

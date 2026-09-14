@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 const TOKEN = process.env.CC_BOT_TOKEN;
 const WSS = process.env.CC_WSS_URL ?? "ws://localhost:3000/agent-socket";
 const OPENCLAW_AGENT = process.env.OPENCLAW_AGENT ?? "main";
-const OPENCLAW_TIMEOUT = Number(process.env.OPENCLAW_TIMEOUT ?? 120);
+const OPENCLAW_TIMEOUT = Number(process.env.OPENCLAW_TIMEOUT) || 120; // seconds; empty/invalid → default
 const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "phi4-mini:latest";
 

@@ -4,6 +4,7 @@ import { agents, agentRuns, notifications, tasks, workspaces } from "../db/schem
 import { agentQueue } from "../agents/queue.js";
 import { publishToWorkspace } from "./events.js";
 import { hydrateTasks } from "./tasks-core.js";
+import { coerceInt, envNum } from "./env.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Data retention.
@@ -36,11 +37,10 @@ export interface RetentionWindows {
   doneArchiveDays: number;
 }
 
-const num = (raw: string | undefined, fallback: number, min = 1): number => {
-  if (raw == null || raw.trim() === "") return fallback;
-  const v = Number(raw);
-  return Number.isFinite(v) && v >= min ? Math.floor(v) : fallback;
-};
+// Same rule as lib/env.ts, reading a raw value so a workspace override can be
+// merged in: unset, empty or out of range → the default.
+const num = (raw: string | undefined, fallback: number, min = 1): number =>
+  coerceInt(raw, fallback, { min });
 
 export function retentionWindows(
   env: Record<string, string | undefined> = process.env,
@@ -121,8 +121,10 @@ export function staleRepeatableKeys(
 // so the public fishbowl's task payload grew without bound and a spectator
 // could read cards the board itself considers archived history.
 
-export const SPECTATOR_DONE_WINDOW_MS = Number(
-  process.env.CC_SPECTATOR_DONE_WINDOW_MS ?? 14 * 24 * 60 * 60 * 1000,
+export const SPECTATOR_DONE_WINDOW_MS = envNum(
+  "CC_SPECTATOR_DONE_WINDOW_MS",
+  14 * 24 * 60 * 60 * 1000,
+  { min: 1 },
 );
 
 export interface DoneWindowRow {

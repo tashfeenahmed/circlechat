@@ -1,3 +1,4 @@
+import { envInt } from "./env.js";
 // Trivial-input gate for PROACTIVE agent wakes.
 //
 // A plain channel post with no @mention fires a `channel_post` trigger at every
@@ -15,7 +16,7 @@
 
 // Below this many meaningful characters a message cannot carry an instruction
 // worth a model call. Tunable for deployments with terser teams.
-export const TRIVIAL_MAX_CHARS = Number(process.env.CC_TRIVIAL_INPUT_MAX_CHARS ?? 10);
+export const TRIVIAL_MAX_CHARS = envInt("CC_TRIVIAL_INPUT_MAX_CHARS", 10, { min: 0 });
 
 // Pure acknowledgements. Matched after normalisation (lowercased, punctuation
 // and emoji stripped), so "Thanks!!" and "thanks" are the same entry.

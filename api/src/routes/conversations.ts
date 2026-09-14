@@ -19,6 +19,7 @@ import { id } from "../lib/ids.js";
 import { filterWorkspaceMemberIds } from "../lib/workspace-scope.js";
 import { canSeeAgentInternals } from "../lib/agent-view.js";
 import { agentPresenceStatus } from "../lib/agent-presence.js";
+import { envNum } from "../lib/env.js";
 
 function dmId(a: string, b: string): string {
   const sorted = [a, b].sort().join(":");
@@ -545,7 +546,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
   // that never sent a close frame doesn't linger as "online" forever.
   app.get("/presence", async (req) => {
     const workspaceId = req.auth!.workspaceId!;
-    const STALE_MS = Number(process.env.PRESENCE_STALE_MS ?? 90_000);
+    const STALE_MS = envNum("PRESENCE_STALE_MS", 90_000, { min: 1 });
 
     const memberRows = await db
       .select({ id: members.id, kind: members.kind, refId: members.refId })

@@ -1,5 +1,6 @@
 import { Queue } from "bullmq";
 import { redis } from "./redis.js";
+import { envNum } from "./env.js";
 
 // Queue that drives automatic goal planning. Three job shapes:
 //   { kind: "plan", goalId, workspaceId } — decompose one goal (debounced on create)
@@ -26,7 +27,7 @@ export const goalQueue = new Queue<GoalPlanJob>(GOAL_QUEUE, {
 
 // Debounce window before a freshly-created goal is planned, so a human editing
 // in the UI (or an agent that creates-then-fills) settles first.
-const PLAN_DEBOUNCE_MS = Number(process.env.GOAL_PLAN_DEBOUNCE_MS ?? 20_000);
+const PLAN_DEBOUNCE_MS = envNum("GOAL_PLAN_DEBOUNCE_MS", 20_000, { min: 0 });
 
 // Enqueue (or re-enqueue) a plan for one goal. jobId = goalId dedupes: a goal
 // already waiting to be planned won't pile up duplicate jobs.
@@ -40,7 +41,7 @@ export async function enqueueGoalPlan(goalId: string, workspaceId: string, immed
 }
 
 const SWEEP_KEY = "goal-sweep";
-const SWEEP_EVERY_MS = Number(process.env.GOAL_SWEEP_EVERY_MS ?? 180_000); // 3 min
+const SWEEP_EVERY_MS = envNum("GOAL_SWEEP_EVERY_MS", 180_000, { min: 1 }); // 3 min
 
 // Install the repeatable sweeper job. Called once at worker boot.
 export async function scheduleGoalSweep(): Promise<void> {
@@ -56,7 +57,7 @@ export async function scheduleGoalSweep(): Promise<void> {
 }
 
 const MISSION_KEY = "mission-sweep";
-const MISSION_EVERY_MS = Number(process.env.MISSION_SWEEP_EVERY_MS ?? 86_400_000); // daily
+const MISSION_EVERY_MS = envNum("MISSION_SWEEP_EVERY_MS", 86_400_000, { min: 1 }); // daily
 
 // Install the repeatable mission planner (daily by default). Called once at
 // worker boot. Unlike the 3-min sweeper, a 24h repeat must NOT be removed and
