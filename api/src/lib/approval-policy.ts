@@ -19,6 +19,10 @@
 import { and, eq, gt, ilike, lt, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agents, approvals, members, taskComments, tasks } from "../db/schema.js";
+import { appendDeadEnd } from "./ledger-core.js";
+import { audit } from "./audit.js";
+import { approvalDeadEndNote, shouldLogSweepHeartbeat } from "./approval-notes.js";
+export { approvalDeadEndNote, shouldLogSweepHeartbeat, SWEEP_HEARTBEAT_MS } from "./approval-notes.js";
 import { approvalDenialMemoryDays, approvalTtlHours, autoApproveScopes } from "./config.js";
 import { publishToConversation, publishToWorkspace } from "./events.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
@@ -294,6 +298,39 @@ export async function unblockTasksForApproval(
   return released;
 }
 
+// Clear a closed approval out of the goal state agents read. Finds every
+// non-archived task in the workspace whose body or comments quote the approval
+// id (agents write "blocked pending approval of ap_…" on the card), collects
+// the goals behind them, and records the dead-end on each ledger.
+// Best-effort: a goal with no ledger row is simply skipped.
+export async function clearApprovalFromGoalState(
+  approvalId: string,
+  workspaceId: string,
+  scope: string,
+  outcome: "expired" | "denied" = "expired",
+): Promise<string[]> {
+  const needle = `%${approvalId}%`;
+  const rows = await db
+    .selectDistinct({ goalId: tasks.goalId })
+    .from(tasks)
+    .leftJoin(taskComments, and(eq(taskComments.taskId, tasks.id), ilike(taskComments.bodyMd, needle)))
+    .where(
+      and(
+        eq(tasks.workspaceId, workspaceId),
+        eq(tasks.archived, false),
+        or(ilike(tasks.bodyMd, needle), sql`${taskComments.id} is not null`),
+      ),
+    )
+    .limit(50)
+    .catch(() => [] as Array<{ goalId: string | null }>);
+  const goalIds = Array.from(new Set(rows.map((r) => r.goalId).filter((g): g is string => !!g)));
+  const note = approvalDeadEndNote(approvalId, scope, outcome);
+  for (const goalId of goalIds) await appendDeadEnd(goalId, note).catch(() => {});
+  return goalIds;
+}
+
+let lastSweepHeartbeat = 0;
+
 // Mark stale pending approvals expired, wake their agents, release blocked
 // tasks, and tell the approvers. Idempotent and race-safe (each row is
 // claimed with a status-guarded UPDATE), so it can run on every worker tick.
@@ -301,7 +338,13 @@ export async function unblockTasksForApproval(
 export async function expireStaleApprovals(now: Date = new Date()): Promise<number> {
   const hours = approvalTtlHours();
   const ttl = approvalTtlMs(hours);
-  if (ttl <= 0) return 0;
+  if (ttl <= 0) {
+    if (shouldLogSweepHeartbeat(now.getTime(), lastSweepHeartbeat)) {
+      lastSweepHeartbeat = now.getTime();
+      console.log("[approvals] expiry sweep: disabled (APPROVAL_TTL_HOURS=0)");
+    }
+    return 0;
+  }
   const cutoff = new Date(now.getTime() - ttl);
   const stale = await db
     .select({
@@ -359,7 +402,26 @@ export async function expireStaleApprovals(now: Date = new Date()): Promise<numb
         (released.length ? `; ${released.length} blocked task(s) were moved back to in progress.` : "."),
       link: "/approvals",
     });
-    console.log(`[approvals] expired ${ap.id} (${ap.scope}) agent=${ap.agentId} released=${released.length}`);
+    // The card is dead; make sure the agents' brief stops calling it a blocker.
+    const goalIds = await clearApprovalFromGoalState(ap.id, ap.workspaceId, ap.scope, "expired").catch(() => [] as string[]);
+    await audit({
+      workspaceId: ap.workspaceId,
+      actorId: "system",
+      actorType: "system",
+      action: "approval.expired",
+      targetType: "approval",
+      targetId: ap.id,
+      meta: { scope: ap.scope, agentId: ap.agentId, ttlHours: hours, releasedTasks: released.length, goalsCleared: goalIds.length },
+    });
+    console.log(
+      `[approvals] expired ${ap.id} (${ap.scope}) agent=${ap.agentId} released=${released.length} goals_cleared=${goalIds.length}`,
+    );
+  }
+  if (n > 0) {
+    console.log(`[approvals] expiry sweep: ttl=${hours}h scanned=${stale.length} expired=${n}`);
+  } else if (shouldLogSweepHeartbeat(now.getTime(), lastSweepHeartbeat)) {
+    lastSweepHeartbeat = now.getTime();
+    console.log(`[approvals] expiry sweep: ttl=${hours}h nothing past the cutoff (${cutoff.toISOString()})`);
   }
   return n;
 }

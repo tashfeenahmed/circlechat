@@ -29,6 +29,8 @@ import {
 } from "./agents/scheduler.js";
 import { setAgentPresence } from "./lib/agent-presence.js";
 import { classifyRunOutcome } from "./lib/run-outcome.js";
+import { logJudgeConfigOnce } from "./lib/task-verifier.js";
+import { audit } from "./lib/audit.js";
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 import { exportRunTrace } from "./lib/tracing.js";
 import { enforceBudgets, estimateRunCost } from "./lib/budgets.js";
@@ -537,6 +539,23 @@ const worker = new Worker<AgentJobPayload>(
     const cls = classifyRunOutcome(response, outcome);
     if (cls.status === "failed") {
       console.warn(`[worker] run ${runId} agent=${agent.handle} trigger=${payload.trigger} failed: ${cls.errorText}`);
+      // Audit FAILURES only. A row per successful run would dwarf every other
+      // event in the table and agent_runs already records those; a run that
+      // failed is the one an operator reconstructs afterwards.
+      void audit({
+        workspaceId: agent.workspaceId,
+        actorId: agent.id,
+        actorType: "agent",
+        action: "agent_run.failed",
+        targetType: "agent_run",
+        targetId: runId,
+        meta: {
+          agentHandle: agent.handle,
+          trigger: payload.trigger,
+          error: redactSecrets(cls.errorText ?? "").slice(0, 400),
+          conversationId: payload.conversationId ?? null,
+        },
+      });
     }
     await db
       .update(agentRuns)
@@ -803,6 +822,9 @@ worker.on("error", (e) => console.error("[worker] error", e));
 worker.on("failed", (job, err) => console.error("[worker] job failed", job?.id, err?.message));
 
 console.log(`[worker] circlechat agent-runs worker up, concurrency=10`);
+// The worker runs the review-entry verification pre-check, so it needs the same
+// "here is the judge I will call" line the API prints.
+logJudgeConfigOnce();
 
 // Automatic goal planning: a worker that decomposes goals off the HTTP path,
 // plus a repeatable sweeper that reconciles unplanned/stuck goals.

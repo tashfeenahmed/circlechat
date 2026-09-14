@@ -12,6 +12,7 @@ import {
   taskAssignees,
   agents,
 } from "../db/schema.js";
+import { audit } from "../lib/audit.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation, publishToWorkspace } from "../lib/events.js";
 import { checkReplyBody, guardRejectHint, sanitizeAgentProse } from "./reply-guard.js";
@@ -467,6 +468,17 @@ async function openApproval(params: {
     status: "pending",
     createdAt,
   });
+  if (ag) {
+    void audit({
+      workspaceId: ag.workspaceId,
+      actorId: agentId,
+      actorType: "agent",
+      action: "approval.created",
+      targetType: "approval",
+      targetId: apId,
+      meta: { scope, action, runId, conversationId: conversationId ?? null },
+    });
+  }
   const frame = { type: "approval.new" as const, approvalId: apId, agentId, scope, action, conversationId };
   if (conversationId) await publishToConversation(conversationId, frame).catch(() => {});
   if (ag) {

@@ -21,8 +21,14 @@ import {
   currentArtifactByName,
   artifactCount,
   isSubstantiveContent,
+  isShrinkingReplacement,
+  largestLiveVersionSize,
+  liveArtifactRows,
+  sanitizeName,
+  softDeleteArtifact,
   MAX_ARTIFACT_BYTES,
   MAX_ARTIFACTS_PER_TASK,
+  MIN_REPLACEMENT_BYTES,
 } from "../lib/task-artifacts.js";
 import { loadTask } from "../lib/tasks-core.js";
 import { createGoal, listGoals, getGoalDetail, GOAL_KINDS } from "../lib/goals-core.js";
@@ -963,6 +969,20 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
         error: "artifact_not_substantive",
         hint: "This looks like a placeholder or just the task title — submit the real deliverable (the actual report/script/draft). Reuse the same name to version an existing artifact.",
       });
+    // Never let a stub overwrite real work. Live had dashboard.html at
+    // 13,915 bytes with 189- and 292-byte versions interleaved; because the
+    // verifier judged the newest version, a 189-byte "update" destroyed the
+    // evidence that the dashboard had ever been built. Post the WHOLE file, or
+    // pick a different name.
+    const priorSize = await largestLiveVersionSize(taskId, sanitizeName(name));
+    if (isShrinkingReplacement(buffer.length, priorSize))
+      return reply.code(422).send({
+        error: "artifact_would_shrink",
+        hint:
+          `"${name}" already has a ${priorSize}-byte version and this submission is only ${buffer.length} bytes. ` +
+          `Artifacts are whole files, not patches — re-send the COMPLETE deliverable (at least ${MIN_REPLACEMENT_BYTES} bytes), ` +
+          `or use a different name if this is a genuinely separate, smaller file.`,
+      });
 
     const art = await createArtifact({
       taskId,
@@ -998,6 +1018,40 @@ export default async function agentApiRoutes(app: FastifyInstance): Promise<void
     reply.header("content-type", art.contentType);
     reply.header("content-length", String(st.size));
     return reply.send(streamObject(art.storageKey));
+  });
+
+  // Retire a deliverable. Agents said publicly that "the API has no DELETE
+  // route for artifacts" — it existed only on the human (session-cookie) path,
+  // so an agent that shipped a wrong or duplicate file had no way to withdraw
+  // it and just piled another one on top. Same auth path as the upload: the
+  // agent token, the task re-checked against the agent's OWN workspace, and
+  // (mirroring the human route's author check) only the artifacts this agent
+  // created. Soft-delete, so the bytes and the version history survive for
+  // audit; the blob simply stops serving.
+  //   DELETE /agent-api/tasks/<id>/artifacts/<name>              → latest version
+  //   DELETE /agent-api/tasks/<id>/artifacts/<name>?all=true     → every version
+  app.delete("/agent-api/tasks/:id/artifacts/:name", async (req, reply) => {
+    const taskId = (req.params as { id: string }).id;
+    const name = decodeURIComponent((req.params as { name: string }).name);
+    const ws = req.agentCtx!.workspaceId;
+    const memberId = req.agentCtx!.memberId;
+    const t = await loadTask(taskId);
+    if (!t || t.workspaceId !== ws) return reply.code(404).send({ error: "not_found" });
+    const all = String((req.query as { all?: string } | undefined)?.all ?? "") === "true";
+
+    const live = (await liveArtifactRows(taskId))
+      .filter((r) => r.name === name)
+      .sort((a, b) => b.version - a.version);
+    if (!live.length) return reply.code(404).send({ error: "not_found" });
+    const targets = all ? live : [live[0]];
+    const foreign = targets.filter((r) => r.createdBy !== memberId);
+    if (foreign.length)
+      return reply.code(403).send({
+        error: "not_author",
+        hint: "You can only delete artifacts you created. Ask the author, or a human workspace admin, to remove someone else's deliverable.",
+      });
+    for (const r of targets) await softDeleteArtifact(r.id, { memberId, actorType: "agent" });
+    return { ok: true, deleted: targets.map((r) => ({ id: r.id, name: r.name, version: r.version })) };
   });
 
   // ───── durable agent memory (KV) — native tool surface ─────

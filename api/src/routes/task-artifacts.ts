@@ -77,7 +77,7 @@ export default async function taskArtifactRoutes(app: FastifyInstance): Promise<
     if (art.createdBy !== memberId && !isAdmin)
       return reply.code(403).send({ error: "not_author" });
 
-    await softDeleteArtifact(artifactId);
+    await softDeleteArtifact(artifactId, { memberId, actorType: "user" });
     return { ok: true };
   });
 }

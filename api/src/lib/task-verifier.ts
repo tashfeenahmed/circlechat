@@ -15,8 +15,14 @@
 import { z } from "zod";
 import { chatJson, judgeConfigured, resolveJudgeTarget } from "./completion.js";
 import { liveArtifactRows, isSubstantiveArtifact, isTextualContentType } from "./task-artifacts.js";
+import {
+  selectDeliverables,
+  deliverableSetKey,
+  type DeliverableCandidate,
+} from "./deliverable-select.js";
 import { readObject } from "./storage.js";
 import { renderWebDeliverable, type RenderObservation } from "./deliverable-render.js";
+import { audit } from "./audit.js";
 import { db } from "../db/index.js";
 import { taskVerifications, type TaskArtifact } from "../db/schema.js";
 import { id } from "./ids.js";
@@ -147,10 +153,15 @@ export async function deterministicGateForDone(opts: {
 }): Promise<{ blocked: boolean; obs: RenderObservation | null }> {
   if (!execGateEnabled()) return { blocked: false, obs: null };
 
-  // Only attempt a render when the latest textual deliverable is web markup.
+  // Which web deliverable to render? The same ranking the judge uses, not
+  // whatever was attached last — otherwise a wireframe or a stub version gets
+  // rendered and a working dashboard is hard-blocked for "rendering blank".
   const rows = await liveArtifactRows(opts.taskId).catch(() => []);
-  rows.sort((a, b) => (b.createdAt?.getTime?.() ?? 0) - (a.createdAt?.getTime?.() ?? 0));
-  const htmlEntry = rows.find((r) => /\.html?$/i.test(r.name || ""));
+  const html = rows.filter((r) => /\.html?$/i.test(r.name || ""));
+  if (!html.length) return { blocked: false, obs: null };
+  const htmlEntry =
+    selectDeliverables(html as unknown as DeliverableCandidate[], opts.title, opts.bodyMd).primary ??
+    (html[0] as unknown as DeliverableCandidate);
   if (!htmlEntry) return { blocked: false, obs: null };
 
   const obs = await renderWebDeliverable({ taskId: opts.taskId, entryName: htmlEntry.name }).catch(() => null);
@@ -186,6 +197,183 @@ export function classifyRenderForGate(
   };
 }
 
+// ───────────────── judge plumbing (config, retry, budget) ─────────────────
+
+// Announce WHICH endpoint and model the judge will call, once per process, at
+// startup and again on the first judge error. On the live box every
+// VERIFY_JUDGE_* var was empty, so the judge silently inherited PLANNER_BASE_URL
+// with model "auto" — and nothing in the logs ever said so, which is how 541
+// "judge unreachable" rows accumulated without anyone being able to see what
+// was being called. Never logs the API key, only whether one is present.
+let loggedJudgeConfig = false;
+export function logJudgeConfigOnce(force = false): void {
+  if (loggedJudgeConfig && !force) return;
+  loggedJudgeConfig = true;
+  if (process.env.VERIFY_GATE !== "on") {
+    console.log("[verifier] VERIFY_GATE is not 'on' — the verification judge is OFF.");
+    return;
+  }
+  const t = resolveJudgeTarget();
+  if (!t) {
+    console.error(
+      "[verifier] VERIFY_GATE=on but NO judge endpoint resolves. Set VERIFY_JUDGE_BASE_URL (or PLANNER_BASE_URL). The gate is OFF.",
+    );
+    return;
+  }
+  const explicit = !!(process.env.VERIFY_JUDGE_BASE_URL || "").trim();
+  const pinned = !!(process.env.VERIFY_JUDGE_MODEL || process.env.PLANNER_MODEL || "").trim();
+  console.log(
+    `[verifier] judge → ${t.baseUrl} model=${t.model}` +
+      ` (base ${explicit ? "VERIFY_JUDGE_BASE_URL" : "inherited from PLANNER_BASE_URL"};` +
+      ` model ${pinned ? "pinned" : "DEFAULTED to \"auto\" — pin VERIFY_JUDGE_MODEL for a consistent judge"};` +
+      ` api key ${t.apiKey ? "present" : "ABSENT"};` +
+      ` max_tokens=${judgeMaxTokens()}; timeout=${judgeTimeoutMs()}ms;` +
+      ` fail_mode=${resolveFailMode()}; rejudge_min=${rejudgeMinMs()}ms; max_judges_per_set=${maxJudgesPerSet()})`,
+  );
+}
+
+// Token budget for one verdict. The default was 800, which is fine for a plain
+// chat model and useless for a reasoning one: probing the live gateway showed
+// gemini-2.5-flash and the `auto` route both emit their chain of thought first
+// and hit finish_reason:"length" BEFORE the JSON verdict — 0 of 15 probe calls
+// produced parseable JSON at 800 tokens. Raise it. Override with
+// VERIFY_JUDGE_MAX_TOKENS.
+export function judgeMaxTokens(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.VERIFY_JUDGE_MAX_TOKENS);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3000;
+}
+
+// Reasoning effort asked of the judge. The verdict is a short rubric call — it
+// does not need extended thinking, and on this fleet's gateway mandatory
+// reasoning is exactly what eats the token budget. "minimal" by default; set
+// VERIFY_JUDGE_REASONING_EFFORT="" to send no reasoning parameter at all.
+export function judgeReasoningEffort(env: Record<string, string | undefined> = process.env): string {
+  const raw = env.VERIFY_JUDGE_REASONING_EFFORT;
+  return raw === undefined ? "minimal" : raw.trim();
+}
+
+// How many times one UNCHANGED artifact set may be judged before the verifier
+// stops calling out. Guards the re-judge loop (125 verdicts on one live task).
+export function maxJudgesPerSet(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.VERIFY_MAX_JUDGES_PER_SET);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+}
+
+// Pure: given what we already know about this artifact set, should the judge
+// be called again — and if not, what does the caller get? Exported for tests.
+//   • under the cap                 → call the judge
+//   • capped with a real verdict    → answer from it (no new row, no new comment)
+//   • capped with only outages      → treat as an outage and let VERIFY_FAIL_MODE
+//                                     decide; the hold comment is deduped by the
+//                                     caller, so the card keeps ONE comment.
+export function decideOnRejudgeCap(
+  prior: { total: number; lastVerdict: "pass" | "fail" | "error" | null },
+  cap: number = maxJudgesPerSet(),
+): { judge: true } | { judge: false; outcome: VerifyOutcome } {
+  if (prior.total < cap) return { judge: true };
+  if (prior.lastVerdict === "pass") return { judge: false, outcome: null };
+  if (prior.lastVerdict === "fail") return { judge: false, outcome: "verification_failed" };
+  return { judge: false, outcome: "judge_unavailable" };
+}
+
+// Transport-level retry. chatJson() returns null on a dead gateway, a 429, a
+// timeout, and on an unparseable reply alike, so we simply retry the whole
+// judge call with backoff — three attempts — before declaring an outage. Each
+// failed attempt names the endpoint and model so the log says what was called.
+const JUDGE_ATTEMPTS = 3;
+const JUDGE_BACKOFF_MS = [0, 1_500, 6_000];
+export async function judgeWithRetry(
+  messages: Parameters<typeof chatJson>[0],
+  target: ReturnType<typeof resolveJudgeTarget>,
+): Promise<unknown> {
+  const effort = judgeReasoningEffort();
+  for (let attempt = 0; attempt < JUDGE_ATTEMPTS; attempt++) {
+    if (JUDGE_BACKOFF_MS[attempt]) await sleep(JUDGE_BACKOFF_MS[attempt]);
+    const raw = await chatJson<unknown>(messages, {
+      temperature: 0,
+      maxTokens: judgeMaxTokens(),
+      timeoutMs: judgeTimeoutMs(),
+      target,
+      ...(effort ? { reasoningEffort: effort } : {}),
+    });
+    if (raw !== null && raw !== undefined) return raw;
+    const where = target ? `${target.baseUrl} model=${target.model}` : "no target";
+    console.warn(
+      `[verifier] judge call attempt ${attempt + 1}/${JUDGE_ATTEMPTS} returned nothing (${where}, max_tokens=${judgeMaxTokens()})` +
+        (attempt + 1 < JUDGE_ATTEMPTS ? ` — retrying in ${JUDGE_BACKOFF_MS[attempt + 1]}ms` : ""),
+    );
+  }
+  logJudgeConfigOnce(true);
+  return null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// How many verdicts already exist for this exact artifact set, and what the
+// last real one said. Only the recent tail is scanned — a task with hundreds of
+// rows (the bug this guards) still costs one bounded query.
+const SET_HISTORY_SCAN = 40;
+export async function countVerdictsForSet(
+  taskId: string,
+  setKey: string,
+): Promise<{ total: number; lastVerdict: "pass" | "fail" | "error" | null }> {
+  try {
+    const rows = await db
+      .select({ verdict: taskVerifications.verdict, rubricJson: taskVerifications.rubricJson })
+      .from(taskVerifications)
+      .where(eqTask(taskId))
+      .orderBy(descCreated())
+      .limit(SET_HISTORY_SCAN);
+    let total = 0;
+    let real: "pass" | "fail" | null = null;
+    let sawError = false;
+    for (const r of rows) {
+      // Rows are newest-first, so the first pass/fail we meet is the most
+      // recent REAL verdict. A real verdict beats a newer transport error:
+      // "the judge already said fail" is more useful to the caller than "the
+      // last attempt timed out".
+      if ((r.rubricJson as { setKey?: unknown } | null)?.setKey !== setKey) continue;
+      total++;
+      if (!real && (r.verdict === "pass" || r.verdict === "fail")) real = r.verdict;
+      if (r.verdict === "error") sawError = true;
+    }
+    return { total, lastVerdict: real ?? (sawError ? "error" : null) };
+  } catch {
+    return { total: 0, lastVerdict: null };
+  }
+}
+
+// The DELIVERABLE block of the judge prompt. Shows every selected artifact with
+// its name and size so the model can tell the work product from the supporting
+// files, and splits the character budget across them (the primary — the
+// highest-ranked artifact — always gets the largest share).
+export function renderDeliverableSet(
+  items: ReadonlyArray<{ row: { name: string; contentType: string; size: number }; text: string }>,
+): string {
+  if (!items.length) return "DELIVERABLES: (none)\n";
+  const budgets = splitBudget(MAX_DELIVERABLE_CHARS, items.length);
+  const header =
+    items.length === 1
+      ? "DELIVERABLE"
+      : `DELIVERABLE SET (${items.length} files; the FIRST is the primary work product, the rest are supporting)`;
+  const blocks = items.map((it, i) => {
+    const body = it.text.slice(0, budgets[i]);
+    const truncated = it.text.length > budgets[i] ? `\n…[truncated, full file is ${it.row.size} bytes]` : "";
+    return `--- FILE ${i + 1}: ${it.row.name} (${it.row.contentType}, ${it.row.size} bytes) ---\n${body}${truncated}`;
+  });
+  return `${header}:\n${blocks.join("\n\n")}\n`;
+}
+
+// Primary gets half the budget, the rest share the remainder evenly.
+function splitBudget(total: number, n: number): number[] {
+  if (n === 1) return [total];
+  const primary = Math.floor(total * 0.5);
+  const each = Math.floor((total - primary) / (n - 1));
+  return [primary, ...Array(n - 1).fill(each)];
+}
+
 // Tier 2 — LLM-as-judge. Returns null = pass/allow (let the done flip
 // proceed); "verification_failed" = the judge rejected the deliverable;
 // "judge_unavailable" = the judge could not be reached/parsed — the CALLER
@@ -208,25 +396,47 @@ export async function verifyTaskForDone(
 ): Promise<VerifyOutcome> {
   if (!verifierEnabled()) return null; // dormant → heuristic gate stands alone
 
-  // Pick the latest readable, substantive deliverable to judge.
+  // WHICH artifacts are the deliverable? Not "the newest one" — agents ship
+  // the real work first and then attach their own paperwork (a verification
+  // report, an audit log, a UX-research write-up), and the old newest-first
+  // scan judged the paperwork. See deliverable-select.ts for the ranking.
   const rows = await liveArtifactRows(opts.taskId);
-  // newest first
-  rows.sort((a, b) => (b.createdAt?.getTime?.() ?? 0) - (a.createdAt?.getTime?.() ?? 0));
-  let chosen: TaskArtifact | null = null;
-  let chosenText = "";
+  const textual: TaskArtifact[] = [];
   for (const r of rows) {
     // Only judge TEXTUAL deliverables — utf8-decoding a PDF/image/zip yields
     // garbage the judge would wrongly fail. Binary deliverables that clear the
     // substance heuristic are allowed through (the heuristic stands alone).
     if (!isTextualContentType(r.contentType)) continue;
     if (!(await isSubstantiveArtifact(r, opts.title))) continue;
-    const buf = await readObject(r.storageKey);
-    if (!buf) continue;
-    chosen = r;
-    chosenText = buf.toString("utf8").slice(0, MAX_DELIVERABLE_CHARS);
-    break;
+    textual.push(r);
   }
-  if (!chosen) return null; // no readable TEXT deliverable to judge → defer to heuristic outcome
+  const selection = selectDeliverables(textual as unknown as DeliverableCandidate[], opts.title, opts.bodyMd);
+  if (!selection.primary) return null; // nothing readable to judge → defer to the heuristic outcome
+
+  // Read the chosen set. A blob that has vanished from storage is dropped
+  // rather than judged as an empty file.
+  const readable: Array<{ row: TaskArtifact; text: string }> = [];
+  for (const cand of selection.set) {
+    const row = textual.find((r) => r.id === cand.id);
+    if (!row) continue;
+    const buf = await readObject(row.storageKey);
+    if (!buf) continue;
+    readable.push({ row, text: buf.toString("utf8") });
+  }
+  if (!readable.length) return null;
+  const chosen = readable[0].row;
+  const judgedSet = readable.map((r) => r.row);
+  const setKey = deliverableSetKey(judgedSet as unknown as DeliverableCandidate[]);
+  // Recorded on every verdict row: WHICH files were judged (so a human reading
+  // task_verifications can see the judge looked at dashboard.html and not at
+  // dashboard-ux-research.md) and the set identity the re-judge cap keys on.
+  const setRubric = {
+    setKey,
+    judged: judgedSet.map((r) => ({ id: r.id, name: r.name, version: r.version, size: r.size })),
+    demoted: selection.ranked
+      .filter((c) => !judgedSet.some((j) => j.id === c.row.id))
+      .map((c) => ({ name: c.row.name, score: Number(c.score.toFixed(2)), why: c.reasons.join("; ") })),
+  };
 
   const taskType = inferType(chosen.name, chosen.contentType);
 
@@ -235,6 +445,23 @@ export async function verifyTaskForDone(
   const last = await latestVerificationRow(opts.taskId);
   if (shouldReuseVerdict(last, chosen.id)) {
     return last!.verdict === "pass" ? null : "verification_failed";
+  }
+
+  // RE-JUDGE CAP. The window above only reuses a recent PASS/FAIL, and an
+  // `error` row is deliberately never reused — so while the judge gateway was
+  // down, every heartbeat re-called it: one live task accumulated 125
+  // verification rows, another 4 in three minutes. Once an unchanged artifact
+  // SET has been judged VERIFY_MAX_JUDGES_PER_SET times, stop calling the judge
+  // and answer from what we already know. Nothing new is recorded, so the card
+  // keeps the single comment it already has instead of collecting another.
+  const priorForSet = await countVerdictsForSet(opts.taskId, setKey);
+  const capDecision = decideOnRejudgeCap(priorForSet);
+  if (!capDecision.judge) {
+    console.warn(
+      `[verifier] re-judge cap hit for task ${opts.taskId}: this artifact set has already been judged ` +
+        `${priorForSet.total} time(s) (last=${priorForSet.lastVerdict ?? "none"}). Not calling the judge again until the deliverables change.`,
+    );
+    return capDecision.outcome;
   }
 
   // EXECUTION CHECK: feed what ACTUALLY loaded to the judge so it scores an
@@ -253,7 +480,7 @@ export async function verifyTaskForDone(
   }
 
   const target = resolveJudgeTarget();
-  const raw = await chatJson<unknown>(
+  const raw = await judgeWithRetry(
     [
       {
         role: "system",
@@ -266,6 +493,10 @@ export async function verifyTaskForDone(
           "If a RENDER OBSERVATION is present, weight it HEAVILY: a deliverable that failed to " +
           "load (loaded_ok:false), rendered almost no visible text, or threw console errors " +
           "FAILS regardless of how complete the source looks. " +
+          "You may be shown SEVERAL files. Judge the deliverable SET as a whole against the brief: " +
+          "PASS if the set together satisfies the acceptance criteria. Supporting material " +
+          "(notes, a verification write-up, a manifest) alongside the real work product is normal " +
+          "and is NOT a reason to fail — judge the work product, not the paperwork about it. " +
           'Return ONLY a JSON object: {"meets_acceptance_criteria":0..1,' +
           '"artifact_present_substantive":true|false,"not_fabricated":true|false,' +
           '"verdict":"pass"|"fail","score":0..1,"rationale":"one short paragraph"}',
@@ -275,11 +506,11 @@ export async function verifyTaskForDone(
         content:
           `TASK TITLE: ${opts.title}\n` +
           `ACCEPTANCE CRITERIA / DESCRIPTION:\n${opts.bodyMd || "(none stated — judge against the title)"}\n\n` +
-          `DELIVERABLE (${chosen.name}, ${chosen.contentType}):\n${chosenText}` +
+          renderDeliverableSet(readable) +
           renderBlock,
       },
     ],
-    { temperature: 0, maxTokens: 800, timeoutMs: judgeTimeoutMs(), target },
+    target,
   );
 
   const method = obs ? "render" : taskType === "code" ? "test" : "rubric";
@@ -307,7 +538,7 @@ export async function verifyTaskForDone(
       chosen.id,
       "error",
       null,
-      obs ? { render: obs, failMode: mode } : { failMode: mode },
+      { ...setRubric, failMode: mode, ...(obs ? { render: obs } : {}) },
       `judge unreachable or unparseable — ${effect} (VERIFY_FAIL_MODE=${mode})`,
       method,
     );
@@ -316,7 +547,16 @@ export async function verifyTaskForDone(
   consecutiveJudgeOutages = 0;
   const v: Verdict = parsed.data;
   const pass = v.verdict === "pass" && v.not_fabricated && v.score >= passThreshold();
-  await record(opts, taskType, chosen.id, pass ? "pass" : "fail", v.score, obs ? { ...v, render: obs } : v, v.rationale, method);
+  await record(
+    opts,
+    taskType,
+    chosen.id,
+    pass ? "pass" : "fail",
+    v.score,
+    { ...v, ...setRubric, ...(obs ? { render: obs } : {}) },
+    v.rationale,
+    method,
+  );
   return pass ? null : "verification_failed";
 }
 
@@ -388,10 +628,11 @@ async function record(
   rationale: string,
   method: string,
 ): Promise<void> {
+  const verificationId = id("tver");
   await db
     .insert(taskVerifications)
     .values({
-      id: id("tver"),
+      id: verificationId,
       taskId: opts.taskId,
       workspaceId: opts.workspaceId,
       taskType,
@@ -404,6 +645,25 @@ async function record(
       decidedBy: opts.decidedBy ?? undefined,
     })
     .catch(() => {});
+  // Governance trail: every verdict is a gate decision on someone's work.
+  void audit({
+    workspaceId: opts.workspaceId,
+    actorId: opts.decidedBy ?? "system",
+    actorType: opts.decidedBy ? "user" : "system",
+    action: "verification.verdict",
+    targetType: "task",
+    targetId: opts.taskId,
+    meta: {
+      verificationId,
+      verdict,
+      score,
+      method,
+      taskType,
+      artifactId,
+      artifactName: (rubric as { judged?: Array<{ name?: string }> }).judged?.[0]?.name ?? null,
+      rationale,
+    },
+  });
 }
 
 // Tiny local query helpers (kept here to avoid importing drizzle operators all

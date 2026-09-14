@@ -6,6 +6,7 @@ import { putObject, publicUrl, readObject, removeStoragePrefix } from "./storage
 import { id as makeId } from "./ids.js";
 import type { Attachment } from "../db/schema.js";
 import { ingestKnowledge } from "./knowledge.js";
+import { audit } from "./audit.js";
 import { recordProgress } from "./ledger-core.js";
 
 // Hard limits — mirror the agent attachment ingest (executor.ts) so artifacts
@@ -58,7 +59,9 @@ export interface ArtifactView extends Attachment {
   createdAt: string;
 }
 
-function sanitizeName(raw: string): string {
+// Exported so callers that need to look up an EXISTING row by the name this
+// module will store (the shrink guard, for one) compare like with like.
+export function sanitizeName(raw: string): string {
   const cleaned = (raw || "").trim().replace(/[^a-z0-9._-]/gi, "_").slice(0, 120);
   return cleaned || "file";
 }
@@ -137,6 +140,15 @@ export async function createArtifact(opts: {
       text: opts.buffer.toString("utf8"),
     });
   }
+
+  void audit({
+    workspaceId: opts.workspaceId,
+    actorId: opts.createdBy,
+    action: "artifact.created",
+    targetType: "artifact",
+    targetId: artifactId,
+    meta: { taskId: opts.taskId, name, version, size: row.size, contentType: row.contentType, sha256 },
+  });
 
   const handle = await resolveMember(opts.createdBy);
   return {
@@ -278,11 +290,66 @@ export async function loadArtifact(artifactId: string): Promise<TaskArtifact | n
 // caller's job — this just stamps deleted_at. Blob is left in storage (other
 // versions / audit); it simply stops being served once the row is gone (the
 // /files auth re-checks the live row).
-export async function softDeleteArtifact(artifactId: string): Promise<void> {
-  await db
+//
+// KNOWN GAP (not addressed here, deliberately): nothing ever reclaims the
+// bytes behind a soft-deleted artifact. On live, 1,019 of 1,171 artifact rows
+// are tombstones whose blobs still sit in MinIO. Only purgeArtifactsForTasks()
+// (task hard-delete) unlinks objects. A retention sweep — drop blobs for rows
+// soft-deleted more than N days ago, and superseded versions beyond the last
+// few — is worth building once the store is big enough to matter; it is out of
+// scope for this change because getting it wrong destroys deliverables.
+export async function softDeleteArtifact(
+  artifactId: string,
+  actor?: { memberId: string; actorType?: "user" | "agent" },
+): Promise<void> {
+  const [row] = await db
     .update(taskArtifacts)
     .set({ deletedAt: new Date() })
-    .where(eq(taskArtifacts.id, artifactId));
+    .where(eq(taskArtifacts.id, artifactId))
+    .returning({
+      taskId: taskArtifacts.taskId,
+      workspaceId: taskArtifacts.workspaceId,
+      name: taskArtifacts.name,
+      version: taskArtifacts.version,
+      size: taskArtifacts.size,
+    });
+  if (!row) return;
+  void audit({
+    workspaceId: row.workspaceId,
+    actorId: actor?.memberId ?? "system",
+    actorType: actor?.actorType ?? (actor ? "user" : "system"),
+    action: "artifact.deleted",
+    targetType: "artifact",
+    targetId: artifactId,
+    meta: { taskId: row.taskId, name: row.name, version: row.version, size: row.size },
+  });
+}
+
+// ─── replacement-shrink guard ───────────────────────────────────────────
+//
+// An agent "updating" a deliverable by posting a 189-byte version over a
+// 13,915-byte one is not an update, it is a regression — and because the
+// verifier used to judge the latest version, it destroyed the evidence that
+// the work had ever been done (live: dashboard.html v1=292 B, v3=189 B,
+// v2/4/5/6=13,915 B). Uploads that would replace a substantially larger prior
+// version of the SAME name are refused; the agent is told to submit the whole
+// file, or use a new name for a genuinely different, smaller artifact.
+export const MIN_REPLACEMENT_BYTES = 1024;
+
+/** Pure decision, exported for tests. */
+export function isShrinkingReplacement(newSize: number, largestPriorSize: number): boolean {
+  return newSize < MIN_REPLACEMENT_BYTES && largestPriorSize >= MIN_REPLACEMENT_BYTES;
+}
+
+/** Largest live version of this (task, name), or 0 when the name is new. */
+export async function largestLiveVersionSize(taskId: string, name: string): Promise<number> {
+  const [r] = await db
+    .select({ m: dsql<number>`coalesce(max(${taskArtifacts.size}), 0)`.as("m") })
+    .from(taskArtifacts)
+    .where(
+      and(eq(taskArtifacts.taskId, taskId), eq(taskArtifacts.name, name), isNull(taskArtifacts.deletedAt)),
+    );
+  return Number(r?.m) || 0;
 }
 
 // Hard-delete every artifact row for these tasks AND unlink their blobs.
