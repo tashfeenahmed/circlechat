@@ -109,7 +109,11 @@ export async function maybeSummarizeTaskThread(taskId: string): Promise<void> {
             `OLDER COMMENTS (oldest first):\n${digest}`,
         },
       ],
-      { temperature: 0, maxTokens: 600, timeoutMs: 60_000 },
+      // Free text, not a schema: a pinned model that answers unusably may fall
+      // back to the gateway's `auto` chain. A transport failure (429/5xx/
+      // timeout) never does — chat() just returns null and the next comment
+      // triggers another attempt.
+      { temperature: 0, maxTokens: 600, timeoutMs: 60_000, allowModelFallback: true },
     ).catch(() => null);
 
     const summary = (out || "").trim().slice(0, MAX_SUMMARY_CHARS);

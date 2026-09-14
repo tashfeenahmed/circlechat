@@ -87,7 +87,7 @@ workspaces whose `autoPlan` is `auto`.**
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `GOAL_MAX_PLAN_ATTEMPTS` | `3` | Give up auto-planning a goal after this many failed attempts (then notify the owner). |
+| `GOAL_MAX_PLAN_ATTEMPTS` | `3` | Give up auto-planning a goal after this many failed attempts (then notify the owner). Only a genuine model answer the schema or the content gate rejected counts; an unreachable or rate-limited LLM gateway (429/5xx/timeout) is retried on the next sweep without spending an attempt. |
 | `GOAL_STUCK_PLANNING_MS` | `300000` (5 min) | A goal stuck in `planning` longer than this is reset to `open` (its worker died mid-plan). |
 | `GOAL_SWEEP_EVERY_MS` | `180000` (3 min) | How often the goal sweeper runs. |
 | `GOAL_SWEEP_BATCH` | `20` | Max goals processed per sweep tick (coarse rate limit). |

@@ -33,6 +33,7 @@ export type GoalStatusReason =
   | "archive"
   | "plan_started" // planner: open → planning
   | "plan_failed" // planner: planning → open (generation failed / empty / cyclic)
+  | "plan_deferred" // planner: planning → open because the LLM gateway was unreachable (no attempt spent)
   | "planned" // planner: tasks materialised → in_progress
   | "plan_recovered"; // sweeper: a goal stuck in `planning` after a worker death
 

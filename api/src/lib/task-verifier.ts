@@ -13,7 +13,7 @@
 // via VERIFY_FAIL_MODE (open = allow the flip, closed = block, hold = block and
 // post one comment so a human reviews); the default stays fail-OPEN.
 import { z } from "zod";
-import { chatJson, judgeConfigured, resolveJudgeTarget } from "./completion.js";
+import { chatJsonOutcome, judgeConfigured, resolveJudgeTarget, type ChatMessage } from "./completion.js";
 import { liveArtifactRows, isSubstantiveArtifact, isTextualContentType } from "./task-artifacts.js";
 import {
   selectDeliverables,
@@ -265,6 +265,10 @@ export function maxJudgesPerSet(env: Record<string, string | undefined> = proces
 //   • capped with only outages      → treat as an outage and let VERIFY_FAIL_MODE
 //                                     decide; the hold comment is deduped by the
 //                                     caller, so the card keeps ONE comment.
+// The `total` fed in EXCLUDES transport failures (see tallyVerdictRows): a
+// rate-limited gateway must never eat the three judge slots an unchanged
+// deliverable gets, or the first quota outage permanently retires the gate for
+// that card.
 export function decideOnRejudgeCap(
   prior: { total: number; lastVerdict: "pass" | "fail" | "error" | null },
   cap: number = maxJudgesPerSet(),
@@ -275,35 +279,54 @@ export function decideOnRejudgeCap(
   return { judge: false, outcome: "judge_unavailable" };
 }
 
-// Transport-level retry. chatJson() returns null on a dead gateway, a 429, a
-// timeout, and on an unparseable reply alike, so we simply retry the whole
-// judge call with backoff — three attempts — before declaring an outage. Each
-// failed attempt names the endpoint and model so the log says what was called.
+// What one judge call produced. A TRANSPORT failure (429 / 5xx / timeout /
+// network) is kept apart from "the judge answered something unusable": only
+// the latter is evidence about this deliverable, so only the latter is worth
+// recording as an `error` verdict and spending a re-judge slot on.
+export type JudgeCallResult =
+  | { kind: "ok"; raw: unknown }
+  | { kind: "transport"; status: number; retryAfterMs: number | null }
+  | { kind: "invalid" };
+
+// Retry loop for UNUSABLE replies. The transport layer (lib/completion.ts)
+// already does its own bounded retry on 429/5xx/timeouts, so a transport
+// failure here returns immediately — retrying a rate-limited router three more
+// times only deepens the outage. Each failed attempt names the endpoint and
+// model so the log says what was called.
 const JUDGE_ATTEMPTS = 3;
 const JUDGE_BACKOFF_MS = [0, 1_500, 6_000];
 export async function judgeWithRetry(
-  messages: Parameters<typeof chatJson>[0],
+  messages: ChatMessage[],
   target: ReturnType<typeof resolveJudgeTarget>,
-): Promise<unknown> {
+): Promise<JudgeCallResult> {
   const effort = judgeReasoningEffort();
   for (let attempt = 0; attempt < JUDGE_ATTEMPTS; attempt++) {
     if (JUDGE_BACKOFF_MS[attempt]) await sleep(JUDGE_BACKOFF_MS[attempt]);
-    const raw = await chatJson<unknown>(messages, {
+    const outcome = await chatJsonOutcome<unknown>(messages, {
       temperature: 0,
       maxTokens: judgeMaxTokens(),
       timeoutMs: judgeTimeoutMs(),
       target,
       ...(effort ? { reasoningEffort: effort } : {}),
     });
-    if (raw !== null && raw !== undefined) return raw;
+    if (outcome.kind === "ok" && outcome.value !== null && outcome.value !== undefined) {
+      return { kind: "ok", raw: outcome.value };
+    }
     const where = target ? `${target.baseUrl} model=${target.model}` : "no target";
+    if (outcome.kind === "transport") {
+      console.warn(
+        `[verifier] transport failure (${outcome.status}) calling the judge (${where}) — not retrying here, ` +
+          `no verdict recorded and no re-judge slot consumed`,
+      );
+      return { kind: "transport", status: outcome.status, retryAfterMs: outcome.retryAfterMs };
+    }
     console.warn(
       `[verifier] judge call attempt ${attempt + 1}/${JUDGE_ATTEMPTS} returned nothing (${where}, max_tokens=${judgeMaxTokens()})` +
         (attempt + 1 < JUDGE_ATTEMPTS ? ` — retrying in ${JUDGE_BACKOFF_MS[attempt + 1]}ms` : ""),
     );
   }
   logJudgeConfigOnce(true);
-  return null;
+  return { kind: "invalid" };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -314,6 +337,40 @@ function sleep(ms: number): Promise<void> {
 // last real one said. Only the recent tail is scanned — a task with hundreds of
 // rows (the bug this guards) still costs one bounded query.
 const SET_HISTORY_SCAN = 40;
+export interface VerdictRow {
+  verdict: string;
+  rubricJson: unknown;
+}
+
+// Pure tally over the recent verdict rows, newest first. Exported for tests.
+//
+// Rows flagged `transport` in their rubric are SKIPPED entirely: they record
+// that the gateway was unreachable, which says nothing about the deliverable.
+// Counting them was how a rate-limited router could retire the verification
+// gate for a card — three 429s and `decideOnRejudgeCap` never calls the judge
+// for that artifact set again.
+export function tallyVerdictRows(
+  rows: readonly VerdictRow[],
+  setKey: string,
+): { total: number; lastVerdict: "pass" | "fail" | "error" | null } {
+  let total = 0;
+  let real: "pass" | "fail" | null = null;
+  let sawError = false;
+  for (const r of rows) {
+    // Rows are newest-first, so the first pass/fail we meet is the most
+    // recent REAL verdict. A real verdict beats a newer judge error:
+    // "the judge already said fail" is more useful to the caller than "the
+    // last attempt came back unparseable".
+    const rubric = r.rubricJson as { setKey?: unknown; transport?: unknown } | null;
+    if (rubric?.setKey !== setKey) continue;
+    if (rubric?.transport) continue;
+    total++;
+    if (!real && (r.verdict === "pass" || r.verdict === "fail")) real = r.verdict;
+    if (r.verdict === "error") sawError = true;
+  }
+  return { total, lastVerdict: real ?? (sawError ? "error" : null) };
+}
+
 export async function countVerdictsForSet(
   taskId: string,
   setKey: string,
@@ -325,20 +382,7 @@ export async function countVerdictsForSet(
       .where(eqTask(taskId))
       .orderBy(descCreated())
       .limit(SET_HISTORY_SCAN);
-    let total = 0;
-    let real: "pass" | "fail" | null = null;
-    let sawError = false;
-    for (const r of rows) {
-      // Rows are newest-first, so the first pass/fail we meet is the most
-      // recent REAL verdict. A real verdict beats a newer transport error:
-      // "the judge already said fail" is more useful to the caller than "the
-      // last attempt timed out".
-      if ((r.rubricJson as { setKey?: unknown } | null)?.setKey !== setKey) continue;
-      total++;
-      if (!real && (r.verdict === "pass" || r.verdict === "fail")) real = r.verdict;
-      if (r.verdict === "error") sawError = true;
-    }
-    return { total, lastVerdict: real ?? (sawError ? "error" : null) };
+    return tallyVerdictRows(rows, setKey);
   } catch {
     return { total: 0, lastVerdict: null };
   }
@@ -509,7 +553,7 @@ export async function verifyTaskForDone(
   }
 
   const target = resolveJudgeTarget();
-  const raw = await judgeWithRetry(
+  const judged = await judgeWithRetry(
     [
       {
         role: "system",
@@ -546,6 +590,26 @@ export async function verifyTaskForDone(
   );
 
   const method = obs ? "render" : taskType === "code" ? "test" : "rubric";
+
+  // TRANSPORT failure: the judge never saw the deliverable. Record NOTHING —
+  // no verdict row, so `countVerdictsForSet` is unmoved and the next flip still
+  // gets a real judge call once the router recovers — and let VERIFY_FAIL_MODE
+  // decide this one flip exactly as it would for any other outage.
+  if (judged.kind === "transport") {
+    consecutiveJudgeOutages++;
+    const mode = resolveFailMode();
+    const effect = mode === "open" ? "failing open" : mode === "hold" ? "holding in review" : "failing closed";
+    const where = target ? `${target.baseUrl} model=${target.model}` : "no target";
+    const wait = judged.retryAfterMs == null ? "" : `, retry after ~${Math.round(judged.retryAfterMs / 1000)}s`;
+    console.warn(
+      `[verifier] transport failure (${judged.status}) for task ${opts.taskId} — ${effect} ` +
+        `(VERIFY_FAIL_MODE=${mode}; ${where}${wait}). No verdict recorded and no re-judge attempt consumed; ` +
+        `the judge runs again on the next flip.`,
+    );
+    return "judge_unavailable";
+  }
+
+  const raw = judged.kind === "ok" ? judged.raw : null;
   const parsed = VerdictSchema.safeParse(raw);
   if (!parsed.success) {
     // A judge we can't reach/parse must not be SILENT — a broken judge once

@@ -2,7 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { goals, workspaces, workspaceMembers, members } from "../db/schema.js";
-import { chatJson, plannerEnabled } from "./completion.js";
+import { chatJsonOutcome, plannerEnabled } from "./completion.js";
 import { createGoal } from "./goals-core.js";
 import { notify } from "./notifications.js";
 import { envInt } from "./env.js";
@@ -109,8 +109,16 @@ export function composeBody(p: { description?: string; rationale?: string }): st
   return [p.description ?? "", p.rationale ? `_Why now: ${p.rationale}_` : ""].filter(Boolean).join("\n\n");
 }
 
-// One workspace: mission → up to GOALS_PER_RUN new goals. Returns #created.
-async function planWorkspace(ws: { id: string; mission: string }): Promise<number> {
+// What one workspace's pass produced. `transport` means the gateway never
+// answered — the run stops rather than walking the remaining workspaces and
+// hammering an exhausted router with the same 429.
+interface WorkspaceResult {
+  created: number;
+  transport?: { status: number };
+}
+
+// One workspace: mission → up to GOALS_PER_RUN new goals.
+async function planWorkspace(ws: { id: string; mission: string }): Promise<WorkspaceResult> {
   const rows = await db
     .select({ id: goals.id, title: goals.title, kind: goals.kind, status: goals.status })
     .from(goals)
@@ -120,7 +128,7 @@ async function planWorkspace(ws: { id: string; mission: string }): Promise<numbe
   const openCount = live.filter((g) => g.kind === "goal" && g.status !== "done").length;
   if (openCount >= MAX_OPEN_GOALS) {
     console.log(`[mission-planner] ${ws.id}: ${openCount} open goals ≥ cap ${MAX_OPEN_GOALS}, skipping`);
-    return 0;
+    return { created: 0 };
   }
 
   const projects = live.filter((g) => g.kind === "project" && g.status !== "done");
@@ -128,22 +136,40 @@ async function planWorkspace(ws: { id: string; mission: string }): Promise<numbe
   // finished last week shouldn't be re-proposed this week.
   const existingTitles = live.map((g) => g.title).slice(0, 200);
 
-  // One completion → parsed proposals (null when the model or the schema failed).
-  const propose = async (strictNote: string): Promise<z.infer<typeof ProposalSchema>["goals"] | null> => {
-    const raw = await chatJson<unknown>(buildMessages(ws.mission, projects, existingTitles, strictNote), {
+  // One completion → parsed proposals. A TRANSPORT failure is reported as its
+  // own kind: the model never saw the prompt, so it is not "the model proposed
+  // nothing" and must not trigger the stricter retry below (a second call
+  // against a rate-limited router just deepens the outage).
+  type ProposeResult =
+    | { kind: "goals"; goals: z.infer<typeof ProposalSchema>["goals"] }
+    | { kind: "transport"; status: number }
+    | { kind: "invalid" };
+  const propose = async (strictNote: string): Promise<ProposeResult> => {
+    const outcome = await chatJsonOutcome<unknown>(buildMessages(ws.mission, projects, existingTitles, strictNote), {
       temperature: 0.3,
       maxTokens: 2000,
       timeoutMs: 150_000,
     });
+    if (outcome.kind === "transport") {
+      console.warn(
+        `[mission-planner] transport failure (${outcome.status}) for ${ws.id}, will retry next run` +
+          (outcome.retryAfterMs == null ? "" : ` (retry after ~${Math.round(outcome.retryAfterMs / 1000)}s)`),
+      );
+      return { kind: "transport", status: outcome.status };
+    }
+    if (outcome.kind === "unconfigured") return { kind: "invalid" };
+    const raw = outcome.kind === "ok" ? outcome.value : null;
     const parsed = ProposalSchema.safeParse(raw);
     if (!parsed.success) {
       console.error(
         `[mission-planner] proposal failed for ${ws.id}: ` +
-          (raw === null ? "chatJson returned null" : `schema rejected: ${JSON.stringify(raw).slice(0, 200)}`),
+          (raw === null
+            ? `the model answered but the reply was unusable (${outcome.kind === "invalid" ? outcome.detail : "no JSON"})`
+            : `schema rejected: ${JSON.stringify(raw).slice(0, 200)}`),
       );
-      return null;
+      return { kind: "invalid" };
     }
-    return parsed.data.goals;
+    return { kind: "goals", goals: parsed.data.goals };
   };
 
   // Content gate. The schema only checks shapes, so a model that echoes the
@@ -158,26 +184,30 @@ async function planWorkspace(ws: { id: string; mission: string }): Promise<numbe
       return verdict.ok;
     });
 
-  let proposed = await propose("");
-  if (!proposed) return 0;
+  const first = await propose("");
+  if (first.kind === "transport") return { created: 0, transport: { status: first.status } };
+  if (first.kind === "invalid") return { created: 0 };
+  let proposed = first.goals;
   let usable = keep(proposed);
   // All filler (but the model did propose something) — one stricter retry, then
   // give up for this run rather than putting junk on someone's board.
   if (proposed.length && !usable.length) {
     console.warn(`[mission-planner] ${ws.id}: every proposal rejected, retrying once with stricter instructions`);
-    proposed = await propose(STRICTER_RETRY_NOTE);
-    usable = proposed ? keep(proposed) : [];
+    const retry = await propose(STRICTER_RETRY_NOTE);
+    if (retry.kind === "transport") return { created: 0, transport: { status: retry.status } };
+    proposed = retry.kind === "goals" ? retry.goals : [];
+    usable = keep(proposed);
     if (!usable.length) {
       console.warn(`[mission-planner] ${ws.id}: retry still produced no usable proposal, no goal created`);
-      return 0;
+      return { created: 0 };
     }
   }
-  if (!usable.length) return 0; // model returned an empty list — nothing to do
+  if (!usable.length) return { created: 0 }; // model returned an empty list — nothing to do
 
   const actor = await findAdminMember(ws.id);
   if (!actor) {
     console.error(`[mission-planner] ${ws.id}: no human admin member, skipping`);
-    return 0;
+    return { created: 0 };
   }
 
   const seen = new Set(live.map((g) => norm(g.title)));
@@ -210,7 +240,7 @@ async function planWorkspace(ws: { id: string; mission: string }): Promise<numbe
       link: `/goals`,
     }).catch(() => {});
   }
-  return createdTitles.length;
+  return { created: createdTitles.length };
 }
 
 // Entry point for the repeatable "mission" job: every auto-planning workspace
@@ -222,12 +252,24 @@ export async function runMissionPlanning(): Promise<void> {
     .from(workspaces)
     .where(eq(workspaces.autoPlan, "auto"));
   let total = 0;
+  let stoppedOn: number | null = null;
   for (const ws of wss) {
     if (!ws.mission.trim()) continue;
-    total += await planWorkspace(ws).catch((e) => {
+    const r = await planWorkspace(ws).catch((e) => {
       console.error(`[mission-planner] workspace ${ws.id} failed`, e);
-      return 0;
+      return { created: 0 } as WorkspaceResult;
     });
+    total += r.created;
+    if (r.transport) {
+      // The router is rate-limited for everyone, not just this workspace. Stop
+      // the run here: the next daily pass (or sweep) picks it up, and nothing
+      // has been recorded as a failed proposal.
+      stoppedOn = r.transport.status;
+      break;
+    }
   }
-  console.log(`[mission-planner] run complete: ${total} goal(s) created across ${wss.length} workspace(s)`);
+  console.log(
+    `[mission-planner] run complete: ${total} goal(s) created across ${wss.length} workspace(s)` +
+      (stoppedOn ? ` — stopped early on a transport failure (${stoppedOn}), will retry next run` : ""),
+  );
 }

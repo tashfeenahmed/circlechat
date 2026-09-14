@@ -9,7 +9,7 @@ import {
   users,
 } from "../db/schema.js";
 import { redis } from "./redis.js";
-import { chat, plannerEnabled, resolvePlannerTarget } from "./completion.js";
+import { chatOutcome, plannerEnabled, resolvePlannerTarget } from "./completion.js";
 import { isPlaceholderText } from "./llm-proposal-guard.js";
 
 // Sleep-time compute (Letta): a cheap background pass that keeps the SHARED
@@ -126,7 +126,7 @@ async function sweepWorkspace(workspaceId: string): Promise<void> {
     .join("\n")
     .slice(0, 6000);
 
-  const out = await chat(
+  const outcome = await chatOutcome(
     [
       {
         role: "system",
@@ -146,15 +146,30 @@ async function sweepWorkspace(workspaceId: string): Promise<void> {
           `RECENT ACTIVITY (oldest first):\n${digest}`,
       },
     ],
-    { temperature: 0, maxTokens: 800, timeoutMs: 60_000 },
-  ).catch(() => null);
+    // Free text, not a schema: a pinned model that answers unusably may be
+    // retried on the gateway's `auto` chain (a drifting whiteboard beats a
+    // stale one). A transport failure still never falls back.
+    { temperature: 0, maxTokens: 800, timeoutMs: 60_000, allowModelFallback: true },
+  ).catch(() => ({ kind: "invalid" as const, detail: "threw" }));
+
+  // TRANSPORT failure: the model never saw the digest. Leave the watermark
+  // where it is so the SAME window is digested on the next sweep instead of
+  // being silently dropped — the gateway's outage must not cost the team block
+  // half an hour of activity.
+  if (outcome.kind === "transport") {
+    console.log(
+      `[memory-janitor] ${workspaceId}: transport failure (${outcome.status}) — watermark held, retrying next sweep`,
+    );
+    return;
+  }
 
   // Always advance the watermark to the newest message we considered, even if
   // we don't write — otherwise a declined sweep re-digests the same window.
   await redis.set(wmKey, recent[recent.length - 1].ts.toISOString());
 
+  const out = outcome.kind === "ok" ? outcome.value : null;
   if (!out) {
-    console.log(`[memory-janitor] ${workspaceId}: model call failed or timed out — block unchanged`);
+    console.log(`[memory-janitor] ${workspaceId}: model call failed or returned nothing — block unchanged`);
     return;
   }
   const decision = acceptJanitorOutput(out, block.charLimit);

@@ -4,7 +4,7 @@ import { redis } from "../lib/redis.js";
 import { db } from "../db/index.js";
 import { goals, tasks, workspaces, goalLedgers, members } from "../db/schema.js";
 import { GOAL_QUEUE, type GoalPlanJob, enqueueGoalPlan } from "../lib/goal-queue.js";
-import { planGoal } from "../lib/planner.js";
+import { planGoal, type PlanError } from "../lib/planner.js";
 import { runMissionPlanning } from "../lib/mission-planner.js";
 import { bumpStall, assessProgress, writeProgressAssessment } from "../lib/ledger-core.js";
 import { notify } from "../lib/notifications.js";
@@ -44,8 +44,26 @@ const LOOP_REPLAN_THRESHOLD = envInt("GOAL_LOOP_REPLAN_THRESHOLD", 2, { min: 1 }
 // once per SLA period.
 const REVIEW_SLA_MS = envNum("REVIEW_SLA_MS", 6 * 60 * 60 * 1000, { min: 1 }); // 6h
 
-// Errors that mean "stop, don't count an attempt" (nothing to retry).
-const TERMINAL_NO_COUNT = new Set(["already_planned", "goal_not_found", "wrong_workspace"]);
+// Errors that must NOT spend one of the goal's MAX_PLAN_ATTEMPTS. Two families:
+//   • terminal — there is nothing to retry (the goal is gone, or already planned);
+//   • environmental — the LLM gateway was unreachable or unconfigured, so the
+//     model never saw the prompt. A one-hour free-tier quota outage
+//     (`http_429 "All models exhausted … Soonest reset ~57m"`) used to burn all
+//     three attempts on every open goal in ~9 minutes of sweeps and abandon
+//     them permanently. Only a schema rejection or a genuine (but unusable)
+//     model answer is the goal's own fault.
+const NO_COUNT_ERRORS = new Set<PlanError>([
+  "already_planned",
+  "goal_not_found",
+  "wrong_workspace",
+  "planner_unconfigured",
+  "planner_transport",
+]);
+
+/** Pure: does this planning failure consume one of MAX_PLAN_ATTEMPTS? */
+export function countsAsPlanAttempt(error: PlanError): boolean {
+  return !NO_COUNT_ERRORS.has(error);
+}
 
 async function handlePlan(goalId: string): Promise<void> {
   const [goal] = await db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
@@ -62,7 +80,18 @@ async function handlePlan(goalId: string): Promise<void> {
     if (goal.lastPlanError) await db.update(goals).set({ lastPlanError: null }).where(eq(goals.id, goalId));
     return;
   }
-  if (TERMINAL_NO_COUNT.has(r.error)) return;
+  if (!countsAsPlanAttempt(r.error)) {
+    // Leave plan_attempts alone, but leave a breadcrumb on the row so "why is
+    // this goal still unplanned?" is answerable without reading worker logs.
+    // Cleared by the next successful plan.
+    if (r.error === "planner_transport" && r.transport) {
+      const marker = `transport:${r.transport.status}`;
+      if (goal.lastPlanError !== marker) {
+        await db.update(goals).set({ lastPlanError: marker }).where(eq(goals.id, goalId)).catch(() => {});
+      }
+    }
+    return;
+  }
 
   // Count the failed attempt; give up + notify the owner once we hit the cap.
   const attempts = goal.planAttempts + 1;
