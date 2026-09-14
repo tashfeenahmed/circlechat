@@ -9,23 +9,38 @@ import {
   users,
 } from "../db/schema.js";
 import { redis } from "./redis.js";
-import { chat, plannerEnabled } from "./completion.js";
+import { chat, plannerEnabled, resolvePlannerTarget } from "./completion.js";
 
 // Sleep-time compute (Letta): a cheap background pass that keeps the SHARED
 // team memory block current without an agent spending a turn on it. Per
 // workspace, on a cooldown, it digests recent chatter since a watermark and
 // REWRITES the team block (rewrite, not append — so re-processing the same
-// window can't duplicate lines and the block self-trims). Opt-in
-// (CC_MEMORY_JANITOR=on), fail-safe, and a no-op when there's little new
-// activity or the model declines to change anything.
+// window can't duplicate lines and the block self-trims). Fail-safe, and a
+// no-op when there's little new activity or the model declines to change
+// anything.
+//
+// ON BY DEFAULT since 14 Sep 2026. It used to require CC_MEMORY_JANITOR=on,
+// which in practice meant it never ran anywhere: the flag was not in the
+// compose `environment:` allowlist, so even setting it in .env could not reach
+// the worker container. Live proof — `memory_blocks` had not been touched
+// since 19 August while the janitor's own cooldown lock had never been taken.
+// A feature that cannot be switched on is not opt-in, it is dead code, so the
+// default flipped: it runs wherever a planner endpoint is configured, and
+// CC_MEMORY_JANITOR=off (or 0/false/no) is the way out.
 
 const COOLDOWN_MS = 30 * 60 * 1000; // at most one sweep per workspace per 30 min
 const MIN_NEW_MESSAGES = 8; // don't burn an LLM call on a quiet workspace
 const MAX_DIGEST_MESSAGES = 60;
 const SENTINEL_NO_CHANGE = "NO_CHANGE";
 
-export function janitorEnabled(): boolean {
-  return process.env.CC_MEMORY_JANITOR === "on" && plannerEnabled();
+export function janitorEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  const raw = (env.CC_MEMORY_JANITOR ?? "").trim().toLowerCase();
+  if (raw === "off" || raw === "0" || raw === "false" || raw === "no") return false;
+  // Without a planner endpoint there is nothing to call — stay silent rather
+  // than logging a failure every sweep. (plannerEnabled() reads process.env and
+  // carries the one-shot fallback warning; resolvePlannerTarget takes an env so
+  // the rule stays unit-testable.)
+  return env === process.env ? plannerEnabled() : !!resolvePlannerTarget(env);
 }
 
 // Decide whether the model's output should replace the block. Pure/exported for
@@ -42,18 +57,40 @@ export function acceptJanitorOutput(
 }
 
 export async function runMemoryJanitor(): Promise<void> {
-  if (!janitorEnabled()) return;
+  if (!janitorEnabled()) {
+    // One line per process, not per sweep — enough to tell "off" from "broken"
+    // when the team block looks stale, which is exactly the question that took
+    // a live database read to answer last time.
+    if (!loggedDisabled) {
+      loggedDisabled = true;
+      const why =
+        (process.env.CC_MEMORY_JANITOR ?? "").trim().toLowerCase() === "off"
+          ? "CC_MEMORY_JANITOR=off"
+          : "no planner endpoint configured (PLANNER_BASE_URL / EMBEDDINGS_BASE_URL)";
+      console.log(`[memory-janitor] disabled — ${why}`);
+    }
+    return;
+  }
 
   // Workspaces that have at least one agent (others have no team block to tend).
   const wsRows = await db
     .selectDistinct({ workspaceId: agents.workspaceId })
     .from(agents);
+  if (!loggedEnabled) {
+    loggedEnabled = true;
+    console.log(
+      `[memory-janitor] enabled — sweeping ${wsRows.length} workspace(s), max one pass each per ${Math.round(COOLDOWN_MS / 60000)}m`,
+    );
+  }
   for (const { workspaceId } of wsRows) {
     await sweepWorkspace(workspaceId).catch((e) =>
       console.error(`[memory-janitor] ${workspaceId} failed`, (e as Error).message),
     );
   }
 }
+
+let loggedEnabled = false;
+let loggedDisabled = false;
 
 async function sweepWorkspace(workspaceId: string): Promise<void> {
   // Cooldown via a redis NX lock — survives restarts, no schema needed.
@@ -70,6 +107,10 @@ async function sweepWorkspace(workspaceId: string): Promise<void> {
   const since = wmRaw ? new Date(wmRaw) : new Date(Date.now() - COOLDOWN_MS);
 
   const recent = await recentWorkspaceMessages(workspaceId, since);
+  console.log(
+    `[memory-janitor] ${workspaceId}: pass since ${since.toISOString()} — ${recent.length} new message(s)` +
+      (recent.length < MIN_NEW_MESSAGES ? ` (< ${MIN_NEW_MESSAGES}, skipping)` : ""),
+  );
   if (recent.length < MIN_NEW_MESSAGES) {
     // Not enough new signal — advance the watermark so we don't re-scan it, and bail.
     if (recent.length) await redis.set(wmKey, recent[recent.length - 1].ts.toISOString());
@@ -108,9 +149,15 @@ async function sweepWorkspace(workspaceId: string): Promise<void> {
   // we don't write — otherwise a declined sweep re-digests the same window.
   await redis.set(wmKey, recent[recent.length - 1].ts.toISOString());
 
-  if (!out) return;
+  if (!out) {
+    console.log(`[memory-janitor] ${workspaceId}: model call failed or timed out — block unchanged`);
+    return;
+  }
   const decision = acceptJanitorOutput(out, block.charLimit);
-  if (!decision.accept) return;
+  if (!decision.accept) {
+    console.log(`[memory-janitor] ${workspaceId}: model declined to change the block`);
+    return;
+  }
   if (decision.value.trim() === block.value.trim()) return;
 
   await db

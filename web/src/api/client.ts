@@ -194,7 +194,9 @@ export interface GoalTaskCounts {
   inProgress: number;
 }
 
-export type GoalStatus = "open" | "planning" | "in_progress" | "done" | "archived";
+// `parked` = auto-parked after two weeks with no task movement; the owner
+// resumes it from the Goals page.
+export type GoalStatus = "open" | "planning" | "in_progress" | "parked" | "done" | "archived";
 
 export type GoalKind = "goal" | "project";
 

@@ -31,6 +31,32 @@ const CONTAINER_WORKSPACE = "/workspace";
 const OPENCLAW_IMAGE = process.env.CC_OPENCLAW_IMAGE ?? "alpine/openclaw:latest";
 const CONTAINER_OPENCLAW_HOME = "/root/.openclaw";
 
+// ── Container shutdown grace ──────────────────────────────────────────────
+// Each turn is a `docker run --rm` of the hermes-agent image, which boots a
+// full s6-overlay supervision tree (gateway + cron scheduler) and tears it down
+// again when `hermes chat` returns. s6's default service grace time is 3 s, and
+// the gateway's cron scheduler needs longer than that to finish an in-flight
+// job: on live, `gateway-exit-diag.log` recorded 207 consecutive `exit_nonzero`
+// where s6-supervise SIGTERM'd the gateway 12–55 s into the run with "1
+// in-flight cron job(s)" — the SAME job id every time, because each dirty
+// shutdown left the session suspended and the next boot picked it straight back
+// up. The run itself was still recorded as status=ok.
+//
+// Two fixes, both here: give the tree a real grace period so the job drains,
+// and (below) stop reporting a non-zero container exit as a healthy run.
+const STOP_GRACE_SEC = Math.max(5, Number(process.env.CC_AGENT_STOP_GRACE_SEC) || 45);
+const STOP_GRACE_MS = STOP_GRACE_SEC * 1000;
+
+// Turn a container exit into a run error string, or null when it exited clean.
+// Exported for tests: a non-zero exit is a FAILED run even when the agent
+// produced usable text on the way out, because the shutdown that produced it
+// interrupted work the next boot has to redo.
+export function gatewayExitError(exitCode, signal) {
+  if (signal) return `gateway_interrupted: killed by ${signal}`;
+  if (exitCode == null || exitCode === 0) return null;
+  return `gateway_exit_nonzero: exit ${exitCode}`;
+}
+
 // Per-handle connection registry so reconcile() can add/remove agents on the
 // fly when bridge-config.json changes (e.g. when a new Hermes is installed).
 const conns = new Map();
@@ -93,6 +119,21 @@ function buildHermesSpawn(hermesHome, hermesArgs, envExtras = {}) {
     "--rm",
     "-i",
     "--network=host",
+    // How long the daemon waits after SIGTERM before SIGKILLing the container.
+    // Without it a stop is a 10 s guillotine through whatever s6 was draining.
+    "--stop-timeout",
+    String(STOP_GRACE_SEC),
+    // s6-overlay's own knobs, and the ones that actually matter here: how long
+    // s6-supervise waits for a service to finish after asking it to stop
+    // (default 3 s) and how long a finish script may take. The gateway's cron
+    // scheduler needs this window to complete an in-flight job instead of being
+    // interrupted and leaving the session suspended for the next boot.
+    "-e",
+    `S6_SERVICES_GRACETIME=${STOP_GRACE_MS}`,
+    "-e",
+    `S6_KILL_GRACETIME=${STOP_GRACE_MS}`,
+    "-e",
+    `S6_KILL_FINISH_MAXTIME=${STOP_GRACE_MS}`,
     "-v",
     `${hermesHome}:${CONTAINER_HERMES_HOME}`,
     ...workspaceMount,
@@ -150,14 +191,21 @@ function callHermes(prompt, hermesHome, token, modelOverride) {
       CC_BOT_TOKEN: token,
     };
     const spec = buildHermesSpawn(hermesHome, hermesArgs, envExtras);
-    const p = spawn(spec.cmd, spec.args, { timeout: HERMES_TIMEOUT * 1000, env: spec.env });
+    // The timeout SIGTERMs `docker run`, which forwards the signal to the
+    // container; the daemon then honours --stop-timeout, so the drain window
+    // above applies to the timeout path too. Add it to our own deadline so we
+    // don't abandon the child while it is still shutting down cleanly.
+    const p = spawn(spec.cmd, spec.args, {
+      timeout: HERMES_TIMEOUT * 1000 + STOP_GRACE_MS,
+      env: spec.env,
+    });
     let out = "",
       err = "";
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (err += d));
-    p.on("close", (code) => {
+    p.on("close", (code, signal) => {
       if (code !== 0 && !out.trim()) return reject(new Error(err.slice(0, 400) || `hermes exit ${code}`));
-      resolve({ stdout: out, stderr: err });
+      resolve({ stdout: out, stderr: err, exitCode: code, signal });
     });
     p.on("error", reject);
   });
@@ -197,9 +245,9 @@ function callOpenClaw(prompt, openclawHome, token) {
       err = "";
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (err += d));
-    p.on("close", (code) => {
+    p.on("close", (code, signal) => {
       if (code !== 0 && !out.trim()) return reject(new Error(err.slice(0, 400) || `openclaw exit ${code}`));
-      resolve({ stdout: out, stderr: err });
+      resolve({ stdout: out, stderr: err, exitCode: code, signal });
     });
     p.on("error", reject);
   });
@@ -1617,9 +1665,20 @@ function connect(entry) {
       const isOpenClaw = entry.kind === "openclaw" || typeof entry.openclawHome === "string";
       const modelOverride =
         MODEL_IMPORTANT && IMPORTANT_TRIGGERS.has(trigger) ? MODEL_IMPORTANT : undefined;
-      const { stdout, stderr } = isOpenClaw
+      const { stdout, stderr, exitCode, signal } = isOpenClaw
         ? await callOpenClaw(prompt, entry.openclawHome, entry.token)
         : await callHermes(prompt, entry.hermesHome, entry.token, modelOverride);
+      // A container that exited non-zero (or was killed) did NOT have a clean
+      // turn, whatever text it managed to emit first: its supervision tree was
+      // torn down mid-flight, which on Hermes suspends any in-flight cron
+      // session and leaves it to be picked up — and interrupted again — on the
+      // next boot. Recording those runs as `ok` is what hid 207 consecutive
+      // dirty shutdowns. Every reply below carries it so the worker records the
+      // run as failed while still applying whatever the agent did manage.
+      const exitError = gatewayExitError(exitCode, signal);
+      if (exitError) {
+        console.error(`[${entry.handle}] ${trigger} → ${exitError} (reply kept, run marked failed)`);
+      }
       const rawText = isOpenClaw
         ? (extractOpenClawReply(stdout) || extractOpenClawReply(stderr) || "")
         : (extractReply(stdout) || extractReply(stderr) || "");
@@ -1627,13 +1686,17 @@ function connect(entry) {
       // silent rather than posting "(empty reply)" as text — always safer.
       if (!rawText.trim()) {
         console.log(`[${entry.handle}] ${trigger} → skip (empty/crashed reply)`);
-        return reply({ status: "HEARTBEAT_OK", error: "empty_reply" });
+        return reply({ status: "HEARTBEAT_OK", error: exitError ?? "empty_reply" });
       }
       // Hermes hit its agent-loop cap: the reply is a forced summary, not real
       // work. Post whatever substantive remainder survives the noise strip,
       // but tell the worker so the run is recorded as non-productive.
       const runaway = /Reached maximum iterations/i.test(rawText);
-      const outcomeErr = runaway ? { error: "runaway_max_iterations" } : {};
+      const outcomeErr = runaway
+        ? { error: "runaway_max_iterations" }
+        : exitError
+          ? { error: exitError }
+          : {};
       // Silence-allowed triggers: model is permitted to skip a post by returning
       // HEARTBEAT_OK. `mention` is here only for agent→agent mentions (the
       // prompt forbids it on human mentions, and the executor's reply-guard
@@ -1653,7 +1716,7 @@ function connect(entry) {
           trigger === "task_comment") &&
         /^\s*HEARTBEAT_OK\s*$/i.test(rawText)
       ) {
-        return reply({ status: "HEARTBEAT_OK" });
+        return reply({ status: "HEARTBEAT_OK", ...outcomeErr });
       }
       // Order matters: pull the <actions> side-channel first, then
       // <attachments>, so the actions JSON can't accidentally be matched
@@ -1787,6 +1850,7 @@ function connect(entry) {
 // action parser without copying. Importing the module never connects sockets
 // unless it's run as the entrypoint (or CC_BRIDGE_IMPORT_ONLY forces import-only).
 export {
+  buildHermesSpawn,
   buildPrompt,
   extractActions,
   extractAttachments,

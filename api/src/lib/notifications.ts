@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   notifications,
@@ -11,6 +11,7 @@ import {
 } from "../db/schema.js";
 import { id } from "./ids.js";
 import { publishToMember } from "./events.js";
+import { redis } from "./redis.js";
 
 export type NotificationKind =
   | "mention"
@@ -33,6 +34,48 @@ export interface NotifyInput {
   conversationId?: string | null;
   messageId?: string | null;
   taskId?: string | null;
+  // ── Recurrence control ────────────────────────────────────────────────
+  // Set by machine-generated ("system") notifications that a periodic sweep can
+  // re-derive every tick. With a key set, at most ONE row per key per
+  // `dedupeWindowMs` is written, and none at all while an identical unread row
+  // is still sitting in the recipient's inbox.
+  //
+  // Why: the goal sweeper's stall pass re-fired "A goal looks stalled — needs
+  // your input" roughly every 21 minutes per stalled goal. On live that was
+  // 41,001 of 43,423 notification rows, every one of them unread, saying the
+  // same thing about the same nine goals. A notification nobody has read is
+  // not made more useful by sending it 4,000 more times.
+  dedupeKey?: string;
+  dedupeWindowMs?: number;
+}
+
+// Default recurrence window for keyed notifications: once per recipient per day.
+export const DEFAULT_NOTIFY_DEDUPE_MS = 24 * 60 * 60 * 1000;
+
+const dedupeRedisKey = (memberId: string, key: string): string =>
+  `cc:ntf:dedupe:${memberId}:${key}`;
+
+export interface UnreadLike {
+  kind: string;
+  title: string;
+  body: string;
+  link: string;
+}
+
+/**
+ * True when the recipient already has an unread notification saying exactly
+ * this. Pure so the rule is testable: "identical" means same kind, title, body
+ * and deep-link — a stall alert whose body names a different goal is a
+ * different notification and still gets through.
+ */
+export function hasIdenticalUnread(existing: UnreadLike[], candidate: UnreadLike): boolean {
+  return existing.some(
+    (e) =>
+      e.kind === candidate.kind &&
+      e.title === candidate.title &&
+      e.body === candidate.body &&
+      e.link === candidate.link,
+  );
 }
 
 // Insert one notification row + push a live event to the recipient. Best-effort
@@ -50,6 +93,8 @@ export async function notify(input: NotifyInput): Promise<void> {
     .where(eq(members.id, input.memberId))
     .limit(1);
   if (!m || m.kind !== "user") return;
+
+  if (input.dedupeKey && (await suppressedByDedupe(input))) return;
 
   const nid = id("ntf");
   const now = new Date();
@@ -74,6 +119,58 @@ export async function notify(input: NotifyInput): Promise<void> {
     memberId: input.memberId,
     notification: { ...row, createdAt: now.toISOString(), readAt: null },
   });
+}
+
+// Two independent gates, both cheap, both fail-open on infrastructure trouble
+// (a notification that slips through is far better than one that never lands):
+//   1. an identical UNREAD row already in the inbox → never pile another on;
+//   2. a redis NX stamp per (member, key) → at most one per window, and it
+//      survives worker restarts so a deploy loop can't reset the clock.
+async function suppressedByDedupe(input: NotifyInput): Promise<boolean> {
+  const windowMs = Math.max(1_000, input.dedupeWindowMs ?? DEFAULT_NOTIFY_DEDUPE_MS);
+  const candidate: UnreadLike = {
+    kind: input.kind,
+    title: input.title ?? "",
+    body: input.body ?? "",
+    link: input.link ?? "",
+  };
+
+  try {
+    const unread = await db
+      .select({
+        kind: notifications.kind,
+        title: notifications.title,
+        body: notifications.body,
+        link: notifications.link,
+      })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.memberId, input.memberId),
+          eq(notifications.kind, input.kind),
+          isNull(notifications.readAt),
+        ),
+      )
+      .orderBy(notifications.createdAt)
+      .limit(50);
+    if (hasIdenticalUnread(unread, candidate)) return true;
+  } catch {
+    /* fall through to the redis gate */
+  }
+
+  try {
+    const stamped = await redis.set(
+      dedupeRedisKey(input.memberId, input.dedupeKey!),
+      "1",
+      "PX",
+      windowMs,
+      "NX",
+    );
+    if (stamped !== "OK") return true;
+  } catch {
+    /* redis down — the unread check above is the remaining guard */
+  }
+  return false;
 }
 
 // Fan a notification out to many recipients (e.g. everyone @-mentioned in a

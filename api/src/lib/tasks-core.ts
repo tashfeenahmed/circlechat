@@ -310,11 +310,29 @@ async function executeStageEntry(
 
 // ───── list / get ─────
 
-export async function listTasks(workspaceId: string) {
+/**
+ * The board payload. Archived cards are never included (that is what the
+ * auto-archive sweep in lib/retention.ts relies on to retire finished work).
+ *
+ * `doneWindowMs` caps how far back the Done column reaches. The web board has
+ * always hidden `done` cards older than two weeks behind a "show older" toggle
+ * while the API shipped every one of them; for the public/spectator identity
+ * there is no toggle to press, so the cap is enforced server-side and those
+ * rows are simply never sent.
+ */
+export async function listTasks(
+  workspaceId: string,
+  opts: { doneWindowMs?: number | null } = {},
+) {
+  const conds = [eq(tasks.workspaceId, workspaceId), eq(tasks.archived, false)];
+  if (opts.doneWindowMs != null) {
+    const cutoff = new Date(Date.now() - opts.doneWindowMs);
+    conds.push(dsql`(${tasks.status} <> 'done' or ${tasks.updatedAt} >= ${cutoff})` as never);
+  }
   const rows = await db
     .select()
     .from(tasks)
-    .where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.archived, false)))
+    .where(and(...conds))
     .orderBy(asc(tasks.status), asc(tasks.position), asc(tasks.createdAt));
   return { tasks: await hydrateTasks(rows) };
 }

@@ -12,6 +12,9 @@ import { runProductivityReview } from "../lib/productivity.js";
 import { reapStuckRuns } from "../lib/run-reaper.js";
 import { expireStaleApprovals } from "../lib/approval-policy.js";
 import { runMemoryJanitor } from "../lib/memory-janitor.js";
+import { GOAL_PARK_AFTER_MS, shouldParkGoal } from "../lib/goals-core.js";
+import { publishToWorkspace } from "../lib/events.js";
+import { RETENTION_INTERVAL_MS, runRetentionSweep, shouldRunNow } from "../lib/retention.js";
 
 // Give up after this many failed planning attempts (the sweeper is the retry
 // driver, so each attempt is one sweep tick apart — backoff for free).
@@ -71,6 +74,7 @@ async function handlePlan(goalId: string): Promise<void> {
       title: "Couldn't auto-plan a goal",
       body: `${goal.title} — ${r.error}. Add detail or plan it manually.`,
       link: `/goals`,
+      dedupeKey: `goal-plan-failed:${goalId}`,
     }).catch(() => {});
   }
 }
@@ -130,8 +134,98 @@ async function handleSweep(): Promise<void> {
   await expireStaleApprovals().catch((e) => console.error("[goal-planner] approval-expiry error", e));
 
   // 7. Sleep-time memory janitor: refresh each workspace's shared team block
-  //    from recent activity (opt-in CC_MEMORY_JANITOR=on; per-workspace cooldown).
+  //    from recent activity (on by default; CC_MEMORY_JANITOR=off disables).
   await runMemoryJanitor().catch((e) => console.error("[goal-planner] memory-janitor error", e));
+
+  // 8. Auto-parking: put goals nobody has moved for two weeks to rest, so the
+  //    stall pass above stops re-deriving them and the planner stops spending
+  //    runs on them.
+  await handleGoalParking().catch((e) => console.error("[goal-planner] parking pass error", e));
+
+  // 9. Retention: notifications, agent_runs context/rows, done cards, orphaned
+  //    BullMQ repeatables. Hourly, not on every 3-minute tick.
+  if (shouldRunNow(lastRetentionAt, Date.now(), RETENTION_INTERVAL_MS)) {
+    lastRetentionAt = Date.now();
+    await runRetentionSweep().catch((e) => console.error("[goal-planner] retention error", e));
+  }
+}
+
+// Process-local marker so a restart runs retention once on the first sweep,
+// then hourly. Deliberately not persisted: running the sweep an extra time
+// after a deploy is free (every statement is idempotent).
+let lastRetentionAt: number | null = null;
+
+// ── Goal auto-parking ─────────────────────────────────────────────────────
+// A goal whose tasks have not moved in GOAL_PARK_AFTER_MS is not "stalled and
+// recoverable by nagging" — it is abandoned. On live, 9 of 11 in_progress goals
+// were 17–72 days stale and the stall pass kept re-notifying about all of them
+// every ~21 minutes while agents kept burning heartbeats on their tasks.
+// Parking flips the goal to `parked` (out of every planner query), notifies the
+// owner ONCE, and leaves the tasks untouched so nothing is lost. The owner
+// resumes from the Goals page.
+async function handleGoalParking(): Promise<void> {
+  const rows = await db
+    .select({
+      id: goals.id,
+      workspaceId: goals.workspaceId,
+      title: goals.title,
+      status: goals.status,
+      updatedAt: goals.updatedAt,
+      ownerMemberId: goals.ownerMemberId,
+      createdBy: goals.createdBy,
+      lastTaskMovementAt: dsql<Date | null>`(
+        select max(t.updated_at) from tasks t
+        where t.goal_id = ${goals.id} and t.archived = false
+      )`.as("last_task_movement_at"),
+    })
+    .from(goals)
+    .innerJoin(workspaces, eq(workspaces.id, goals.workspaceId))
+    .where(and(eq(goals.status, "in_progress"), eq(workspaces.autoPlan, "auto")))
+    .limit(SWEEP_BATCH);
+
+  const now = Date.now();
+  let parked = 0;
+  for (const r of rows) {
+    const lastTaskMovementAt =
+      r.lastTaskMovementAt == null
+        ? null
+        : r.lastTaskMovementAt instanceof Date
+          ? r.lastTaskMovementAt
+          : new Date(r.lastTaskMovementAt as unknown as string);
+    if (!shouldParkGoal({ status: r.status, lastTaskMovementAt, updatedAt: r.updatedAt }, now, GOAL_PARK_AFTER_MS)) {
+      continue;
+    }
+    await db.update(goals).set({ status: "parked", updatedAt: new Date() }).where(eq(goals.id, r.id));
+    // Stop the ledger counters from firing the instant it is resumed.
+    await db
+      .update(goalLedgers)
+      .set({ stallCount: 0, loopCount: 0, updatedAt: new Date() })
+      .where(eq(goalLedgers.goalId, r.id))
+      .catch(() => {});
+    parked++;
+    const days = Math.round(GOAL_PARK_AFTER_MS / 86_400_000);
+    if (r.ownerMemberId) {
+      await notify({
+        workspaceId: r.workspaceId,
+        memberId: r.ownerMemberId,
+        kind: "system",
+        title: "A goal was parked after no progress",
+        body: `${r.title} — nothing on it has moved in ${days}+ days, so it has been parked and the team has stopped working on it. Resume it from Goals when it matters again.`,
+        link: `/goals`,
+        // Parking is a one-shot event, but the sweep can retry after a failed
+        // write; key it per goal so a retry can never double-notify.
+        dedupeKey: `goal-parked:${r.id}`,
+        dedupeWindowMs: 30 * 24 * 60 * 60 * 1000,
+      }).catch(() => {});
+    }
+    await publishToWorkspace(r.workspaceId, {
+      type: "goal.updated",
+      workspaceId: r.workspaceId,
+      goalId: r.id,
+      status: "parked",
+    }).catch(() => {});
+  }
+  if (parked) console.log(`[goal-planner] parked ${parked} goal(s) with no task movement`);
 }
 
 // Escalate tasks stuck in `review` past the SLA to a human, so finished work
@@ -176,6 +270,10 @@ async function handleReviewQueue(): Promise<void> {
         title: "A task has been waiting for review",
         body: `${r.title} — finished and awaiting sign-off for over ${Math.round(REVIEW_SLA_MS / 3_600_000)}h. Review it and mark it done, or send it back.`,
         link: `/board?task=${r.id}`,
+        // The updated_at touch below is the primary dedup; this is the backstop
+        // for when a re-plan or an agent comment resets that clock.
+        dedupeKey: `review-sla:${r.id}`,
+        dedupeWindowMs: REVIEW_SLA_MS,
       }).catch(() => {});
       break;
     }
@@ -284,6 +382,11 @@ async function escalateStuck(g: {
             ? `${g.title} — the team keeps repeating the same step without progress${capped}. Re-scope it or unblock them.`
             : `${g.title} has shown no task progress for a while${capped}. Re-scope it or unblock the team.`,
         link: `/goals`,
+        // THE flood. The reset below puts lastProgressAt back to now, so a goal
+        // that is genuinely dead re-qualifies as stalled ~21 minutes later and
+        // escalated again, forever: 41,001 identical unread rows on live. One
+        // per goal per day, and never while the previous one is still unread.
+        dedupeKey: `goal-${g.reason}:${g.goalId}`,
       }).catch(() => {});
     }
     // Reset both counters so we don't re-notify every sweep.

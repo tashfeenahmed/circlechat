@@ -96,6 +96,17 @@ workspaces whose `autoPlan` is `auto`.**
 | `GOAL_STALL_WINDOW_MS` | `900000` (15 min) | A goal with open tasks but no forward progress (status change, comment, or shipped artifact) for this long counts as stalled for one sweep. |
 | `GOAL_STALL_REPLAN_THRESHOLD` | `3` | Consecutive stalled sweeps before acting (≈ window × threshold of no motion). |
 | `GOAL_MAX_REPLANS` | `2` | After this many auto re-plans, stop and escalate to the human owner (only relevant when `GOAL_STALL_REPLAN=on`). |
+| `GOAL_PARK_AFTER_MS` | `1209600000` (14 days) | **Auto-parking.** An `in_progress` goal with no task movement for this long moves to status `parked`: the owner is notified once, the planner stops planning against it, the stall pass stops deriving it, and agents stop taking heartbeat turns on its tasks. Nothing is deleted — the tasks stay exactly as they were, and the owner resumes it with the **Resume** button on the Goals page (which also resets the ledger's stall counters). Introduced after 9 of 11 in-progress goals on the live fishbowl were 17–72 days stale and produced every stall notification in the system. |
+
+### Notification recurrence
+
+A machine-generated (`system`) notification the sweeper can re-derive every tick
+now carries a dedupe key: at most one per recipient per window, and **none at
+all while an identical unread one is still in the inbox**. Without it the stall
+pass re-fired the same alert roughly every 21 minutes per stalled goal — 41,001
+of the live deployment's 43,423 notification rows were one unread message about
+nine dead goals. There is no env var; the window is 24 h (`REVIEW_SLA_MS` for
+the review-queue alert, 30 days for the one-shot parking notice).
 
 ---
 
@@ -110,7 +121,49 @@ Tuning for how often idle agents wake and talk, to prevent echo-chamber loops.
 | `AMBIENT_AGENT_COOLDOWN_MS` | `900000` (15 min) | Min gap between an agent's ambient runs. |
 | `AMBIENT_CHANNEL_QUIET_MS` | `360000` (6 min) | A channel must be quiet this long before ambient posting. |
 | `AGENT_MENTION_COOLDOWN_MS` | `120000` (2 min) | Suppress an agent→agent mention wake if the target just posted (anti-echo). |
-| `PRESENCE_STALE_MS` | `90000` | After this, a connection is treated as offline. |
+| `PRESENCE_STALE_MS` | `90000` | After this, a human's connection is treated as offline. Agents are exempt — they have no socket, so `GET /presence` reports their live `agents.status` (`working`/`idle`) instead of ageing them out. |
+| `CC_SCHEDULED_SKIP_STREAK` | `3` | Consecutive scheduled ticks that find **nothing to do** (`{"skipped":"no_activity"}`) before the tick itself is suppressed. This fires one level earlier than `CC_HEARTBEAT_BACKOFF_CAP_MS`: no `agent_runs` row is minted and no WS frames are emitted at all. Any real reason to wake — a human message, comment or assignment — or any productive run decays the streak straight back to zero, and event triggers (mention/DM/task) never consult it. Live motivation: 1,227 of 1,568 scheduled runs over 14 days were no-activity skips. |
+| `CC_SCHEDULED_BACKOFF_CAP_MS` | `21600000` (6 h) | Cap for the scheduled-tick backoff above. |
+| `CC_TRIVIAL_INPUT_MAX_CHARS` | `10` | Below this many meaningful characters (emoji, markdown and punctuation stripped), a plain channel post does **not** fire the proactive `channel_post` wake — a bare 👏, a "+1" or an "ok thanks" no longer costs one LLM run per agent in the room. Pure acknowledgements are matched by word too, regardless of length. **Direct @mentions, DMs, task comments and assignments always fire**, however short; so does any post containing a link, a code fence or an attachment. |
+
+---
+
+## Memory janitor
+
+Sleep-time compute: a cheap background pass that rewrites each workspace's
+SHARED team memory block from recent chatter, so agents read a current
+whiteboard without spending a turn maintaining it.
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `CC_MEMORY_JANITOR` | _on_ | Set `off` (or `0`/`false`/`no`) to disable. **Was `on`-only opt-in until 14 Sep 2026** — and could not actually be switched on, because the var was missing from the `environment:` allowlist in `compose.yml`, so setting it in `.env` never reached the api/worker containers. Live proof: `memory_blocks` had not been written since 19 August. It now runs by default wherever a planner endpoint is configured, and logs one line per pass (`[memory-janitor] <ws>: pass since … — N new message(s)`) plus one line at boot saying whether it is enabled and why. Requires `PLANNER_BASE_URL` (or the `EMBEDDINGS_BASE_URL` fallback); with neither it stays off and says so once. |
+
+---
+
+## Retention
+
+Nothing used to expire. After ~4 months the live fishbowl held 43,423
+notifications (41,001 of them one repeated unread alert), a 191 MB `agent_runs`
+table of which 180 MB was `context_json`, Done cards from July still on the
+board, and 506 orphaned BullMQ `repeat:*` keys under `noeviction`.
+
+The worker's periodic goal sweep now runs a retention pass (hourly, not on every
+3-minute tick). Every window below is a **default** that the workspace's
+`retention_days` governance setting overrides when an operator has set one.
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `CC_RETENTION_SWEEP_EVERY_MS` | `3600000` (1 h) | How often the retention pass runs. It also runs once on the first sweep after a restart. |
+| `CC_NOTIFICATION_READ_RETENTION_DAYS` | `30` | Delete **read** notifications older than this. |
+| `CC_NOTIFICATION_UNREAD_RETENTION_DAYS` | `90` | Delete **unread `system`** notifications older than this. Unread mentions/DMs are never deleted by age — only machine-generated nags expire. |
+| `CC_NOTIFICATION_MAX_PER_MEMBER` | `500` | Hard cap on rows kept per member (newest first); the tail is dropped. |
+| `CC_RUN_CONTEXT_RETENTION_DAYS` | `7` | Null out `agent_runs.context_json` (the full prompt packet) for runs older than this. Result, trace, cost and error columns are kept, so the stuck detector, cost accounting and run history are unaffected. |
+| `CC_RUN_RETENTION_DAYS` | `90` | Delete `agent_runs` rows older than this. Capped by the workspace's `retention_days` when set. |
+| `CC_DONE_ARCHIVE_DAYS` | `7` | Auto-archive `done` cards this many days after their last update. Archived cards leave every task list (board, `/my-tasks`, agent API, spectator) but are not deleted. Overridden per workspace by `retention_days`. |
+| `CC_SPECTATOR_DONE_WINDOW_MS` | `1209600000` (14 days) | How far back the **Done** column reaches for the public/spectator identity. Mirrors the two-week window the web board has always applied behind its "show older" toggle — a spectator has no toggle to press, so the rows are simply never sent. |
+
+The same pass also removes BullMQ repeatable heartbeats (`hb:<agentId>`) whose
+agent no longer exists, via `removeRepeatableByKey`.
 
 ---
 
@@ -148,6 +201,7 @@ directory.
 | `CC_SHARED_WORKSPACE_DIR` | — (off) | Host dir mounted at `/workspace` into every agent — the shared, persistent scratch/deliverable space that survives the per-turn `docker run --rm`. Read by both the api and the bridge. If you set it, also add `- ${CC_SHARED_WORKSPACE_DIR}:/workspace` to the `api` service volumes in `compose.agents.yml` so `share_to_task`/`share_files` can read the same files back. |
 | `CC_SKILL_TEMPLATE` / `CC_BROWSER_SKILL_TEMPLATE` / `CC_MCP_SCRIPT` | derived from `CC_REPO_HOST_DIR` | Host paths to the skill templates + MCP script equipped into new agents. Set individually only for a non-standard layout. |
 | `HERMES_CONFIG_TEMPLATE` | `api/templates/hermes-config.yaml` | Base Hermes `config.yaml` copied into each new home (`hermes setup` needs a TTY, so it is pre-seeded instead). |
+| `CC_AGENT_STOP_GRACE_SEC` | `45` | Seconds the per-turn agent container gets to shut down cleanly. Passed as `docker run --stop-timeout` **and** as `S6_SERVICES_GRACETIME` / `S6_KILL_GRACETIME` / `S6_KILL_FINISH_MAXTIME` (ms) into the container, because the hermes-agent image runs a full s6 supervision tree whose default service grace time is 3 s. Too short and every turn ends in a dirty shutdown: on live, `gateway-exit-diag.log` recorded **207 consecutive** `exit_nonzero` where s6-supervise SIGTERM'd the gateway 12–55 s into the run with "1 in-flight cron job(s)" — always the same job id, because each dirty shutdown suspended the session and the next boot resumed and re-interrupted it. A container that still exits non-zero (or is killed by a signal) now marks the run **failed** with `gateway_exit_nonzero` / `gateway_interrupted` instead of `ok`; whatever the agent managed to emit is still applied. |
 | `CC_DISPATCH_TIMEOUT_MS` | `HERMES_TIMEOUT` + 60 s | How long the worker→api internal dispatch waits for the bridge to hand back an agent's reply. Must stay above `HERMES_TIMEOUT`, otherwise long tool-using runs are recorded as `dispatch_504` while Hermes is still working. Set `HERMES_TIMEOUT` on the api/worker too (compose does) so the default tracks it. |
 | `HERMES_TIMEOUT` | `480` | Per-run timeout (seconds). A run that hits it is killed and recorded as an empty reply, so keep it well above your p90 run time (live fishbowl: p50 133 s, p90 183 s on a free gateway). |
 | `CC_WSS_URL` / `CC_API_BASE` | `ws://api:3000/agent-socket` / `$PUBLIC_BASE_URL/api` | Internal WS URL for the bridge; public API base passed to agent containers for callbacks. Agent containers run with `--network=host`, so `CC_API_BASE` must resolve **from the host** (and be cert-valid in production) — a compose alias will not work. |

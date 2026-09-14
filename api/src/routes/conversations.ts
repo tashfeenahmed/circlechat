@@ -18,6 +18,7 @@ import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
 import { filterWorkspaceMemberIds } from "../lib/workspace-scope.js";
 import { canSeeAgentInternals } from "../lib/agent-view.js";
+import { agentPresenceStatus } from "../lib/agent-presence.js";
 
 function dmId(a: string, b: string): string {
   const sorted = [a, b].sort().join(":");
@@ -542,7 +543,7 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
     const STALE_MS = Number(process.env.PRESENCE_STALE_MS ?? 90_000);
 
     const memberRows = await db
-      .select({ id: members.id })
+      .select({ id: members.id, kind: members.kind, refId: members.refId })
       .from(members)
       .where(eq(members.workspaceId, workspaceId));
     const memberIds = memberRows.map((r) => r.id);
@@ -557,14 +558,37 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
       .from(presence)
       .where(inArray(presence.memberId, memberIds));
 
+    // Agents have no socket, so the stale-window rule (written for a browser tab
+    // that died without a close frame) does not apply to them: an agent that has
+    // not run for two minutes is idle, not offline. Their authoritative state is
+    // `agents.status`, which the worker keeps current on every run.
+    const agentRefIds = memberRows.filter((m) => m.kind === "agent").map((m) => m.refId);
+    const agentStatus = new Map<string, string>(
+      agentRefIds.length
+        ? (
+            await db
+              .select({ id: agents.id, status: agents.status })
+              .from(agents)
+              .where(inArray(agents.id, agentRefIds))
+          ).map((a) => [a.id, a.status])
+        : [],
+    );
+
     const now = Date.now();
     const byId = new Map(rows.map((r) => [r.memberId, r]));
     return {
-      presence: memberIds.map((id) => {
-        const r = byId.get(id);
+      presence: memberRows.map((m) => {
+        const r = byId.get(m.id);
+        if (m.kind === "agent") {
+          return {
+            memberId: m.id,
+            status: agentPresenceStatus(agentStatus.get(m.refId)),
+            lastSeen: r?.lastSeen ?? null,
+          };
+        }
         const stale = !r || now - new Date(r.lastSeen).getTime() > STALE_MS;
         return {
-          memberId: id,
+          memberId: m.id,
           status: stale ? "offline" : r!.status,
           lastSeen: r?.lastSeen ?? null,
         };
