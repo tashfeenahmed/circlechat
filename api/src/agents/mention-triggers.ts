@@ -9,6 +9,7 @@ import {
   users,
 } from "../db/schema.js";
 import { enqueueAgentEvent } from "./enqueue.js";
+import { isTrivialInput } from "../lib/trivial-input.js";
 
 // Extract @handles from a message body. Case-insensitive, returns lowercased
 // handles. `@everyone` / `@channel` are kept in the list so callers can
@@ -295,6 +296,7 @@ export async function fireMentionTriggers(params: {
       conversationId,
       messageId,
       authorMemberId,
+      bodyMd,
       alreadyFiredAgentIds: firedForAgent,
     });
   }
@@ -374,10 +376,22 @@ export async function fireChannelPostTrigger(params: {
   conversationId: string;
   messageId: string;
   authorMemberId: string;
+  /** The post's body. When omitted the trivial-input gate is skipped. */
+  bodyMd?: string;
+  hasAttachments?: boolean;
   alreadyFiredAgentIds?: Set<string>;
 }): Promise<void> {
   const { conversationId, messageId, authorMemberId } = params;
   const already = params.alreadyFiredAgentIds ?? new Set<string>();
+
+  // Nobody addressed anyone here — this is the "should I chime in?" path, and
+  // the only place a bare 👏 or a "nice!" can cost one model call per agent in
+  // the room (observed: the only LLM work in three hours was four replies to a
+  // single clap). A direct @mention, a DM, a task comment and an assignment all
+  // bypass this gate entirely, however short they are.
+  if (params.bodyMd !== undefined && isTrivialInput(params.bodyMd, { hasAttachments: params.hasAttachments })) {
+    return;
+  }
 
   const [authorMem] = await db
     .select({ kind: members.kind })

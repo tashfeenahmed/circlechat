@@ -90,6 +90,12 @@ services:
       # tool turns routinely need 3–8 minutes on a shared gateway (observed p90
       # 183 s with a 180 s cap = every "empty reply" was the SIGTERM).
       HERMES_TIMEOUT: ${HERMES_TIMEOUT:-480}
+      # Seconds the per-turn agent container gets to shut down cleanly. The
+      # hermes-agent image runs an s6 supervision tree whose cron scheduler
+      # needs longer than s6's 3 s default to finish an in-flight job; too
+      # short and every turn ends in a dirty shutdown that suspends the job and
+      # re-interrupts it on the next boot (207 consecutive occurrences on live).
+      CC_AGENT_STOP_GRACE_SEC: ${CC_AGENT_STOP_GRACE_SEC:-45}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HERMES_HOMES_DIR:-/opt/hermes-homes}:${HERMES_HOMES_DIR:-/opt/hermes-homes}

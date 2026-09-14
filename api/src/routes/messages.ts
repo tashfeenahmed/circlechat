@@ -335,6 +335,8 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
           conversationId: convId,
           messageId: msgId,
           authorMemberId: memberId,
+          bodyMd: body.bodyMd,
+          hasAttachments: (body.attachments?.length ?? 0) > 0,
           alreadyFiredAgentIds: firedForAgent,
         });
       }

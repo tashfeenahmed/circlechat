@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { agentRuns } from "../db/schema.js";
 import { publishGlobal } from "../lib/events.js";
 import { redis } from "../lib/redis.js";
-import { heartbeatBackoffMs } from "../lib/run-outcome.js";
+import { heartbeatBackoffMs, noopStreakBackoffMs } from "../lib/run-outcome.js";
 
 const REPEAT_KEY = (agentId: string): string => `hb:${agentId}`;
 
@@ -57,7 +57,60 @@ export async function heartbeatBackoffRemainingMs(agentId: string): Promise<numb
 
 export async function clearHeartbeatBackoff(agentId: string): Promise<void> {
   try {
-    await redis.del(STREAK_KEY(agentId), UNTIL_KEY(agentId));
+    await redis.del(STREAK_KEY(agentId), UNTIL_KEY(agentId), SKIP_STREAK_KEY(agentId), SKIP_UNTIL_KEY(agentId));
+  } catch {
+    /* ignore */
+  }
+}
+
+// ── Scheduled-tick (no-op) backoff ────────────────────────────────────────
+// One level earlier than the heartbeat backoff above: this one suppresses the
+// tick BEFORE a run row is materialised, so a repeatedly-empty schedule stops
+// producing agent_runs at all. Counted when the activity gate finds nothing to
+// do ({"skipped":"no_activity"}), cleared the moment a real reason to wake
+// appears (a human message/comment/assignment) or a run applies anything.
+const SKIP_STREAK_KEY = (agentId: string): string => `cc:sched:skip:${agentId}`;
+const SKIP_UNTIL_KEY = (agentId: string): string => `cc:sched:until:${agentId}`;
+const SKIP_MIN_STREAK = Number(process.env.CC_SCHEDULED_SKIP_STREAK ?? 3);
+const SKIP_CAP_MS = Number(process.env.CC_SCHEDULED_BACKOFF_CAP_MS ?? 6 * 60 * 60 * 1000);
+
+export async function noteScheduledSkip(
+  agentId: string,
+  intervalSec: number,
+): Promise<{ streak: number; backoffMs: number }> {
+  try {
+    const streak = await redis.incr(SKIP_STREAK_KEY(agentId));
+    await redis.pexpire(SKIP_STREAK_KEY(agentId), STREAK_TTL_MS);
+    const backoffMs = noopStreakBackoffMs(
+      streak,
+      Math.max(5_000, intervalSec * 1000),
+      SKIP_CAP_MS,
+      SKIP_MIN_STREAK,
+    );
+    if (backoffMs > 0) {
+      await redis.set(SKIP_UNTIL_KEY(agentId), String(Date.now() + backoffMs), "PX", backoffMs);
+    }
+    return { streak, backoffMs };
+  } catch {
+    return { streak: 0, backoffMs: 0 };
+  }
+}
+
+/** Milliseconds this agent's scheduled TICK is still suppressed for (0 = run it). */
+export async function scheduledSkipRemainingMs(agentId: string): Promise<number> {
+  try {
+    const v = await redis.get(SKIP_UNTIL_KEY(agentId));
+    if (!v) return 0;
+    return Math.max(0, Number(v) - Date.now());
+  } catch {
+    return 0;
+  }
+}
+
+/** Real activity — decay the no-op streak all the way back, not one step. */
+export async function clearScheduledSkipBackoff(agentId: string): Promise<void> {
+  try {
+    await redis.del(SKIP_STREAK_KEY(agentId), SKIP_UNTIL_KEY(agentId));
   } catch {
     /* ignore */
   }

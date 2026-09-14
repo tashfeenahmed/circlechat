@@ -121,6 +121,28 @@ services:
       AMBIENT_HUMAN_ACTIVE_MS: ${AMBIENT_HUMAN_ACTIVE_MS:-}
       CC_HEARTBEAT_BACKOFF_CAP_MS: ${CC_HEARTBEAT_BACKOFF_CAP_MS:-}
       CC_STALE_TASK_MS: ${CC_STALE_TASK_MS:-}
+      # Scheduled-tick (no-op) backoff: suppress the tick itself once this many
+      # consecutive scheduled wakes found nothing to do.
+      CC_SCHEDULED_SKIP_STREAK: ${CC_SCHEDULED_SKIP_STREAK:-}
+      CC_SCHEDULED_BACKOFF_CAP_MS: ${CC_SCHEDULED_BACKOFF_CAP_MS:-}
+      # Under this many meaningful characters, a plain channel post does not
+      # wake agents proactively (a bare emoji, "+1", "thanks").
+      CC_TRIVIAL_INPUT_MAX_CHARS: ${CC_TRIVIAL_INPUT_MAX_CHARS:-}
+      # Sleep-time memory janitor. ON by default wherever a planner endpoint is
+      # configured; set `off` to disable. It was previously missing from this
+      # allowlist, which is why setting it in .env never had any effect.
+      CC_MEMORY_JANITOR: ${CC_MEMORY_JANITOR:-}
+      # ── Retention (worker sweeps; see docs/CONFIG.md) ──────────────────
+      CC_RETENTION_SWEEP_EVERY_MS: ${CC_RETENTION_SWEEP_EVERY_MS:-}
+      CC_NOTIFICATION_READ_RETENTION_DAYS: ${CC_NOTIFICATION_READ_RETENTION_DAYS:-}
+      CC_NOTIFICATION_UNREAD_RETENTION_DAYS: ${CC_NOTIFICATION_UNREAD_RETENTION_DAYS:-}
+      CC_NOTIFICATION_MAX_PER_MEMBER: ${CC_NOTIFICATION_MAX_PER_MEMBER:-}
+      CC_RUN_CONTEXT_RETENTION_DAYS: ${CC_RUN_CONTEXT_RETENTION_DAYS:-}
+      CC_RUN_RETENTION_DAYS: ${CC_RUN_RETENTION_DAYS:-}
+      CC_DONE_ARCHIVE_DAYS: ${CC_DONE_ARCHIVE_DAYS:-}
+      CC_SPECTATOR_DONE_WINDOW_MS: ${CC_SPECTATOR_DONE_WINDOW_MS:-}
+      # Goals: auto-park a goal whose tasks have not moved in this long.
+      GOAL_PARK_AFTER_MS: ${GOAL_PARK_AFTER_MS:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -171,6 +193,28 @@ services:
       AMBIENT_HUMAN_ACTIVE_MS: ${AMBIENT_HUMAN_ACTIVE_MS:-}
       CC_HEARTBEAT_BACKOFF_CAP_MS: ${CC_HEARTBEAT_BACKOFF_CAP_MS:-}
       CC_STALE_TASK_MS: ${CC_STALE_TASK_MS:-}
+      # Scheduled-tick (no-op) backoff: suppress the tick itself once this many
+      # consecutive scheduled wakes found nothing to do.
+      CC_SCHEDULED_SKIP_STREAK: ${CC_SCHEDULED_SKIP_STREAK:-}
+      CC_SCHEDULED_BACKOFF_CAP_MS: ${CC_SCHEDULED_BACKOFF_CAP_MS:-}
+      # Under this many meaningful characters, a plain channel post does not
+      # wake agents proactively (a bare emoji, "+1", "thanks").
+      CC_TRIVIAL_INPUT_MAX_CHARS: ${CC_TRIVIAL_INPUT_MAX_CHARS:-}
+      # Sleep-time memory janitor. ON by default wherever a planner endpoint is
+      # configured; set `off` to disable. It was previously missing from this
+      # allowlist, which is why setting it in .env never had any effect.
+      CC_MEMORY_JANITOR: ${CC_MEMORY_JANITOR:-}
+      # ── Retention (worker sweeps; see docs/CONFIG.md) ──────────────────
+      CC_RETENTION_SWEEP_EVERY_MS: ${CC_RETENTION_SWEEP_EVERY_MS:-}
+      CC_NOTIFICATION_READ_RETENTION_DAYS: ${CC_NOTIFICATION_READ_RETENTION_DAYS:-}
+      CC_NOTIFICATION_UNREAD_RETENTION_DAYS: ${CC_NOTIFICATION_UNREAD_RETENTION_DAYS:-}
+      CC_NOTIFICATION_MAX_PER_MEMBER: ${CC_NOTIFICATION_MAX_PER_MEMBER:-}
+      CC_RUN_CONTEXT_RETENTION_DAYS: ${CC_RUN_CONTEXT_RETENTION_DAYS:-}
+      CC_RUN_RETENTION_DAYS: ${CC_RUN_RETENTION_DAYS:-}
+      CC_DONE_ARCHIVE_DAYS: ${CC_DONE_ARCHIVE_DAYS:-}
+      CC_SPECTATOR_DONE_WINDOW_MS: ${CC_SPECTATOR_DONE_WINDOW_MS:-}
+      # Goals: auto-park a goal whose tasks have not moved in this long.
+      GOAL_PARK_AFTER_MS: ${GOAL_PARK_AFTER_MS:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

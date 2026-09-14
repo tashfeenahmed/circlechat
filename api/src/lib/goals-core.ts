@@ -1,13 +1,53 @@
 import { and, eq, inArray, desc, asc, sql as dsql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { goals, tasks, members, workspaces } from "../db/schema.js";
+import { goals, tasks, members, workspaces, goalLedgers } from "../db/schema.js";
 import { id } from "./ids.js";
 import { publishToWorkspace } from "./events.js";
 import { hydrateTasks } from "./tasks-core.js";
 import { enqueueGoalPlan } from "./goal-queue.js";
 
-export const GOAL_STATUSES = ["open", "planning", "in_progress", "done", "archived"] as const;
+// `parked` is the auto-parking terminal-until-resumed state: a goal whose tasks
+// have not moved for GOAL_PARK_AFTER_MS. It is deliberately NOT `in_progress`
+// and NOT `open`, which is what takes it out of every planner query (the stall
+// pass selects in_progress, the plan sweeper selects open) — so a dead goal
+// stops generating stall alerts and stops being planned against. The owner
+// resumes it from the Goals page, which puts it back to `in_progress`.
+export const GOAL_STATUSES = ["open", "planning", "in_progress", "parked", "done", "archived"] as const;
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
+
+// How long a goal may go without any task movement before it is auto-parked.
+// 14 days by default: on live, 9 of 11 in-progress goals were 17–72 days stale
+// and between them drove every stall notification in the system.
+export const GOAL_PARK_AFTER_MS = Number(
+  process.env.GOAL_PARK_AFTER_MS ?? 14 * 24 * 60 * 60 * 1000,
+);
+
+export interface ParkCandidate {
+  status: string;
+  /** Newest `updatedAt` across the goal's non-archived tasks; null when it has none. */
+  lastTaskMovementAt: Date | null;
+  /** The goal row's own updatedAt — the fallback clock for a goal with no tasks. */
+  updatedAt: Date;
+}
+
+/**
+ * Pure parking rule. Only `in_progress` goals park (an `open` goal is waiting on
+ * the planner, not on the team; `done`/`archived`/`parked` are already at rest),
+ * and only when the most recent movement anywhere under the goal is older than
+ * the window. A goal with no tasks at all falls back to its own updatedAt, so a
+ * goal the planner could never decompose still comes to rest instead of sitting
+ * in_progress forever.
+ */
+export function shouldParkGoal(
+  g: ParkCandidate,
+  now: number = Date.now(),
+  parkAfterMs: number = GOAL_PARK_AFTER_MS,
+): boolean {
+  if (g.status !== "in_progress") return false;
+  const last = (g.lastTaskMovementAt ?? g.updatedAt)?.getTime();
+  if (!Number.isFinite(last)) return false;
+  return now - last >= parkAfterMs;
+}
 
 // A 'project' is a top-level container; a 'goal' is a unit of intent the
 // planner decomposes into tasks. The mission → project → goal tier.
@@ -195,6 +235,18 @@ export async function updateGoal(
   if (input.ownerMemberId !== undefined) patch.ownerMemberId = input.ownerMemberId;
   if (input.kind !== undefined) patch.kind = input.kind;
   await db.update(goals).set(patch).where(eq(goals.id, goalId));
+
+  // Resuming a parked goal: give it a clean slate. Without this the ledger still
+  // carries the stall/loop counters and the ancient lastProgressAt that parked
+  // it, so the very next sweep would flag it stalled and park it again.
+  if (g!.status === "parked" && input.status !== undefined && input.status !== "parked") {
+    await db
+      .update(goalLedgers)
+      .set({ stallCount: 0, loopCount: 0, lastProgressAt: new Date(), updatedAt: new Date() })
+      .where(eq(goalLedgers.goalId, goalId))
+      .catch(() => {});
+  }
+
   const [row] = await db.select().from(goals).where(eq(goals.id, goalId));
   const [hydrated] = await withCounts([row]);
   await publishToWorkspace(workspaceId, { type: "goal.updated", workspaceId, goalId, goal: hydrated });

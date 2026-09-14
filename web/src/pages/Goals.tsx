@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Target, Plus, Wand2, ChevronRight, ChevronDown, FolderKanban } from "lucide-react";
+import { Target, Plus, Wand2, Play, ChevronRight, ChevronDown, FolderKanban } from "lucide-react";
 import { api, type Goal, type Task, type PlanResult } from "../api/client";
 import { humanizeError } from "../api/errors";
 import { useGoals, useTasks, useMembersDirectory, useSpectator } from "../lib/hooks";
@@ -11,6 +11,7 @@ const STATUS_LABEL: Record<string, string> = {
   open: "Open",
   planning: "Planning…",
   in_progress: "In progress",
+  parked: "Parked",
   done: "Done",
   archived: "Archived",
 };
@@ -81,6 +82,22 @@ export default function GoalsPage() {
       setNewParent("");
       setNewKind("goal");
       setAdding(false);
+    } catch (e) {
+      flash("err", humanizeError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Auto-parking puts a goal nobody has moved in two weeks to rest: the planner
+  // stops spending runs on it and the stall alerts stop. This is the way back.
+  async function resumeGoal(g: Goal) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.patch<{ goal: Goal }>(`/goals/${g.id}`, { status: "in_progress" });
+      flash("ok", `Resumed “${g.title}”.`);
+      await goalsQ.refetch();
     } catch (e) {
       flash("err", humanizeError(e));
     } finally {
@@ -264,6 +281,9 @@ export default function GoalsPage() {
                         </span>
                       )}
                       <span>{STATUS_LABEL[g.status] ?? g.status}</span>
+                      {g.status === "parked" && (
+                        <span>· no task movement for two weeks — the team has stopped working on it</span>
+                      )}
                       {c.total > 0 && (
                         <span>
                           · {c.done}/{c.total} tasks done
@@ -281,6 +301,17 @@ export default function GoalsPage() {
                       </div>
                     )}
                   </div>
+                  {!spectator && g.status === "parked" && (
+                    <button
+                      className="btn sm primary inline-flex items-center gap-1 whitespace-nowrap"
+                      disabled={busy}
+                      onClick={() => resumeGoal(g)}
+                      title="Put this goal back in progress so the team picks it up again"
+                    >
+                      <Play size={14} />
+                      Resume
+                    </button>
+                  )}
                   {showPlanBtn && (
                     <button
                       className="btn sm primary inline-flex items-center gap-1 whitespace-nowrap"

@@ -86,3 +86,27 @@ export function heartbeatBackoffMs(streak: number, baseMs: number, capMs: number
   const factor = Math.pow(2, Math.min(streak - 1, 20));
   return Math.min(cap, Math.round(base * factor));
 }
+
+// The same curve, one level earlier in the pipeline: how long to suppress the
+// SCHEDULED TICK ITSELF after N consecutive ticks that found nothing to do.
+//
+// The heartbeat backoff above only fires once a run has already been
+// materialised, built a context packet and decided it is non-productive. It
+// never covered the cheapest-to-skip case: 1,227 of 1,568 scheduled runs over
+// 14 days were closed as {"skipped":"no_activity"} — a run row, two WS frames
+// and a handful of queries each, for an agent whose workspace had not changed.
+// Counting those and suppressing the tick before `materialiseScheduledRun`
+// removes the row entirely. `minStreak` is higher than the heartbeat's 2
+// because a quiet tick is completely normal; three in a row is a pattern.
+export function noopStreakBackoffMs(
+  streak: number,
+  baseMs: number,
+  capMs: number,
+  minStreak = 3,
+): number {
+  if (!Number.isFinite(streak) || streak < minStreak) return 0;
+  const base = Math.max(1_000, baseMs);
+  const cap = Math.max(base, capMs);
+  const factor = Math.pow(2, Math.min(streak - minStreak + 1, 20));
+  return Math.min(cap, Math.round(base * factor));
+}

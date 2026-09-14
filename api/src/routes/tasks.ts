@@ -4,6 +4,7 @@ import { and, eq, asc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { tasks, taskAssignees, boardStages } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
+import { SPECTATOR_DONE_WINDOW_MS } from "../lib/retention.js";
 import {
   STATUSES,
   listTasks,
@@ -83,7 +84,13 @@ export default async function tasksRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireWorkspace);
 
   app.get("/tasks", async (req) => {
-    return await listTasks(req.auth!.workspaceId!);
+    // Spectators (the public fishbowl identity) get the same Done window the
+    // board UI enforces for everyone — they have no "show older" toggle, and
+    // shipping months of finished cards to an anonymous visitor grew the
+    // payload without bound for no benefit.
+    return await listTasks(req.auth!.workspaceId!, {
+      doneWindowMs: req.spectator ? SPECTATOR_DONE_WINDOW_MS : null,
+    });
   });
 
   app.post("/tasks", async (req, reply) => {

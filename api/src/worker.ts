@@ -13,6 +13,7 @@ import {
   taskComments,
   taskAssignees,
   boardStages,
+  goals,
 } from "./db/schema.js";
 import { buildContext } from "./agents/context.js";
 import { callAgent } from "./agents/adapters/dispatch.js";
@@ -22,7 +23,11 @@ import {
   cancelAgentHeartbeat,
   noteHeartbeatOutcome,
   heartbeatBackoffRemainingMs,
+  noteScheduledSkip,
+  scheduledSkipRemainingMs,
+  clearScheduledSkipBackoff,
 } from "./agents/scheduler.js";
+import { setAgentPresence } from "./lib/agent-presence.js";
 import { classifyRunOutcome } from "./lib/run-outcome.js";
 import { publishToConversation, publishGlobal } from "./lib/events.js";
 import { exportRunTrace } from "./lib/tracing.js";
@@ -146,6 +151,17 @@ const worker = new Worker<AgentJobPayload>(
       return;
     }
 
+    // Scheduled-tick backoff. An agent whose last few scheduled ticks all found
+    // nothing to do is suppressed HERE — before a run row exists — so a quiet
+    // workspace stops minting {"skipped":"no_activity"} rows (1,227 of 1,568
+    // scheduled runs in 14 days on live) and stops emitting start/finish frames
+    // for work that never happens. Event triggers never consult this stamp, so
+    // a human message, mention, DM or assignment still wakes the agent instantly.
+    if (payload.trigger === "scheduled" && !payload.runId) {
+      const suppressed = await scheduledSkipRemainingMs(agent.id);
+      if (suppressed > 0) return;
+    }
+
     // Scheduled jobs don't carry a runId (repeatable job template) — materialise one.
     let runId = payload.runId;
     if (payload.trigger === "scheduled" && !runId) runId = await materialiseScheduledRun(payload.agentId);
@@ -187,6 +203,7 @@ const worker = new Worker<AgentJobPayload>(
 
     await db.update(agentRuns).set({ status: "running" }).where(eq(agentRuns.id, runId));
     await db.update(agents).set({ status: "working" }).where(eq(agents.id, agent.id));
+    void setAgentPresence(agent.id, "working");
     if (payload.conversationId) {
       await publishToConversation(payload.conversationId, {
         type: "agent.run.started",
@@ -226,6 +243,12 @@ const worker = new Worker<AgentJobPayload>(
     if (payload.trigger === "scheduled") {
       const wake = await wakeReasonForAgent(agent.id, sinceTs);
       if (!wake) {
+        const bo = await noteScheduledSkip(agent.id, agent.heartbeatIntervalSec);
+        if (bo.backoffMs > 0) {
+          console.log(
+            `[worker] agent=${agent.handle} no-activity streak=${bo.streak} → scheduled backoff ${Math.round(bo.backoffMs / 60000)}m`,
+          );
+        }
         await db
           .update(agentRuns)
           .set({
@@ -238,6 +261,9 @@ const worker = new Worker<AgentJobPayload>(
         await emitFinished(agent.id, runId, "ok", payload.conversationId);
         return;
       }
+      // A real reason to wake — decay the no-op streak all the way back so the
+      // next quiet spell starts from zero rather than from a stale count.
+      await clearScheduledSkipBackoff(agent.id);
       // Non-productive-streak backoff. Only the self-generated "progress beat"
       // reason is suppressed — a human message/comment/assignment always wakes.
       if (wake === "stale_task") {
@@ -540,6 +566,7 @@ const worker = new Worker<AgentJobPayload>(
 
     // Heartbeat-kind runs feed the per-agent non-productive streak; a productive
     // run of any kind resets it.
+    if (cls.productive) await clearScheduledSkipBackoff(agent.id);
     if (payload.trigger === "scheduled" || payload.trigger === "ambient" || cls.productive) {
       const bo = await noteHeartbeatOutcome(agent.id, cls.productive, agent.heartbeatIntervalSec);
       if (bo.backoffMs > 0) {
@@ -618,6 +645,10 @@ async function emitFinished(
   // run row is already written by every caller before this fires, so it has the
   // final status/result/trace. Fire-and-forget — never blocks the WS frame.
   void exportRunTrace(agentId, runId);
+  // The run is over however it ended — the agent is available again. Paired
+  // with the "working" write at run start, this is what keeps the presence
+  // table (and therefore GET /presence) truthful for agents.
+  void setAgentPresence(agentId, "idle");
   const base = {
     type: "agent.run.finished" as const,
     agentId,
@@ -690,15 +721,22 @@ async function wakeReasonForAgent(agentId: string, sinceTs: Date): Promise<WakeR
   }
 
   // Open tasks assigned to me — these are the "proactive work" reason to fire.
+  // Tasks under a PARKED goal are excluded: parking exists precisely to stop the
+  // team spending runs on a goal nobody has moved in two weeks, and a parked
+  // goal whose tasks still woke their assignees every ten minutes would have
+  // parked nothing. The tasks are untouched and come straight back when the
+  // owner resumes the goal.
   const myOpenTasks = await db
     .select({ taskId: tasks.id, status: tasks.status, updatedAt: tasks.updatedAt })
     .from(tasks)
     .innerJoin(taskAssignees, eq(taskAssignees.taskId, tasks.id))
+    .leftJoin(goals, eq(goals.id, tasks.goalId))
     .where(
       and(
         eq(taskAssignees.memberId, agentMember.id),
         eq(tasks.archived, false),
         sql`${tasks.status} NOT IN ('done', 'cancelled')`,
+        sql`(${goals.status} is null or ${goals.status} <> 'parked')`,
       ),
     );
 
