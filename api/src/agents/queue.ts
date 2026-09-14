@@ -13,7 +13,17 @@ export const agentQueue = new Queue(AGENT_QUEUE, {
   },
 });
 
-export const agentQueueEvents = new QueueEvents(AGENT_QUEUE, { connection: redis });
+// `autorun` starts a BLOCKING redis read as soon as this module is imported.
+// lib/redis.ts already makes the clients lazy under test, but QueueEvents
+// issues a command immediately, which forces a connect to a redis that isn't
+// there — and its retry logging, landing during a vitest worker teardown,
+// fails CI with EnvironmentTeardownError even when every test passed. Anything
+// that actually consumes these events calls .run() itself.
+const isTest = !!process.env.VITEST || process.env.NODE_ENV === "test";
+export const agentQueueEvents = new QueueEvents(AGENT_QUEUE, {
+  connection: redis,
+  autorun: !isTest,
+});
 
 export interface AgentJobPayload {
   agentId: string;

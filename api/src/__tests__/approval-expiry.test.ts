@@ -1,13 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
+// Imports the LEAF module on purpose: lib/approval-policy.js pulls in the DB,
+// the event bus and the BullMQ queues, which a unit test has no business
+// starting. (TTL arithmetic itself is covered in approval-policy.test.ts.)
 import {
   approvalDeadEndNote,
-  approvalExpiresAt,
-  approvalTtlMs,
-  isApprovalExpired,
   shouldLogSweepHeartbeat,
   SWEEP_HEARTBEAT_MS,
-  expiryNote,
-} from "../lib/approval-policy.js";
+} from "../lib/approval-notes.js";
 import { clampMeta } from "../lib/audit.js";
 
 // APPROVAL_TTL_HOURS=72 was set on live and expireStaleApprovals() was wired
@@ -62,31 +61,6 @@ describe("approvalDeadEndNote", () => {
 
   it("survives an empty scope", () => {
     expect(approvalDeadEndNote("ap_x", "", "expired")).toContain("unscoped");
-  });
-});
-
-describe("TTL arithmetic", () => {
-  it("expires a card exactly TTL hours after it was created", () => {
-    process.env.APPROVAL_TTL_HOURS = "72";
-    const created = new Date("2026-09-01T00:00:00Z");
-    expect(approvalTtlMs()).toBe(72 * 3_600_000);
-    expect(approvalExpiresAt(created)!.toISOString()).toBe("2026-09-04T00:00:00.000Z");
-    expect(isApprovalExpired(created, new Date("2026-09-03T23:59:00Z"))).toBe(false);
-    expect(isApprovalExpired(created, new Date("2026-09-04T00:00:01Z"))).toBe(true);
-  });
-
-  it("treats TTL 0 as never-expire, and the sweep as disabled", () => {
-    process.env.APPROVAL_TTL_HOURS = "0";
-    expect(approvalTtlMs()).toBe(0);
-    expect(approvalExpiresAt(new Date())).toBeNull();
-    expect(isApprovalExpired(new Date("2020-01-01T00:00:00Z"))).toBe(false);
-  });
-
-  it("tells the agent not to re-ask when a card expires", () => {
-    process.env.APPROVAL_TTL_HOURS = "72";
-    const note = expiryNote();
-    expect(note).toContain("EXPIRED");
-    expect(note).toContain("do NOT re-request");
   });
 });
 
