@@ -489,8 +489,8 @@ const PROVIDERS: Array<{
   hint: string;
   defaultModel: string;
 }> = [
-  { id: "anthropic", label: "Anthropic (Claude)", hint: "API key from console.anthropic.com", defaultModel: "claude-sonnet-4-5" },
-  { id: "openrouter", label: "OpenRouter", hint: "Routes to hundreds of models.", defaultModel: "anthropic/claude-sonnet-4.5" },
+  { id: "anthropic", label: "Anthropic (Claude)", hint: "API key from console.anthropic.com", defaultModel: "claude-sonnet-5" },
+  { id: "openrouter", label: "OpenRouter", hint: "Routes to hundreds of models.", defaultModel: "anthropic/claude-sonnet-5" },
   { id: "openai-codex", label: "OpenAI", hint: "API key from platform.openai.com", defaultModel: "gpt-4o" },
   { id: "nous", label: "Nous (hosted Hermes)", hint: "Portal token from nousresearch.com", defaultModel: "" },
   { id: "custom:freeapi", label: "FreeLLMAPI (self-hosted)", hint: "OpenAI-compatible proxy (github.com/tashfeenahmed/freellmapi).", defaultModel: "gemini-2.5-pro" },
