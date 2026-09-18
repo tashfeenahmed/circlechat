@@ -10,8 +10,13 @@ describe("provider default models", () => {
   it("never lets a non-Anthropic provider inherit the Anthropic-native template id", () => {
     for (const [provider, model] of Object.entries(PROVIDER_DEFAULT_MODELS)) {
       if (provider === "anthropic") continue;
-      expect(model, provider).not.toBe("claude-sonnet-4-5");
+      expect(model, provider).not.toBe(PROVIDER_DEFAULT_MODELS.anthropic);
     }
+  });
+
+  it("pins the current Claude Sonnet generation on both Anthropic and OpenRouter", () => {
+    expect(PROVIDER_DEFAULT_MODELS.anthropic).toBe("claude-sonnet-5");
+    expect(PROVIDER_DEFAULT_MODELS.openrouter).toBe("anthropic/claude-sonnet-5");
   });
 
   it("uses OpenRouter's vendor/model slug format", () => {

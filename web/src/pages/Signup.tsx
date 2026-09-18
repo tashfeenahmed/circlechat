@@ -12,8 +12,8 @@ const PROVIDERS: Array<{
   defaultModel: string;
   placeholder: string;
 }> = [
-  { id: "anthropic", label: "Anthropic (Claude)", hint: "Key from console.anthropic.com", defaultModel: "claude-sonnet-4-5", placeholder: "sk-ant-…" },
-  { id: "openrouter", label: "OpenRouter", hint: "Routes to hundreds of models.", defaultModel: "anthropic/claude-sonnet-4.5", placeholder: "sk-or-…" },
+  { id: "anthropic", label: "Anthropic (Claude)", hint: "Key from console.anthropic.com", defaultModel: "claude-sonnet-5", placeholder: "sk-ant-…" },
+  { id: "openrouter", label: "OpenRouter", hint: "Routes to hundreds of models.", defaultModel: "anthropic/claude-sonnet-5", placeholder: "sk-or-…" },
   { id: "openai-codex", label: "OpenAI", hint: "Key from platform.openai.com", defaultModel: "gpt-4o", placeholder: "sk-…" },
   { id: "nous", label: "Nous (hosted Hermes)", hint: "Portal token from nousresearch.com", defaultModel: "", placeholder: "paste your token" },
   { id: "custom:freeapi", label: "FreeLLMAPI (self-hosted)", hint: "OpenAI-compatible proxy. Set up from github.com/tashfeenahmed/freellmapi, then paste its base URL + unified key.", defaultModel: "gemini-2.5-pro", placeholder: "freellmapi-…" },
