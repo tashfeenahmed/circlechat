@@ -22,6 +22,7 @@ import {
   quarantineBundledSkills,
   restoreQuarantinedSkills,
 } from "../agents/hermes-equip.js";
+import { resolveDefaultModel } from "../lib/provider-defaults.js";
 import { HERMES_RUNTIME, buildHermesCommand } from "../agents/hermes-runtime.js";
 import { buildOpenClawCommand } from "../agents/openclaw-runtime.js";
 import { equipOpenClawAgent } from "../agents/openclaw-equip.js";
@@ -157,6 +158,7 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
         .code(400)
         .send({ error: "freeapi_base_url_required" });
     }
+    const resolvedModel = resolveDefaultModel(body.provider, body.model);
 
     try {
       // Copy the baked template — hermes setup needs a TTY which we don't
@@ -216,12 +218,16 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
           body.provider,
         ]);
         await runCmd(setProviderCmd.cmd, setProviderCmd.args, setProviderCmd.env);
-        if (body.model) {
+        // Always pin a model that exists on the chosen provider. The template's
+        // `claude-sonnet-4-5` is Anthropic-native and is rejected by every other
+        // provider (see lib/provider-defaults.ts), so an install with no
+        // explicit model must not inherit it.
+        if (resolvedModel) {
           const setModelCmd = buildHermesCommand(hermesHome, [
             "config",
             "set",
             "model.default",
-            body.model,
+            resolvedModel,
           ]);
           await runCmd(setModelCmd.cmd, setModelCmd.args, setModelCmd.env);
         }
@@ -253,8 +259,8 @@ export default async function agentInstallRoutes(app: FastifyInstance): Promise<
       adapter: "socket",
       // provider/model are recorded so estimated usage rows resolve to a real
       // provider/model instead of "unknown"/"auto" when the bridge reports none.
-      configJson: { provider: body.provider, model: body.model ?? "auto" },
-      model: body.model ?? "",
+      configJson: { provider: body.provider, model: resolvedModel ?? "auto" },
+      model: resolvedModel ?? "",
       // Default scopes cover the everyday agent surface: read + reply in
       // channels/DMs and manage the task board. Out-of-scope actions gate on a
       // human approval when ENFORCE_AGENT_SCOPES is enabled (on by default).
