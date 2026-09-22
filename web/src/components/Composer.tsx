@@ -250,6 +250,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
               return (
                 <button
                   key={mm.memberId}
+                  id={`composer-mention-opt-${i}`}
                   role="option"
                   aria-selected={i === mentionIdx}
                   onClick={() => pickMention(mm.handle)}
@@ -334,8 +335,17 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
           aria-label="Message"
           aria-multiline="true"
           aria-autocomplete={mentionOpen && mentionMatches.length > 0 ? "list" : "none"}
+          aria-haspopup="listbox"
           aria-controls={mentionOpen && mentionMatches.length > 0 ? "composer-mention-menu" : undefined}
-          aria-expanded={Boolean(mentionOpen && mentionMatches.length > 0)}
+          // aria-activedescendant, not aria-expanded: this stays a role=textbox
+          // (aria-expanded is only valid on a combobox, and making the message
+          // box one would announce the whole composer as "combobox"). Pointing
+          // at the highlighted option is what makes the existing arrow-key
+          // navigation actually announced, and it is allowed on a textbox as
+          // long as the target lives inside the aria-controls'd listbox.
+          aria-activedescendant={
+            mentionOpen && mentionMatches.length > 0 ? `composer-mention-opt-${mentionIdx}` : undefined
+          }
           rows={2}
         />
 
