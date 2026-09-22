@@ -244,12 +244,14 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
     <div className="composer-wrap">
       <div className="composer relative">
         {mentionOpen && mentionMatches.length > 0 && (
-          <div className="mention-menu">
+          <div className="mention-menu" id="composer-mention-menu" role="listbox" aria-label="Mention suggestions">
             {mentionMatches.map((m, i) => {
               const mm = m as { memberId: string; handle: string; name: string; kind: string };
               return (
                 <button
                   key={mm.memberId}
+                  role="option"
+                  aria-selected={i === mentionIdx}
                   onClick={() => pickMention(mm.handle)}
                   onMouseEnter={() => setMentionIdx(i)}
                   className={`mention-item ${i === mentionIdx ? "focus" : ""}`}
@@ -269,6 +271,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
             type="button"
             className="fb-btn"
             title="Bold (⌘B)"
+            aria-label="Bold"
             onMouseDown={(e) => { e.preventDefault(); wrap("**"); }}
           >
             <Bold size={14} strokeWidth={2} />
@@ -277,6 +280,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
             type="button"
             className="fb-btn"
             title="Italic (⌘I)"
+            aria-label="Italic"
             onMouseDown={(e) => { e.preventDefault(); wrap("*"); }}
           >
             <Italic size={14} strokeWidth={2} />
@@ -285,6 +289,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
             type="button"
             className="fb-btn"
             title="Code (⌘E)"
+            aria-label="Code"
             onMouseDown={(e) => { e.preventDefault(); wrap("`"); }}
           >
             <Code size={14} strokeWidth={2} />
@@ -294,6 +299,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
             type="button"
             className="fb-btn"
             title="List"
+            aria-label="Bulleted list"
             onMouseDown={(e) => { e.preventDefault(); prefixLines("- "); }}
           >
             <List size={14} strokeWidth={2} />
@@ -302,6 +308,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
             type="button"
             className="fb-btn"
             title="Link (⌘K)"
+            aria-label="Insert link"
             onMouseDown={(e) => { e.preventDefault(); insertLink(); }}
           >
             <Link size={14} strokeWidth={2} />
@@ -311,6 +318,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
             type="button"
             className="fb-btn"
             title="Mention"
+            aria-label="Insert mention"
             onMouseDown={(e) => { e.preventDefault(); insertAtCursor("@"); }}
           >
             <AtSign size={14} strokeWidth={2} />
@@ -323,6 +331,11 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
           onChange={onChange}
           onKeyDown={onKey}
           placeholder={placeholder}
+          aria-label="Message"
+          aria-multiline="true"
+          aria-autocomplete={mentionOpen && mentionMatches.length > 0 ? "list" : "none"}
+          aria-controls={mentionOpen && mentionMatches.length > 0 ? "composer-mention-menu" : undefined}
+          aria-expanded={Boolean(mentionOpen && mentionMatches.length > 0)}
           rows={2}
         />
 
@@ -338,6 +351,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
                   onClick={() => setFiles((fs) => fs.filter((x) => x.key !== f.key))}
                   className="text-[var(--color-muted)] inline-flex items-center"
                   title="Remove"
+                  aria-label={`Remove attachment ${f.name}`}
                 >
                   <X size={11} strokeWidth={2.2} />
                 </button>
@@ -347,7 +361,7 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
         )}
 
         <div className="c-bottom">
-          <label className="cb-btn cursor-pointer" title="Attach">
+          <label className="cb-btn cursor-pointer" title="Attach" aria-label="Attach files">
             <input type="file" className="hidden" onChange={upload} />
             <Paperclip size={15} strokeWidth={2} />
           </label>
@@ -356,6 +370,8 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
               type="button"
               className="cb-btn"
               title="Emoji"
+              aria-label="Emoji picker"
+              aria-expanded={emojiOpen}
               onMouseDown={(e) => { e.preventDefault(); setEmojiOpen((o) => !o); }}
             >
               <Smile size={15} strokeWidth={2} />
