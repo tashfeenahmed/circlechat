@@ -118,7 +118,8 @@ services:
       # probing the live gateway produced 0/15 parseable verdicts at 800.
       VERIFY_JUDGE_MAX_TOKENS: ${VERIFY_JUDGE_MAX_TOKENS:-}
       # "minimal" by default; set empty to send no reasoning parameter at all.
-      VERIFY_JUDGE_REASONING_EFFORT: ${VERIFY_JUDGE_REASONING_EFFORT:-}
+      # `-` not `:-`: the code reads "" as "no reasoning param", so only default when unset.
+      VERIFY_JUDGE_REASONING_EFFORT: ${VERIFY_JUDGE_REASONING_EFFORT-minimal}
       # How many times an UNCHANGED artifact set may be re-judged (default 3).
       VERIFY_MAX_JUDGES_PER_SET: ${VERIFY_MAX_JUDGES_PER_SET:-}
       # Approval lifecycle and auto-approval policy.
@@ -198,7 +199,8 @@ services:
       # probing the live gateway produced 0/15 parseable verdicts at 800.
       VERIFY_JUDGE_MAX_TOKENS: ${VERIFY_JUDGE_MAX_TOKENS:-}
       # "minimal" by default; set empty to send no reasoning parameter at all.
-      VERIFY_JUDGE_REASONING_EFFORT: ${VERIFY_JUDGE_REASONING_EFFORT:-}
+      # `-` not `:-`: the code reads "" as "no reasoning param", so only default when unset.
+      VERIFY_JUDGE_REASONING_EFFORT: ${VERIFY_JUDGE_REASONING_EFFORT-minimal}
       # How many times an UNCHANGED artifact set may be re-judged (default 3).
       VERIFY_MAX_JUDGES_PER_SET: ${VERIFY_MAX_JUDGES_PER_SET:-}
       # Approval lifecycle and auto-approval policy.
