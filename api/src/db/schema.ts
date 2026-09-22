@@ -187,11 +187,15 @@ export const messages = pgTable(
     mentions: jsonb("mentions").$type<string[]>().notNull().default([]),
     editedAt: timestamp("edited_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    // Pinned messages: NULL = not pinned. See migrations/0029.
+    pinnedAt: timestamp("pinned_at", { withTimezone: true }),
+    pinnedBy: varchar("pinned_by", { length: 32 }),
     ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     convTsIdx: index("messages_conv_ts_idx").on(t.conversationId, t.ts),
     parentIdx: index("messages_parent_idx").on(t.parentId),
+    pinnedIdx: index("messages_pinned_idx").on(t.conversationId, t.pinnedAt),
   }),
 );
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTasks } from "../lib/hooks";
-import { MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
 import Avatar from "./Avatar";
 import MemberHoverCard from "./MemberHoverCard";
@@ -14,6 +14,7 @@ interface Props {
   grouped: boolean;
   meMemberId: string | undefined;
   onReact: (emoji: string) => void;
+  onTogglePin?: () => void;
   onOpenThread?: (msgId: string) => void;
   inThread?: boolean;
   // Public read-only viewer: hide the reaction affordances (the server refuses
@@ -46,6 +47,7 @@ export default function MessageRow({
   grouped,
   meMemberId,
   onReact,
+  onTogglePin,
   onOpenThread,
   inThread,
   spectator,
@@ -129,6 +131,11 @@ export default function MessageRow({
               {formatMessageTs(msg.ts)}
             </span>
             {msg.editedAt && <span className="time">(edited)</span>}
+            {msg.pinnedAt && (
+              <span className="time" title="Pinned message" aria-label="Pinned message">
+                <Pin size={11} strokeWidth={2} aria-hidden="true" style={{ display: "inline", verticalAlign: "-1px" }} /> pinned
+              </span>
+            )}
           </div>
         )}
         {!editing ? (
@@ -211,6 +218,17 @@ export default function MessageRow({
           {!inThread && (
             <button onClick={() => onOpenThread?.(msg.id)} className="hb-btn" title="Reply in thread">
               <MessageSquare size={14} strokeWidth={2} />
+            </button>
+          )}
+          {onTogglePin && (
+            <button
+              onClick={onTogglePin}
+              className="hb-btn"
+              title={msg.pinnedAt ? "Unpin from channel" : "Pin to channel"}
+              aria-label={msg.pinnedAt ? "Unpin from channel" : "Pin to channel"}
+              aria-pressed={!!msg.pinnedAt}
+            >
+              {msg.pinnedAt ? <PinOff size={13} strokeWidth={2} /> : <Pin size={13} strokeWidth={2} />}
             </button>
           )}
           {msg.memberId === meMemberId && (

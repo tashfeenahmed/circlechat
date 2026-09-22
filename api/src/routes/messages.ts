@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { and, eq, asc, desc, lt, isNull, inArray, or, sql as dsql } from "drizzle-orm";
+import { and, eq, asc, desc, lt, isNull, isNotNull, inArray, or, sql as dsql } from "drizzle-orm";
 void asc;
 void or;
 import { db } from "../db/index.js";
@@ -53,6 +53,7 @@ const PostBody = z.object({
 
 const EditBody = z.object({ bodyMd: z.string().min(1).max(20_000) });
 const ReactBody = z.object({ emoji: z.string().min(1).max(32) });
+const PinListQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) });
 
 export default async function messageRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireWorkspace);
@@ -455,6 +456,82 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       messageId: mId,
     });
     return { ok: true };
+  });
+
+  // ───────────────── pinned messages ─────────────────
+  // Slack/Discord parity: a channel's decisions live in scrollback otherwise.
+  // Toggle semantics mirror reactions: same route pins and unpins. Any
+  // conversation member may pin (a pin is an attention request, not an
+  // admin act); deleted messages can't be pinned.
+  app.post("/messages/:id/pin", async (req, reply) => {
+    const mId = (req.params as { id: string }).id;
+    const memberId = req.auth!.memberId!;
+    const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
+    if (!m || m.deletedAt) return reply.code(404).send({ error: "not_found" });
+    const [inConv] = await db
+      .select({ memberId: conversationMembers.memberId })
+      .from(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, m.conversationId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      )
+      .limit(1);
+    if (!inConv) return reply.code(403).send({ error: "not_a_member" });
+
+    const now = m.pinnedAt ? null : new Date();
+    await db
+      .update(messages)
+      .set({ pinnedAt: now, pinnedBy: now ? memberId : null })
+      .where(eq(messages.id, mId));
+    await publishToConversation(m.conversationId, {
+      type: "message.pinned",
+      conversationId: m.conversationId,
+      messageId: mId,
+      memberId,
+      pinnedAt: now ? now.toISOString() : null,
+    });
+    return { ok: true, pinned: !!now };
+  });
+
+  // Newest first: the header panel shows the most recent pins on top.
+  app.get("/conversations/:id/pins", async (req, reply) => {
+    const convId = (req.params as { id: string }).id;
+    const memberId = req.auth!.memberId!;
+    const [inConv] = await db
+      .select({ memberId: conversationMembers.memberId })
+      .from(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, convId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      )
+      .limit(1);
+    if (!inConv) return reply.code(403).send({ error: "not_a_member" });
+    const q = PinListQuery.parse(req.query ?? {});
+
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, convId),
+          isNull(messages.deletedAt),
+          isNotNull(messages.pinnedAt),
+        ),
+      )
+      .orderBy(desc(messages.pinnedAt))
+      .limit(q.limit);
+
+    const forPublic = req.spectator === true;
+    return {
+      pins: rows.map((m) => ({
+        ...redactDeleted(m),
+        bodyMd: forPublic ? scrubPublicBody(redactDeleted(m).bodyMd) : m.bodyMd,
+      })),
+    };
   });
 
   app.post("/messages/:id/reactions", async (req, reply) => {

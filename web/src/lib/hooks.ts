@@ -250,6 +250,18 @@ export function useMessages(convId: string | undefined, parentId?: string | null
           }),
         );
       }
+      if (ev.type === "message.pinned" && ev.conversationId === convId) {
+        qc.setQueryData<MsgCache>(key, (old) =>
+          mapMsgs(old, (m) =>
+            m.id === ev.messageId
+              ? { ...m, pinnedAt: (ev.pinnedAt as string | null) ?? null,
+                  pinnedBy: ev.pinnedAt ? (ev.memberId as string) : null }
+              : m,
+          ),
+        );
+        // Keep the header's pins panel in step with the toggle.
+        qc.invalidateQueries({ queryKey: ["pins", convId] });
+      }
     });
   }, [convId, parentId, qc, key]);
 
@@ -261,6 +273,22 @@ export function useMessages(convId: string | undefined, parentId?: string | null
     hasOlder: q.hasPreviousPage,
     isLoadingOlder: q.isFetchingPreviousPage,
   };
+}
+
+// Pinned messages of a conversation, newest pin first.
+export function usePins(convId: string | undefined) {
+  return useQuery<{ pins: Message[] }>({
+    queryKey: ["pins", convId],
+    queryFn: () => api.get<{ pins: Message[] }>(`/conversations/${convId}/pins`),
+    enabled: !!convId,
+  });
+}
+
+export function useTogglePin() {
+  return useMutation({
+    mutationFn: (messageId: string) =>
+      api.post<{ ok: boolean; pinned: boolean }>(`/messages/${messageId}/pin`, {}),
+  });
 }
 
 export function usePostMessage(convId: string | undefined, parentId?: string | null) {
