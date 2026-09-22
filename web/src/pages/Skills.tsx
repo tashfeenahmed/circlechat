@@ -370,7 +370,7 @@ function SkillEditorCard({
           </button>
         </div>
       </header>
-      {err && <div className="px-4 py-2 text-[12px] text-[var(--color-err)]">{err}</div>}
+      {err && <div role="alert" className="px-4 py-2 text-[12px] text-[var(--color-err)]">{err}</div>}
       <div className="skill-card-body">
         <textarea
           value={markdown}

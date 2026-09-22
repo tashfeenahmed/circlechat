@@ -312,7 +312,7 @@ function NewReportDialog({ manager, onClose }: { manager: OrgNode; onClose: () =
             <input type="password" autoComplete="new-password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} required className="mt-1 w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[13px] font-mono" />
           </label>
 
-          {err && <p className="text-[12px] text-[var(--color-err)]">{err}</p>}
+          {err && <p role="alert" className="text-[12px] text-[var(--color-err)]">{err}</p>}
         </div>
 
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-[var(--color-hair)] shrink-0">
@@ -417,7 +417,7 @@ export function AssignDialog({
               className="flex-1 bg-transparent outline-none text-[13px]"
             />
           </div>
-          {err && <p className="text-[12px] text-[var(--color-err)]">{err}</p>}
+          {err && <p role="alert" className="text-[12px] text-[var(--color-err)]">{err}</p>}
           <div className="max-h-[320px] overflow-auto border border-[var(--color-hair)] rounded-md divide-y divide-[var(--color-hair)]">
             <button
               type="button"

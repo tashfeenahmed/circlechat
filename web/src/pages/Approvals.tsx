@@ -100,7 +100,7 @@ export default function ApprovalsPage() {
       </header>
 
       <div className="flex-1 min-h-0 overflow-auto">
-        {err && <div className="px-6 py-2 text-[12px] text-[var(--color-err)]">{err}</div>}
+        {err && <div role="alert" className="px-6 py-2 text-[12px] text-[var(--color-err)]">{err}</div>}
         {rows.length === 0 && (
           <div className="px-6 py-16 text-center text-[13px] text-[var(--color-muted)]">
             Nothing to review. Agents will request approval here when they need
