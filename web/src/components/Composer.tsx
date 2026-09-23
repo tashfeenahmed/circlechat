@@ -15,6 +15,7 @@ import { api, type Attachment } from "../api/client";
 import { useBus } from "../state/store";
 import { useSpectator } from "../lib/hooks";
 import { clearDraft, loadDraft, saveDraft } from "../lib/drafts";
+import { describeSendError, describeUploadError } from "../lib/sendError";
 
 interface Props {
   placeholder: string;
@@ -40,6 +41,9 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
   const [body, setBody] = useState(() => loadDraft(scope)?.body ?? "");
   const [files, setFiles] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
+  // Last send/upload failure, shown above the textarea. Cleared on the next
+  // submit attempt; the text stays in the box the whole time.
+  const [sendError, setSendError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const dir = useBus((s) => s.directory);
   const [mentionOpen, setMentionOpen] = useState<{ q: string; at: number } | null>(null);
@@ -85,6 +89,7 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
       prevRef.current = { scope, body: "" };
       setBody(loadDraft(scope)?.body ?? "");
       setFiles([]);
+      setSendError(null);
       return;
     }
     saveDraft(scope, body);
@@ -195,6 +200,7 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
     const text = body.trim();
     if (!text) return;
     const sentScope = scope;
+    setSendError(null);
     setBusy(true);
     try {
       await onSend(text, files);
@@ -209,6 +215,11 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
       setFiles([]);
       setMentionOpen(null);
       ref.current?.focus();
+    } catch (e) {
+      // A failed send used to vanish: the optimistic row rolled back and the
+      // rejection hit no handler. Keep the text in the box (the draft keeps
+      // it across reloads anyway) and show why it did not go through.
+      setSendError(describeSendError(e as { status?: number; message?: string }));
     } finally {
       setBusy(false);
     }
@@ -241,8 +252,11 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
     try {
       const att = await api.upload<Attachment>("/uploads", file);
       setFiles((f) => [...f, att]);
-    } catch {
-      // ignore
+      setSendError(null);
+    } catch (err) {
+      // Silence here meant an attachment that never appeared and never
+      // explained itself; name the file and the reason instead.
+      setSendError(describeUploadError(err as { status?: number }, file.name));
     }
     e.target.value = "";
   }
@@ -279,6 +293,25 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
 
   return (
     <div className="composer-wrap">
+      {sendError && (
+        // role=alert so screen readers announce the failure; the palette
+        // mirrors the menu's danger tokens (var(--color-err)).
+        <div
+          role="alert"
+          className="mb-1.5 flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-[12px]"
+          style={{ borderColor: "rgba(220, 38, 38, 0.25)", background: "rgba(220, 38, 38, 0.06)", color: "var(--color-err)" }}
+        >
+          <span>{sendError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={() => setSendError(null)}
+            className="shrink-0 opacity-70 hover:opacity-100"
+          >
+            <X size={13} strokeWidth={2} />
+          </button>
+        </div>
+      )}
       <div className="composer relative">
         {mentionOpen && mentionMatches.length > 0 && (
           <div className="mention-menu" id="composer-mention-menu" role="listbox" aria-label="Mention suggestions">
