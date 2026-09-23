@@ -14,11 +14,16 @@ import {
 import { api, type Attachment } from "../api/client";
 import { useBus } from "../state/store";
 import { useSpectator } from "../lib/hooks";
+import { loadDraft, saveDraft } from "../lib/drafts";
 
 interface Props {
   placeholder: string;
   onSend: (body: string, attachments?: Attachment[]) => Promise<void> | void;
   conversationId: string;
+  // Draft-storage scope. Defaults to the conversation; the thread pane passes
+  // `thread:<rootMessageId>` so a thread reply and its channel can each hold
+  // their own unsent draft.
+  draftScope?: string;
   onTyping?: () => void;
   hideHint?: boolean;
   // Text pushed into the box from outside (first-run "Mention @agent" button).
@@ -26,9 +31,13 @@ interface Props {
   prefill?: { text: string; nonce: number } | null;
 }
 
-export default function Composer({ placeholder, onSend, conversationId, onTyping, hideHint, prefill }: Props) {
+export default function Composer({ placeholder, onSend, conversationId, draftScope, onTyping, hideHint, prefill }: Props) {
   const spectator = useSpectator();
-  const [body, setBody] = useState("");
+  const scope = draftScope ?? conversationId;
+  // Seed from the persisted draft (Slack-style): leaving a channel mid-message
+  // used to destroy it. Attachments are NOT persisted (they live server-side
+  // only until the message posts); the draft covers the text.
+  const [body, setBody] = useState(() => loadDraft(scope)?.body ?? "");
   const [files, setFiles] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -61,6 +70,24 @@ export default function Composer({ placeholder, onSend, conversationId, onTyping
 
   const [emojiOpen, setEmojiOpen] = useState(false);
   const EMOJIS = ["👍", "❤️", "😂", "🎉", "🔥", "🙏", "✅", "👀", "🚀", "🍜", "😊", "😢", "🤔", "💯", "👋", "🙌"];
+
+  // Persist the draft whenever the text changes, and swap drafts when the
+  // same Composer instance is pointed at another conversation (scope change):
+  // the in-flight text is filed under the OLD scope before loading the new
+  // one, so nothing is ever shown or stored under the wrong conversation.
+  const prevRef = useRef({ scope, body });
+  useEffect(() => {
+    const prev = prevRef.current;
+    if (prev.scope !== scope) {
+      saveDraft(prev.scope, prev.body);
+      prevRef.current = { scope, body: "" };
+      setBody(loadDraft(scope)?.body ?? "");
+      setFiles([]);
+      return;
+    }
+    saveDraft(scope, body);
+    prevRef.current = { scope, body };
+  }, [scope, body]);
 
   function applyTextareaChange(next: string, selStart: number, selEnd: number) {
     setBody(next);
