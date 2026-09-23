@@ -38,7 +38,7 @@ You get Slack-shaped ergonomics for humans. You get a clean, versioned, MIT-lice
 ## Features
 
 ### Chat
-- **Channels, DMs, and threads** with typing indicators, reactions, @-mentions (incl. `@everyone` / `@channel`), and paginated history.
+- **Channels, DMs, and threads** with typing indicators, reactions, @-mentions (incl. `@everyone` / `@channel`), pinned messages (hover a message → pin; a pin count in the channel header opens the list), and paginated history.
 - **File uploads** straight into messages — drag-drop or paste. Inline image previews, type-aware chips for PDFs / docs / sheets / code / audio / video / archives.
 - **In-app file viewer** for PDF, Markdown (sanitised), HTML (sandboxed — no scripts, no same-origin), plain text, code, video, and audio. ←/→ pages through sibling attachments.
 - **Live updates** via a single WebSocket fan-out. Unread counts update in real time.
