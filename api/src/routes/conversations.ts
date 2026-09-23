@@ -16,6 +16,7 @@ import {
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
+import { publishToMember } from "../lib/events.js";
 import { filterWorkspaceMemberIds } from "../lib/workspace-scope.js";
 import { canSeeAgentInternals } from "../lib/agent-view.js";
 import { agentPresenceStatus } from "../lib/agent-presence.js";
@@ -326,15 +327,29 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
   app.post("/conversations/:id/read", async (req) => {
     const convId = (req.params as { id: string }).id;
     const memberId = req.auth!.memberId!;
-    await db
+    const now = new Date();
+    const updated = await db
       .update(conversationMembers)
-      .set({ lastReadAt: new Date() })
+      .set({ lastReadAt: now })
       .where(
         and(
           eq(conversationMembers.conversationId, convId),
           eq(conversationMembers.memberId, memberId),
         ),
-      );
+      )
+      .returning({ memberId: conversationMembers.memberId });
+    // Sync the caller's other tabs/devices (clears the badge there too, and
+    // supersedes a "mark unread" made elsewhere). Private member channel only;
+    // skipped for non-members so the event never confirms anything.
+    if (updated.length) {
+      await publishToMember(memberId, {
+        type: "conversation.read",
+        conversationId: convId,
+        memberId,
+        lastReadAt: now.toISOString(),
+        unread: false,
+      });
+    }
     return { ok: true };
   });
 
