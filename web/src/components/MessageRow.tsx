@@ -138,6 +138,12 @@ export default function MessageRow({
             )}
           </div>
         )}
+        {grouped && msg.pinnedAt && (
+          // Grouped rows have no header, so the pinned tag goes above the body.
+          <div className="text-[11px] text-[var(--color-muted)]" title="Pinned message" aria-label="Pinned message">
+            <Pin size={11} strokeWidth={2} aria-hidden="true" style={{ display: "inline", verticalAlign: "-1px" }} /> pinned
+          </div>
+        )}
         {!editing ? (
           <div dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
