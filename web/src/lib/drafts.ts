@@ -54,3 +54,18 @@ export function clearDraft(scope: string): void {
     // ignore
   }
 }
+
+// Drop every stored draft. Called on sign-out: keys are conversation-scoped,
+// not user-scoped, so the next account on this browser must not inherit them.
+export function clearAllDrafts(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(DRAFT_PREFIX)) keys.push(k);
+    }
+    for (const k of keys) localStorage.removeItem(k);
+  } catch {
+    // ignore
+  }
+}

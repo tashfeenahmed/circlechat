@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { api } from "../api/client";
+import { clearAllDrafts } from "../lib/drafts";
 import { humanizeError } from "../api/errors";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -112,6 +113,7 @@ export default function InvitePage() {
               <button
                 type="button"
                 onClick={async () => {
+                  clearAllDrafts();
                   await api.post("/auth/logout");
                   await qc.invalidateQueries({ queryKey: ["me"] });
                   location.reload();
@@ -132,6 +134,7 @@ export default function InvitePage() {
             <button
               type="button"
               onClick={async () => {
+                clearAllDrafts();
                 await api.post("/auth/logout");
                 await qc.invalidateQueries({ queryKey: ["me"] });
                 nav("/login", { replace: true });

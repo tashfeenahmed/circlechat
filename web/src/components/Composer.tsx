@@ -14,7 +14,7 @@ import {
 import { api, type Attachment } from "../api/client";
 import { useBus } from "../state/store";
 import { useSpectator } from "../lib/hooks";
-import { loadDraft, saveDraft } from "../lib/drafts";
+import { clearDraft, loadDraft, saveDraft } from "../lib/drafts";
 
 interface Props {
   placeholder: string;
@@ -76,6 +76,8 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
   // the in-flight text is filed under the OLD scope before loading the new
   // one, so nothing is ever shown or stored under the wrong conversation.
   const prevRef = useRef({ scope, body });
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
   useEffect(() => {
     const prev = prevRef.current;
     if (prev.scope !== scope) {
@@ -192,9 +194,17 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
   async function submit() {
     const text = body.trim();
     if (!text) return;
+    const sentScope = scope;
     setBusy(true);
     try {
       await onSend(text, files);
+      // The composer may have been re-pointed at another conversation while
+      // the send was in flight: its text now belongs to that scope, so only
+      // drop the (already-sent) draft stored under the scope we sent from.
+      if (scopeRef.current !== sentScope) {
+        clearDraft(sentScope);
+        return;
+      }
       setBody("");
       setFiles([]);
       setMentionOpen(null);

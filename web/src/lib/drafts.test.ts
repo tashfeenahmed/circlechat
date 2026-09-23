@@ -61,3 +61,25 @@ describe("composer drafts", () => {
     (globalThis as { localStorage: Storage }).localStorage = real;
   });
 });
+
+describe("clearAllDrafts", () => {
+  it("removes only draft keys", async () => {
+    const { clearAllDrafts } = await import("./drafts");
+    const store = new Map<string, string>();
+    (globalThis as { localStorage: Storage }).localStorage = {
+      get length() { return store.size; },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    } as Storage;
+    saveDraft("c1", "a");
+    saveDraft("thread:m1", "b");
+    localStorage.setItem("cc:other", "keep");
+    clearAllDrafts();
+    expect(loadDraft("c1")).toBeNull();
+    expect(loadDraft("thread:m1")).toBeNull();
+    expect(localStorage.getItem("cc:other")).toBe("keep");
+  });
+});
