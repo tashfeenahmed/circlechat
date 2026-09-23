@@ -15,6 +15,7 @@ import {
 import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation } from "../lib/events.js";
+import { unreadAnchorTs } from "../lib/unread.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { fireChannelPostTrigger, resolveHandlesToMemberIds } from "../agents/mention-triggers.js";
 import { notifyForMessage } from "../lib/notifications.js";
@@ -493,6 +494,40 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       pinnedAt: now ? now.toISOString() : null,
     });
     return { ok: true, pinned: !!now };
+  });
+
+  // "Mark unread from here": move the caller's read cursor back to just before
+  // this message so it and everything after it badge as unread again (Slack's
+  // mark-unread). Uses the shared anchor rule in lib/unread.ts so the anchor
+  // itself counts as unread, matching the badge's `ts > lastReadAt` semantics.
+  app.post("/messages/:id/unread-from", async (req, reply) => {
+    const mId = (req.params as { id: string }).id;
+    const memberId = req.auth!.memberId!;
+    const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
+    if (!m || m.deletedAt) return reply.code(404).send({ error: "not_found" });
+    const [inConv] = await db
+      .select({ memberId: conversationMembers.memberId })
+      .from(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, m.conversationId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      )
+      .limit(1);
+    if (!inConv) return reply.code(403).send({ error: "not_a_member" });
+
+    const anchor = unreadAnchorTs(m.ts);
+    await db
+      .update(conversationMembers)
+      .set({ lastReadAt: anchor })
+      .where(
+        and(
+          eq(conversationMembers.conversationId, m.conversationId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      );
+    return { ok: true, lastReadAt: anchor.toISOString() };
   });
 
   // Newest first: the header panel shows the most recent pins on top.

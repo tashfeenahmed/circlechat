@@ -294,6 +294,20 @@ export function useTogglePin() {
   });
 }
 
+// "Mark unread from here": moves the read cursor back so the anchor message
+// and everything after it badge as unread again (Slack parity). Invalidates
+// ["conversations"] so the sidebar badge refreshes from the server count.
+export function useMarkUnreadFrom() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (messageId: string) =>
+      api.post<{ ok: boolean; lastReadAt: string }>(`/messages/${messageId}/unread-from`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+}
+
 export function usePostMessage(convId: string | undefined, parentId?: string | null) {
   const qc = useQueryClient();
   const key = ["messages", convId, parentId ?? "root"] as const;
