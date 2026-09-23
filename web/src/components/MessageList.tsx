@@ -119,8 +119,10 @@ export default function MessageList({
     togglePin.mutate(msgId);
   }
 
-  // Mark-unread lives here for the same reason. Threads share the parent
-  // conversation's read cursor, so the affordance is offered in threads too.
+  // Mark-unread lives here for the same reason. The read cursor is per
+  // conversation and the badge counts top-level messages only, so it's offered
+  // on top-level messages (including a thread's root in the thread pane) but
+  // not on replies — the API refuses those (400 thread_reply).
   const markUnread = useMarkUnreadFrom();
   function unreadFrom(msgId: string) {
     markUnread.mutate(msgId);
@@ -159,7 +161,7 @@ export default function MessageList({
                 meMemberId={meMemberId}
                 onReact={(e) => react(m.id, e)}
                 onTogglePin={!spectator ? () => pin(m.id) : undefined}
-                onMarkUnread={!spectator ? () => unreadFrom(m.id) : undefined}
+                onMarkUnread={!spectator && !m.parentId ? () => unreadFrom(m.id) : undefined}
                 onOpenThread={onOpenThread}
                 inThread={inThread}
                 spectator={spectator}
