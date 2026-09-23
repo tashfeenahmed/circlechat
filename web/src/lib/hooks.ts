@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   api,
@@ -19,6 +19,13 @@ import {
 } from "../api/client";
 import { bus } from "../ws/client";
 import { useBus } from "../state/store";
+import {
+  holdUnread,
+  releaseUnreadHold,
+  isUnreadHeld,
+  subscribeUnreadHolds,
+  getUnreadHolds,
+} from "./unreadHold";
 
 // True when the viewer is the shared read-only spectator (SPECTATOR_MODE).
 // Components use it to hide composers, buttons, and drag handles — the server
@@ -72,8 +79,12 @@ export function useConversations() {
       bus.send({ type: "subscribe", conversationId: c.id });
     }
   }, [q.data?.conversations]);
+  // useConversations() is called from ~9 places (shell, sidebar, pages…), and
+  // each instance used to attach its own listener — so one message.new bumped
+  // the sidebar badge once PER INSTANCE (a single new message showed "+5")
+  // until the next refetch. Attach exactly one listener per QueryClient.
   useEffect(() => {
-    return bus.on((ev) => {
+    return attachOnce(qc, () => bus.on((ev) => {
       if (ev.type === "message.new") {
         // Bump unread for the conversation receiving the new message so the
         // sidebar reflects activity immediately. Active conversation's read
@@ -98,10 +109,68 @@ export function useConversations() {
             }),
           };
         });
+      } else if (ev.type === "conversation.read") {
+        // One of MY sessions (this tab or another tab/device) moved my read
+        // cursor. Only ever delivered on my private member channel.
+        const cid = ev.conversationId as string;
+        if (ev.unread) {
+          // Marked unread elsewhere: stop this tab's auto-read from undoing it
+          // and recount from the server (the count depends on the cursor).
+          holdUnread(cid);
+          qc.invalidateQueries({ queryKey: ["conversations"] });
+        } else {
+          releaseUnreadHold(cid);
+          qc.setQueryData<{ conversations: Conversation[] }>(["conversations"], (old) =>
+            old
+              ? {
+                  conversations: old.conversations.map((c) =>
+                    c.id === cid ? { ...c, unreadCount: 0, unreadMentions: 0 } : c,
+                  ),
+                }
+              : old,
+          );
+        }
       }
-    });
+    }));
   }, [qc]);
   return q;
+}
+
+// Ref-counted "attach once per QueryClient" for the conversations listener.
+const convListeners = new WeakMap<object, { refs: number; off: () => void }>();
+function attachOnce(qc: object, attach: () => () => void): () => void {
+  const cur = convListeners.get(qc);
+  if (cur) cur.refs += 1;
+  else convListeners.set(qc, { refs: 1, off: attach() });
+  return () => {
+    const e = convListeners.get(qc);
+    if (!e) return;
+    e.refs -= 1;
+    if (e.refs === 0) {
+      e.off();
+      convListeners.delete(qc);
+    }
+  };
+}
+
+// Conversations currently held unread by "mark unread from here" (reactive).
+export function useUnreadHolds(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribeUnreadHolds, getUnreadHolds);
+}
+
+// Auto-mark the open conversation read on entry and whenever its message count
+// changes — unless the user marked it unread while here (see unreadHold.ts).
+// Entering a conversation releases any hold first: that's the "reading it now"
+// moment. The release effect is declared first so it runs before markRead in
+// the same commit.
+export function useAutoMarkRead(conversationId: string | undefined, messageCount: number) {
+  const markRead = useMarkRead(conversationId);
+  useEffect(() => {
+    if (conversationId) releaseUnreadHold(conversationId);
+  }, [conversationId]);
+  useEffect(() => {
+    if (conversationId) markRead();
+  }, [conversationId, messageCount, markRead]);
 }
 
 export function useMarkRead(conversationId: string | undefined) {
@@ -111,6 +180,8 @@ export function useMarkRead(conversationId: string | undefined) {
   // render (typing indicator ticks, presence updates, hover state…).
   return useCallback(async () => {
     if (!conversationId) return;
+    // Held by "mark unread from here": don't silently undo the user's choice.
+    if (isUnreadHeld(conversationId)) return;
     try { await api.post(`/conversations/${conversationId}/read`); } catch {}
     qc.setQueryData<{ conversations: Conversation[] }>(["conversations"], (old) =>
       old
@@ -291,6 +362,26 @@ export function useTogglePin() {
   return useMutation({
     mutationFn: (messageId: string) =>
       api.post<{ ok: boolean; pinned: boolean }>(`/messages/${messageId}/pin`, {}),
+  });
+}
+
+// "Mark unread from here": moves the read cursor back so the anchor message
+// and everything after it badge as unread again (Slack parity). Holds the
+// conversation so auto-mark-read doesn't immediately undo it, and invalidates
+// ["conversations"] so the sidebar badge recounts from the server. Other
+// sessions of mine learn about it via the `conversation.read` event.
+export function useMarkUnreadFrom() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (messageId: string) =>
+      api.post<{ ok: boolean; conversationId: string; lastReadAt: string | null }>(
+        `/messages/${messageId}/unread-from`,
+        {},
+      ),
+    onSuccess: (r) => {
+      holdUnread(r.conversationId);
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
   });
 }
 

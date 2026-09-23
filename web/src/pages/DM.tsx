@@ -5,7 +5,7 @@ import MessageList from "../components/MessageList";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
-import { useMessages, usePostMessage, useMe, useConversations, useMarkRead, useSpectator } from "../lib/hooks";
+import { useMessages, usePostMessage, useMe, useConversations, useAutoMarkRead, useSpectator } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
 import Avatar from "../components/Avatar";
@@ -66,8 +66,7 @@ export default function DMPage() {
 
   const msgs = useMessages(convId ?? undefined);
   const post = usePostMessage(convId ?? undefined);
-  const markRead = useMarkRead(convId ?? undefined);
-  useEffect(() => { if (convId) markRead(); }, [convId, msgs.messages.length, markRead]);
+  useAutoMarkRead(convId ?? undefined, msgs.messages.length);
 
   const other = otherMemberId ? dir[otherMemberId] : undefined;
   const otherName = other?.name ?? "unknown";

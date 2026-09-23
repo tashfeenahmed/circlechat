@@ -2597,6 +2597,10 @@ body { position: relative; }
   color: var(--color-muted);
 }
 .sb-badge.mention { background: var(--color-ink); color: var(--color-paper); }
+/* The open conversation only shows a badge after "mark unread from here";
+   on the inverted active row the default ink-on-ink badge was invisible. */
+.sb-item.active .sb-badge { background: color-mix(in srgb, var(--color-paper) 22%, transparent); color: var(--color-paper); }
+.sb-item.active .sb-badge.mention { background: var(--color-paper); color: var(--color-ink); }
 .chan-head .ch-title { letter-spacing: -0.015em; }
 .chan-head .ch-meta { font-family: var(--font-mono); font-size: 12px; }
 .msg-head .name { font-weight: 600; }

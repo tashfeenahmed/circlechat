@@ -14,7 +14,8 @@ import {
 } from "../db/schema.js";
 import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
-import { publishToConversation } from "../lib/events.js";
+import { publishToConversation, publishToMember } from "../lib/events.js";
+import { markUnreadRejection, unreadAnchorSql } from "../lib/unread.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { fireChannelPostTrigger, resolveHandlesToMemberIds } from "../agents/mention-triggers.js";
 import { notifyForMessage } from "../lib/notifications.js";
@@ -493,6 +494,62 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       pinnedAt: now ? now.toISOString() : null,
     });
     return { ok: true, pinned: !!now };
+  });
+
+  // "Mark unread from here": move the caller's read cursor back to just before
+  // this message so it and everything after it badge as unread again (Slack's
+  // mark-unread). Only ever touches the CALLER's own conversation_members row;
+  // the new cursor is pushed to the caller's other sessions (tabs/devices) on
+  // their private member channel, never to the conversation.
+  app.post("/messages/:id/unread-from", async (req, reply) => {
+    const mId = (req.params as { id: string }).id;
+    const memberId = req.auth!.memberId!;
+    const [m] = await db
+      .select({
+        conversationId: messages.conversationId,
+        parentId: messages.parentId,
+        deletedAt: messages.deletedAt,
+      })
+      .from(messages)
+      .where(eq(messages.id, mId))
+      .limit(1);
+    const [inConv] = m
+      ? await db
+          .select({ memberId: conversationMembers.memberId })
+          .from(conversationMembers)
+          .where(
+            and(
+              eq(conversationMembers.conversationId, m.conversationId),
+              eq(conversationMembers.memberId, memberId),
+            ),
+          )
+          .limit(1)
+      : [];
+    const rejected = markUnreadRejection(m, !!inConv);
+    if (rejected || !m) {
+      const r = rejected ?? { status: 404 as const, error: "not_found" };
+      return reply.code(r.status).send({ error: r.error });
+    }
+
+    const [row] = await db
+      .update(conversationMembers)
+      .set({ lastReadAt: unreadAnchorSql(mId) })
+      .where(
+        and(
+          eq(conversationMembers.conversationId, m.conversationId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      )
+      .returning({ lastReadAt: conversationMembers.lastReadAt });
+    const lastReadAt = row?.lastReadAt ? new Date(row.lastReadAt).toISOString() : null;
+    await publishToMember(memberId, {
+      type: "conversation.read",
+      conversationId: m.conversationId,
+      memberId,
+      lastReadAt,
+      unread: true,
+    });
+    return { ok: true, conversationId: m.conversationId, lastReadAt };
   });
 
   // Newest first: the header panel shows the most recent pins on top.

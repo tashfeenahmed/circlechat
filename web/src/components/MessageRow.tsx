@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTasks } from "../lib/hooks";
-import { MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { CircleDashed, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
 import Avatar from "./Avatar";
 import MemberHoverCard from "./MemberHoverCard";
@@ -15,6 +15,7 @@ interface Props {
   meMemberId: string | undefined;
   onReact: (emoji: string) => void;
   onTogglePin?: () => void;
+  onMarkUnread?: () => void;
   onOpenThread?: (msgId: string) => void;
   inThread?: boolean;
   // Public read-only viewer: hide the reaction affordances (the server refuses
@@ -48,6 +49,7 @@ export default function MessageRow({
   meMemberId,
   onReact,
   onTogglePin,
+  onMarkUnread,
   onOpenThread,
   inThread,
   spectator,
@@ -224,6 +226,16 @@ export default function MessageRow({
           {!inThread && (
             <button onClick={() => onOpenThread?.(msg.id)} className="hb-btn" title="Reply in thread">
               <MessageSquare size={14} strokeWidth={2} />
+            </button>
+          )}
+          {onMarkUnread && (
+            <button
+              onClick={onMarkUnread}
+              className="hb-btn"
+              title="Mark unread from here"
+              aria-label="Mark unread from here"
+            >
+              <CircleDashed size={13} strokeWidth={2} />
             </button>
           )}
           {onTogglePin && (

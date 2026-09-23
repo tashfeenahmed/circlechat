@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Message } from "../api/client";
 import MessageRow from "./MessageRow";
 import { api } from "../api/client";
-import { useSpectator, useTogglePin } from "../lib/hooks";
+import { useSpectator, useTogglePin, useMarkUnreadFrom } from "../lib/hooks";
 
 interface Props {
   messages: Message[];
@@ -119,6 +119,15 @@ export default function MessageList({
     togglePin.mutate(msgId);
   }
 
+  // Mark-unread lives here for the same reason. The read cursor is per
+  // conversation and the badge counts top-level messages only, so it's offered
+  // on top-level messages (including a thread's root in the thread pane) but
+  // not on replies — the API refuses those (400 thread_reply).
+  const markUnread = useMarkUnreadFrom();
+  function unreadFrom(msgId: string) {
+    markUnread.mutate(msgId);
+  }
+
   return (
     <div ref={parentRef} className="messages" onScroll={onScroll}>
       {isLoadingOlder && (
@@ -152,6 +161,7 @@ export default function MessageList({
                 meMemberId={meMemberId}
                 onReact={(e) => react(m.id, e)}
                 onTogglePin={!spectator ? () => pin(m.id) : undefined}
+                onMarkUnread={!spectator && !m.parentId ? () => unreadFrom(m.id) : undefined}
                 onOpenThread={onOpenThread}
                 inThread={inThread}
                 spectator={spectator}

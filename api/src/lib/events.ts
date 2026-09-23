@@ -25,6 +25,10 @@ export type Event =
   | { type: "goal.deleted"; workspaceId: string; goalId: string }
   | { type: "notification.new"; memberId: string; notification: unknown }
   | { type: "notification.read"; memberId: string; notificationId: string | null }
+  // The caller's own read cursor moved (read, or "mark unread from here").
+  // Published ONLY on the member's private channel so other people never see
+  // someone else's read state; syncs the member's other tabs/devices.
+  | { type: "conversation.read"; conversationId: string; memberId: string; lastReadAt: string | null; unread: boolean }
   | { type: "workflow.run.updated"; workspaceId: string; workflowId: string; runId: string; status: string };
 
 const CONV_CHANNEL = (conversationId: string): string => `cc:conv:${conversationId}`;

@@ -10,7 +10,7 @@ import Modal from "../components/Modal";
 import Avatar from "../components/Avatar";
 import GettingStarted from "../components/GettingStarted";
 import { useOnboarding } from "../lib/onboarding";
-import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory, useMarkConversationNotificationsRead, useSpectator, usePins } from "../lib/hooks";
+import { useConversation, useConversations, useMessages, usePostMessage, useMe, useAutoMarkRead, useMembersDirectory, useMarkConversationNotificationsRead, useSpectator, usePins } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
 import { useQueryClient } from "@tanstack/react-query";
@@ -35,11 +35,7 @@ export default function ChannelPage() {
   const typingMap = useBus((s) => s.typing);
   const dir = useBus((s) => s.directory);
 
-  const markRead = useMarkRead(id);
-  useEffect(() => {
-    if (!id) return;
-    markRead();
-  }, [id, msgs.messages.length, markRead]);
+  useAutoMarkRead(id, msgs.messages.length);
 
   // Opening a conversation clears its inbox notifications (mentions + DMs) so
   // the user doesn't have to click each one in the bell. Fires once per open.

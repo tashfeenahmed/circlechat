@@ -2,13 +2,16 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { Hash, Plus, FolderOpen, Network, BookOpen, Inbox, LayoutGrid, Target, BarChart3, MoreHorizontal, Workflow, Boxes, Sparkles, CircleHelp } from "lucide-react";
 import { useOnboarding } from "../lib/onboarding";
-import { useConversations, useMe, useMembersDirectory, useNeedsYou, useTasks, useSpectator } from "../lib/hooks";
+import { useConversations, useMe, useMembersDirectory, useNeedsYou, useTasks, useSpectator, useUnreadHolds } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBus } from "../state/store";
 
 export default function Sidebar() {
   const convs = useConversations();
+  // "Mark unread from here" on the open conversation: keep its badge visible
+  // (the only feedback that the click did something) until you leave it.
+  const held = useUnreadHolds();
   const dir = useMembersDirectory();
   const me = useMe();
   const spectator = useSpectator();
@@ -283,8 +286,9 @@ export default function Sidebar() {
         )}
         {channels.map((c) => {
           const active = location.pathname === `/c/${c.id}`;
-          const unread = !active && (c.unreadCount ?? 0) > 0;
-          const mentions = !active ? c.unreadMentions ?? 0 : 0;
+          const showBadge = !active || held.has(c.id);
+          const unread = showBadge && (c.unreadCount ?? 0) > 0;
+          const mentions = showBadge ? c.unreadMentions ?? 0 : 0;
           return (
             <Link
               key={c.id}
@@ -338,7 +342,7 @@ export default function Sidebar() {
           const dmConv = existingDms.find(
             (c) => c.memberIds.includes(d.memberId) && c.memberIds.includes(me.data?.memberId ?? ""),
           );
-          const unread = !active && (dmConv?.unreadCount ?? 0) > 0;
+          const unread = (!active || (!!dmConv && held.has(dmConv.id))) && (dmConv?.unreadCount ?? 0) > 0;
           return (
             <Link
               key={d.memberId}
