@@ -445,7 +445,7 @@ function RenameChannelModal({
               className="mt-1 w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[13px] leading-relaxed"
             />
           </label>
-          {err && <p className="text-[12px] text-[var(--color-err)]">{err}</p>}
+          {err && <p role="alert" className="text-[12px] text-[var(--color-err)]">{err}</p>}
           <div className="flex justify-end gap-2 pt-1">
             <button onClick={onClose} className="btn sm ghost">Cancel</button>
             <button onClick={save} disabled={busy || !name.trim()} className="btn sm primary">
@@ -541,7 +541,7 @@ function ChannelMembersModal({
           </div>
           <button onClick={onClose} className="tb-btn" title="Close"><X size={14} strokeWidth={2} /></button>
         </div>
-        {err && <div className="px-5 py-2 text-[12px] text-[var(--color-err)]">{err}</div>}
+        {err && <div role="alert" className="px-5 py-2 text-[12px] text-[var(--color-err)]">{err}</div>}
         <div className="flex-1 overflow-auto">
           <ul className="divide-y divide-[var(--color-hair)]">
             {all.map((m) => (

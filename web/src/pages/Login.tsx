@@ -53,7 +53,7 @@ export default function LoginPage() {
               className="mt-1 w-full border border-[var(--color-hair-2)] rounded px-3 py-2"
             />
           </label>
-          {err && <p className="text-[12px] text-[var(--color-err)]">{err}</p>}
+          {err && <p role="alert" className="text-[12px] text-[var(--color-err)]">{err}</p>}
           <button
             type="submit"
             className="w-full bg-[var(--color-ink)] text-paper rounded py-2 text-[13px] font-medium"

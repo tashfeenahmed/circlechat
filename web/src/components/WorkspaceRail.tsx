@@ -102,7 +102,7 @@ export default function WorkspaceRail({ me }: Props) {
                   className="mt-1 w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[14px]"
                 />
               </label>
-              {err && <p className="text-[12px] text-[var(--color-err)]">{err}</p>}
+              {err && <p role="alert" className="text-[12px] text-[var(--color-err)]">{err}</p>}
             </div>
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-[var(--color-hair)]">
               <button
