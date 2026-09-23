@@ -427,7 +427,7 @@ function BudgetControl({
         Estimated spend (the agent calls the gateway directly, so costs are derived from run sizes).
         At the cap the agent pauses until you raise it or the month rolls over.
       </p>
-      {err && <p className="text-[12px] text-red-600">{err}</p>}
+      {err && <p role="alert" className="text-[12px] text-red-600">{err}</p>}
     </div>
   );
 }
@@ -523,7 +523,7 @@ function HeartbeatControl({
         Heartbeats only fire when there's new activity in the agent's channels or open tasks.
         Quiet periods skip the LLM call entirely.
       </p>
-      {err && <p className="text-[12px] text-red-600">{err}</p>}
+      {err && <p role="alert" className="text-[12px] text-red-600">{err}</p>}
     </div>
   );
 }

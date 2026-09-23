@@ -183,7 +183,7 @@ export default function SignupPage() {
                 className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2"
               />
             </div>
-            {err && <p className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
+            {err && <p role="alert" className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
             <div className="flex justify-between mt-4">
               <button type="button" onClick={() => { setErr(null); setStep(0); }} className="text-[13px] text-[var(--color-muted)]">
                 Back
@@ -353,7 +353,7 @@ export default function SignupPage() {
               )}
             </div>
 
-            {err && <p className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
+            {err && <p role="alert" className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
             {busy && (
               <p className="text-[12px] text-[var(--color-muted)] mt-3">
                 Setting up… the first install downloads the agent runtime image (several GB), so this can take a
