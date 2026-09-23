@@ -236,6 +236,9 @@ export function useMessages(convId: string | undefined, parentId?: string | null
       }
       if (ev.type === "message.deleted" && ev.conversationId === convId) {
         qc.setQueryData<MsgCache>(key, (old) => filterMsgs(old, (m) => m.id !== ev.messageId));
+        // A deleted pinned message drops out of the pins list server-side;
+        // refresh so the header count/panel don't keep showing it.
+        qc.invalidateQueries({ queryKey: ["pins", convId] });
       }
       if (ev.type === "reaction.toggled" && ev.conversationId === convId) {
         qc.setQueryData<MsgCache>(key, (old) =>
