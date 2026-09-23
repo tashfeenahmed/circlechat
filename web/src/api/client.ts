@@ -105,6 +105,8 @@ export interface Message {
   deletedAt?: string | null;
   reactions: Array<{ emoji: string; memberId: string }>;
   replyCount: number;
+  pinnedAt?: string | null;
+  pinnedBy?: string | null;
 }
 
 export interface Attachment {

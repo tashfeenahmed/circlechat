@@ -5,6 +5,7 @@ export type Event =
   | { type: "message.edited"; conversationId: string; messageId: string; bodyMd: string; editedAt: string }
   | { type: "message.deleted"; conversationId: string; messageId: string }
   | { type: "reaction.toggled"; conversationId: string; messageId: string; memberId: string; emoji: string; added: boolean }
+  | { type: "message.pinned"; conversationId: string; messageId: string; memberId: string; pinnedAt: string | null }
   | { type: "typing"; conversationId: string; memberId: string }
   | { type: "presence.update"; memberId: string; status: string }
   | { type: "agent.run.started"; conversationId?: string | null; agentId: string; agentName?: string | null; agentHandle?: string | null; runId: string; trigger: string }

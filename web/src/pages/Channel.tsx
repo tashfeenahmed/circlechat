@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Trash2, Pencil, Archive, ArchiveRestore, Bell, BellOff, X, UserMinus, UserPlus, Bot } from "lucide-react";
+import { Trash2, Pencil, Pin, Archive, ArchiveRestore, Bell, BellOff, X, UserMinus, UserPlus, Bot } from "lucide-react";
 import MessageList from "../components/MessageList";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
@@ -10,7 +10,7 @@ import Modal from "../components/Modal";
 import Avatar from "../components/Avatar";
 import GettingStarted from "../components/GettingStarted";
 import { useOnboarding } from "../lib/onboarding";
-import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory, useMarkConversationNotificationsRead, useSpectator } from "../lib/hooks";
+import { useConversation, useConversations, useMessages, usePostMessage, useMe, useMarkRead, useMembersDirectory, useMarkConversationNotificationsRead, useSpectator, usePins } from "../lib/hooks";
 import { api } from "../api/client";
 import { useBus } from "../state/store";
 import { useQueryClient } from "@tanstack/react-query";
@@ -112,6 +112,9 @@ export default function ChannelPage() {
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [pinsOpen, setPinsOpen] = useState(false);
+  const pins = usePins(id);
+  const pinCount = pins.data?.pins.length ?? 0;
 
   async function archiveChannel() {
     if (!c) return;
@@ -168,6 +171,16 @@ export default function ChannelPage() {
             </div>
           )}
           <div className="ch-right">
+            {pinCount > 0 && (
+              <button
+                onClick={() => setPinsOpen(true)}
+                className="ch-btn inline-flex items-center gap-1"
+                title="Pinned messages"
+                aria-label={`Pinned messages (${pinCount})`}
+              >
+                <Pin size={13} strokeWidth={2} /> {pinCount}
+              </button>
+            )}
             <button onClick={() => setMembersOpen(true)} className="ch-btn">
               {memberCount} members
             </button>
@@ -290,7 +303,82 @@ export default function ChannelPage() {
           onClose={() => setMembersOpen(false)}
         />
       )}
+      {pinsOpen && (
+        <PinsModal
+          pins={pins.data?.pins ?? []}
+          loading={pins.isLoading}
+          dir={dir}
+          onClose={() => setPinsOpen(false)}
+        />
+      )}
     </main>
+  );
+}
+
+// Read-only list of the channel's pinned messages (newest pin first). The
+// body is plain text (tags stripped) — the panel is for jumping, the message
+// row renders the real markdown.
+function PinsModal({
+  pins,
+  loading,
+  dir,
+  onClose,
+}: {
+  pins: import("../api/client").Message[];
+  loading: boolean;
+  dir: Record<string, { name?: string; handle?: string } | undefined>;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      onClose={onClose}
+      className="bg-paper rounded-md border border-[var(--color-hair-2)] shadow-lg w-[520px] max-w-[92vw] flex flex-col"
+      style={{ maxHeight: "calc(100vh - 48px)" }}
+    >
+      <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-hair)] shrink-0">
+        <div>
+          <h2 className="text-[15px] font-semibold">Pinned messages</h2>
+          <p className="text-[12px] text-[var(--color-muted)] mt-0.5">
+            Hover any message and click the pin to keep it here.
+          </p>
+        </div>
+        <button onClick={onClose} className="tb-btn" title="Close" aria-label="Close pinned messages">
+          <X size={14} strokeWidth={2} />
+        </button>
+      </div>
+      <div className="flex-1 overflow-auto">
+        {loading ? (
+          <div className="px-5 py-4 text-[12.5px] text-[var(--color-muted)]">Loading pinned messages…</div>
+        ) : pins.length === 0 ? (
+          <div className="px-5 py-6 text-[12.5px] text-[var(--color-muted)]">
+            Nothing pinned yet. Pin a decision, a link, or a standing rule so it
+            stops drowning in scrollback.
+          </div>
+        ) : (
+          <ul className="divide-y divide-[var(--color-hair)]">
+            {pins.map((m) => {
+              const who = dir[m.memberId];
+              const text = m.bodyMd.replace(/[*_`>#\[\]]/g, "").trim();
+              return (
+                <li key={m.id} className="px-5 py-3">
+                  <div className="text-[12px] font-medium truncate">
+                    {who?.name ?? "Unknown"}
+                    {m.pinnedBy && dir[m.pinnedBy]?.name ? (
+                      <span className="text-[var(--color-muted)] font-normal">
+                        {" "}· pinned by {dir[m.pinnedBy]!.name}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="text-[13px] mt-0.5 whitespace-pre-wrap break-words">
+                    {text.length > 280 ? text.slice(0, 280) + "…" : text}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </Modal>
   );
 }
 

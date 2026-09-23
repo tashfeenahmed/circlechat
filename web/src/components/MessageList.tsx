@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Message } from "../api/client";
 import MessageRow from "./MessageRow";
 import { api } from "../api/client";
-import { useSpectator } from "../lib/hooks";
+import { useSpectator, useTogglePin } from "../lib/hooks";
 
 interface Props {
   messages: Message[];
@@ -111,6 +111,14 @@ export default function MessageList({
     }
   }
 
+  // Pin toggling lives here so both the channel list and thread pane get it;
+  // the WS `message.pinned` echo updates the row (and invalidates the pins
+  // panel), so no optimistic bookkeeping is needed.
+  const togglePin = useTogglePin();
+  function pin(msgId: string) {
+    togglePin.mutate(msgId);
+  }
+
   return (
     <div ref={parentRef} className="messages" onScroll={onScroll}>
       {isLoadingOlder && (
@@ -143,6 +151,7 @@ export default function MessageList({
                 grouped={grouped}
                 meMemberId={meMemberId}
                 onReact={(e) => react(m.id, e)}
+                onTogglePin={!spectator ? () => pin(m.id) : undefined}
                 onOpenThread={onOpenThread}
                 inThread={inThread}
                 spectator={spectator}

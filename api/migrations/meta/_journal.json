@@ -204,6 +204,13 @@
       "when": 1786406400000,
       "tag": "0028_security_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790164800000,
+      "tag": "0029_pinned_messages",
+      "breakpoints": true
     }
   ]
 }
