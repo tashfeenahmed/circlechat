@@ -355,7 +355,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
           autoFocus
         />
       </label>
-      {err && <p className="text-[12px] text-[var(--color-err)] mb-2">{err}</p>}
+      {err && <p role="alert" className="text-[12px] text-[var(--color-err)] mb-2">{err}</p>}
       {result && (
         <div className="mb-3">
           <Copyable label="Invite URL" text={result} />
@@ -784,7 +784,7 @@ function InstallAgent({
         </Field>
       </div>
 
-      {err && <p className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
+      {err && <p role="alert" className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
       <div className="flex justify-between items-center gap-2 mt-4">
         <button onClick={onBack} className="btn sm ghost">← Back</button>
         <div className="flex gap-2">
@@ -1045,7 +1045,7 @@ function AttachAgent({
         </Field>
       </div>
 
-      {err && <p className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
+      {err && <p role="alert" className="text-[12px] text-[var(--color-err)] mt-3">{err}</p>}
       <div className="flex justify-between items-center gap-2 mt-4">
         <button onClick={() => setStep("runtime")} className="btn sm ghost">← Runtime</button>
         <div className="flex gap-2">

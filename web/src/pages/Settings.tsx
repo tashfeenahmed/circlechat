@@ -76,7 +76,7 @@ export default function SettingsPage() {
               <span>{mission.length}/2000</span>
               {isAdmin && (
                 <div className="flex items-center gap-3">
-                  {err && <span className="text-red-600">{err}</span>}
+                  {err && <span role="alert" className="text-red-600">{err}</span>}
                   {saved && !dirty && <span className="text-green-700">Saved.</span>}
                   <button
                     onClick={save}
@@ -214,7 +214,7 @@ function ProfileSection({ user }: { user: { name: string; handle: string; email:
         />
       </div>
       <div className="flex items-center justify-end gap-3 mt-3 text-[12px] text-[var(--color-muted)]">
-        {err && <span className="text-[var(--color-err)]">{err}</span>}
+        {err && <span role="alert" className="text-[var(--color-err)]">{err}</span>}
         {saved && !dirty && <span className="text-green-700">Saved.</span>}
         <button onClick={save} disabled={!dirty || busy} className="btn sm primary disabled:opacity-40">
           {busy ? "Saving…" : "Save profile"}
@@ -292,7 +292,7 @@ function PasswordForm() {
       </div>
       <div className="flex items-center justify-end gap-3 mt-3 text-[12px] text-[var(--color-muted)]">
         {next && confirm && next !== confirm && <span>Passwords don't match.</span>}
-        {err && <span className="text-[var(--color-err)]">{err}</span>}
+        {err && <span role="alert" className="text-[var(--color-err)]">{err}</span>}
         {done && <span className="text-green-700">Password changed.</span>}
         <button onClick={change} disabled={!ready || busy} className="btn sm disabled:opacity-40">
           {busy ? "Changing…" : "Change password"}
@@ -370,7 +370,7 @@ function WorkspaceBudgetSection({
         <span className="text-[12px] text-[var(--color-muted)]">/ month</span>
         {isAdmin && (
           <div className="flex items-center gap-3 ml-auto text-[12px] text-[var(--color-muted)]">
-            {err && <span className="text-[var(--color-err)]">{err}</span>}
+            {err && <span role="alert" className="text-[var(--color-err)]">{err}</span>}
             {saved && !dirty && <span className="text-green-700">Saved.</span>}
             <button onClick={save} disabled={!dirty || busy} className="btn sm primary disabled:opacity-40">
               {busy ? "Saving…" : "Save budget"}
@@ -456,7 +456,7 @@ function MembersAdminSection({
       <p className="text-[13px] text-[var(--color-muted)] mb-3">
         Manage who's in this workspace and their role. Admins can invite, promote, and remove.
       </p>
-      {err && <p className="text-[12px] text-[var(--color-err)] mb-2">{err}</p>}
+      {err && <p role="alert" className="text-[12px] text-[var(--color-err)] mb-2">{err}</p>}
 
       <ul className="divide-y divide-[var(--color-hair)] border border-[var(--color-hair)] rounded mb-4">
         {memberRows.map((m) => {

@@ -231,7 +231,7 @@ function WorkflowsPanel() {
               spellCheck={false}
             />
           </label>
-          {error && <p className="mt-2 text-[12px] text-[var(--color-err)]">{error}</p>}
+          {error && <p role="alert" className="mt-2 text-[12px] text-[var(--color-err)]">{error}</p>}
           <div className="flex gap-2 mt-3">
             <button className="btn sm" type="button" disabled={create.isPending} onClick={() => {
               try { JSON.parse(definition); setError(""); create.mutate(); }
@@ -386,7 +386,7 @@ function ConnectorsPanel() {
             <Field label="Authentication"><select className="input w-full" value={authType} onChange={(e) => setAuthType(e.target.value)}><option value="none">None</option><option value="bearer">Bearer token</option><option value="header">Custom headers</option><option value="oauth2">OAuth 2</option></select></Field>
             {authType !== "none" && <Field label={authType === "oauth2" ? "OAuth client secret" : "Token (encrypted)"}><input className="input w-full" type="password" value={token} onChange={(e) => setToken(e.target.value)} /></Field>}
           </div>
-          {create.error && <p className="mt-2 text-[12px] text-[var(--color-err)]">{(create.error as Error).message}</p>}
+          {create.error && <p role="alert" className="mt-2 text-[12px] text-[var(--color-err)]">{(create.error as Error).message}</p>}
           <div className="flex gap-2 mt-3"><button className="btn sm" onClick={() => create.mutate()} disabled={create.isPending}>Save connector</button><button className="btn sm ghost" onClick={() => setCreating(false)}>Cancel</button></div>
         </section>
       )}

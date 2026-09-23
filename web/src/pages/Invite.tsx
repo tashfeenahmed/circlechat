@@ -79,7 +79,7 @@ export default function InvitePage() {
             )}
           </p>
         )}
-        {err && <p className="text-[12px] text-[var(--color-err)] mb-2">{err}</p>}
+        {err && <p role="alert" className="text-[12px] text-[var(--color-err)] mb-2">{err}</p>}
 
         {/* ── Already logged in ── */}
         {viewer && viewer.alreadyMember && (
