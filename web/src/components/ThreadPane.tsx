@@ -49,6 +49,10 @@ export default function ThreadPane({ conversationId, rootMessage, onClose }: Pro
       <Composer
         placeholder="Reply in thread…"
         conversationId={conversationId}
+        // Thread replies post to the channel conversation, so the composer
+        // needs its own draft scope — otherwise the thread draft and the
+        // channel draft would overwrite each other.
+        draftScope={`thread:${rootMessage.id}`}
         hideHint
         onSend={async (bodyMd, attachments) => {
           await post.mutateAsync({ bodyMd, attachments });

@@ -8,6 +8,7 @@ import TopSearch from "./TopSearch";
 import NotificationBell from "./NotificationBell";
 import WorkspaceRail from "./WorkspaceRail";
 import { api } from "../api/client";
+import { clearAllDrafts } from "../lib/drafts";
 import { useConversations, useMe, useMembersDirectory, useSpectator } from "../lib/hooks";
 import { useBus } from "../state/store";
 import { useEffect } from "react";
@@ -34,6 +35,7 @@ export default function AppShell() {
   }, [location.pathname, closeDrawer]);
 
   async function logout() {
+    clearAllDrafts();
     try {
       await api.post("/auth/logout");
     } catch {
