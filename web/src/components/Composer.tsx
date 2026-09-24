@@ -10,12 +10,13 @@ import {
   Smile,
   SendHorizontal,
   X,
+  CircleAlert,
 } from "lucide-react";
 import { api, type Attachment } from "../api/client";
 import { useBus } from "../state/store";
 import { useSpectator } from "../lib/hooks";
 import { clearDraft, loadDraft, saveDraft } from "../lib/drafts";
-import { describeSendError, describeUploadError } from "../lib/sendError";
+import { describeSendError, describeUploadError, type SendErrorLike } from "../lib/sendError";
 
 interface Props {
   placeholder: string;
@@ -41,9 +42,10 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
   const [body, setBody] = useState(() => loadDraft(scope)?.body ?? "");
   const [files, setFiles] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
-  // Last send/upload failure, shown above the textarea. Cleared on the next
-  // submit attempt; the text stays in the box the whole time.
-  const [sendError, setSendError] = useState<string | null>(null);
+  // Last send/upload failure, shown as a slim notice above the textarea.
+  // Cleared on the next submit attempt; the text stays in the box the whole
+  // time. `kind` lets a successful upload clear only an upload error.
+  const [sendError, setSendError] = useState<{ kind: "send" | "upload"; text: string } | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const dir = useBus((s) => s.directory);
   const [mentionOpen, setMentionOpen] = useState<{ q: string; at: number } | null>(null);
@@ -218,8 +220,11 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
     } catch (e) {
       // A failed send used to vanish: the optimistic row rolled back and the
       // rejection hit no handler. Keep the text in the box (the draft keeps
-      // it across reloads anyway) and show why it did not go through.
-      setSendError(describeSendError(e as { status?: number; message?: string }));
+      // it across reloads anyway) and show why it did not go through — unless
+      // the composer has since moved to another conversation, where the
+      // notice would describe a message that isn't in front of the user.
+      if (scopeRef.current !== sentScope) return;
+      setSendError({ kind: "send", text: describeSendError(e as SendErrorLike) });
     } finally {
       setBusy(false);
     }
@@ -252,11 +257,11 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
     try {
       const att = await api.upload<Attachment>("/uploads", file);
       setFiles((f) => [...f, att]);
-      setSendError(null);
+      setSendError((prev) => (prev?.kind === "upload" ? null : prev));
     } catch (err) {
       // Silence here meant an attachment that never appeared and never
       // explained itself; name the file and the reason instead.
-      setSendError(describeUploadError(err as { status?: number }, file.name));
+      setSendError({ kind: "upload", text: describeUploadError(err as SendErrorLike, file.name) });
     }
     e.target.value = "";
   }
@@ -294,21 +299,22 @@ export default function Composer({ placeholder, onSend, conversationId, draftSco
   return (
     <div className="composer-wrap">
       {sendError && (
-        // role=alert so screen readers announce the failure; the palette
-        // mirrors the menu's danger tokens (var(--color-err)).
+        // A slim inline notice, deliberately not a block: small red text with
+        // an icon, no fill or border. role=alert so screen readers announce it.
         <div
           role="alert"
-          className="mb-1.5 flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-[12px]"
-          style={{ borderColor: "rgba(220, 38, 38, 0.25)", background: "rgba(220, 38, 38, 0.06)", color: "var(--color-err)" }}
+          className="mb-1 flex items-center gap-1.5 px-1 text-[12px] leading-5"
+          style={{ color: "var(--color-err)" }}
         >
-          <span>{sendError}</span>
+          <CircleAlert size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate" title={sendError.text}>{sendError.text}</span>
           <button
             type="button"
             aria-label="Dismiss error"
             onClick={() => setSendError(null)}
-            className="shrink-0 opacity-70 hover:opacity-100"
+            className="shrink-0 rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-ink)]"
           >
-            <X size={13} strokeWidth={2} />
+            <X size={12} strokeWidth={2} />
           </button>
         </div>
       )}

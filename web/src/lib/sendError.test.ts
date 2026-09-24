@@ -1,35 +1,42 @@
 import { describe, expect, it } from "vitest";
 import { describeSendError, describeUploadError } from "./sendError";
 
-const err = (status: number | undefined, message?: string) =>
-  Object.assign(new Error(message ?? `http_${status}`), status ? { status } : {});
+// Shaped like the api client's thrown Error: message = server `error` code.
+const err = (status: number | undefined, code?: string, body?: object) =>
+  Object.assign(new Error(code ?? `http_${status}`), status ? { status } : {}, body ? { body } : {});
 
 describe("describeSendError", () => {
-  it("explains a spectator/removed 403 without blaming the network", () => {
-    expect(describeSendError(err(403))).toMatch(/can’t post here/i);
+  it("maps the API's over-limit validation error to a length message", () => {
+    const e = err(400, "validation", {
+      error: "validation",
+      issues: [{ code: "too_big", maximum: 20000, type: "string", inclusive: true, path: ["bodyMd"], message: "String must contain at most 20000 character(s)" }],
+    });
+    expect(describeSendError(e)).toBe("Message too long (max 20,000 characters).");
   });
-  it("explains a deleted conversation (404)", () => {
-    expect(describeSendError(err(404))).toMatch(/no longer exists/i);
+  it("does not call other validation errors 'too long'", () => {
+    const e = err(400, "validation", { issues: [{ code: "invalid_type", path: ["parentId"] }] });
+    expect(describeSendError(e)).toBe("Couldn’t send — try again.");
+  });
+  it("explains not_a_member without mentioning archiving", () => {
+    const msg = describeSendError(err(403, "not_a_member"));
+    expect(msg).toMatch(/no longer a member/i);
+    expect(msg).not.toMatch(/archiv/i);
+  });
+  it("words invalid_parent without leaking the code", () => {
+    const msg = describeSendError(err(400, "invalid_parent"));
+    expect(msg).not.toContain("invalid_parent");
+    expect(msg).toMatch(/replying to/i);
   });
   it("tells the user to slow down on 429", () => {
     expect(describeSendError(err(429))).toMatch(/too fast/i);
   });
-  it("splits oversized messages on 413", () => {
-    expect(describeSendError(err(413))).toMatch(/too large/i);
-  });
-  it("keeps the draft safe on 5xx", () => {
-    expect(describeSendError(err(502))).toMatch(/still in the box/i);
-  });
   it("recognises an offline fetch failure (no status)", () => {
     expect(describeSendError({ message: "Failed to fetch" })).toMatch(/offline/i);
   });
-  it("falls back to the server message for other failures", () => {
-    expect(describeSendError(err(undefined, "rate budget exhausted"))).toContain(
-      "rate budget exhausted",
-    );
-  });
-  it("never returns an empty string", () => {
-    expect(describeSendError({}).length).toBeGreaterThan(0);
+  it("never leaks an unknown server code", () => {
+    expect(describeSendError(err(400, "some_new_code"))).toBe("Couldn’t send — try again.");
+    expect(describeSendError(err(502, "server_error"))).toBe("Couldn’t send — try again.");
+    expect(describeSendError({})).toBe("Couldn’t send — try again.");
   });
 });
 
@@ -38,10 +45,7 @@ describe("describeUploadError", () => {
     expect(describeUploadError(err(413), "clip.mp4")).toContain("clip.mp4");
     expect(describeUploadError(err(413), "clip.mp4")).toMatch(/too large/i);
   });
-  it("says uploads are not allowed here on 403", () => {
-    expect(describeUploadError(err(403), "x.png")).toMatch(/can’t attach/i);
-  });
   it("falls back with the file name", () => {
-    expect(describeUploadError(err(500), "x.png")).toContain("x.png");
+    expect(describeUploadError(err(500, "no_file"), "x.png")).toBe("Couldn’t upload “x.png” — try again.");
   });
 });
