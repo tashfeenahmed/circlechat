@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useTasks } from "../lib/hooks";
-import { CircleDashed, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { CircleDashed, Check, Copy, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
+import { copyText } from "../lib/clipboard";
 import Avatar from "./Avatar";
 import MemberHoverCard from "./MemberHoverCard";
 import Tooltip from "./Tooltip";
@@ -60,6 +61,14 @@ export default function MessageRow({
   const [hovering, setHovering] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(msg.bodyMd);
+  const [copied, setCopied] = useState(false);
+
+  async function doCopy() {
+    if (await copyText(msg.bodyMd)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }
 
   const displayName = who?.name ?? (msg.memberId === meMemberId ? "me" : msg.memberId.slice(0, 6));
   const handle = who?.handle;
@@ -210,6 +219,15 @@ export default function MessageRow({
         >
           {!spectator && (
             <>
+              <button
+                onClick={doCopy}
+                className="hb-btn"
+                title={copied ? "Copied" : "Copy text"}
+                aria-label={copied ? "Copied" : "Copy message text"}
+              >
+                {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={2} />}
+              </button>
+              <span className="hb-sep" />
               {QUICK_EMOJIS.map((e) => (
                 <button
                   key={e}
