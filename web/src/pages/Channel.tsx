@@ -2,6 +2,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { Trash2, Pencil, Pin, Archive, ArchiveRestore, Bell, BellOff, X, UserMinus, UserPlus, Bot } from "lucide-react";
 import MessageList from "../components/MessageList";
+import { useSearchJump } from "../lib/useSearchJump";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
@@ -21,6 +22,10 @@ export default function ChannelPage() {
   const spectator = useSpectator();
   const onboarding = useOnboarding(id);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
+
+  // Search jump (?m=<messageId>[&thread=<rootId>]): land on the matched
+  // message instead of the newest one, opening the thread pane for replies.
+  const { listJump, threadJump } = useSearchJump(id);
 
   const conv = useConversation(id);
   const msgs = useMessages(id);
@@ -238,6 +243,7 @@ export default function ChannelPage() {
           onLoadOlder={msgs.loadOlder}
           hasOlder={msgs.hasOlder}
           isLoadingOlder={msgs.isLoadingOlder}
+          jump={listJump}
         />
 
         <AgentActivity conversationId={id} />
@@ -280,6 +286,7 @@ export default function ChannelPage() {
           conversationId={id}
           rootMessage={threadMsg}
           onClose={closeThread}
+          jump={threadJump}
         />
       )}
       {renameOpen && c && (

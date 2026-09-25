@@ -245,6 +245,18 @@ body { position: relative; }
   border-radius: 2px;
 }
 
+/* Search jump target: the message a search result pointed at, flashed after
+   the list scrolls to it. Fades back to normal over ~2.5s. */
+@keyframes msg-hit-flash {
+  0% { background: rgba(255, 212, 0, 0.28); }
+  70% { background: rgba(255, 212, 0, 0.18); }
+  100% { background: transparent; }
+}
+.msg.msg-hit {
+  animation: msg-hit-flash 2.5s ease-out 1;
+  border-radius: 6px;
+}
+
 /* ─── skills page ─── */
 .agent-block {
   background: var(--color-paper);
@@ -1186,6 +1198,20 @@ body { position: relative; }
   padding: 8px 0;
   font-size: 12px;
   color: var(--color-muted-2);
+}
+.ml-jump-miss {
+  position: sticky;
+  top: 8px;
+  z-index: 2;
+  width: fit-content;
+  margin: 8px auto 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-ink);
+  background: var(--color-paper);
+  border: 1px solid var(--color-hair);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 /* message row */

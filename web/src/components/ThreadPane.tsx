@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import MessageList from "./MessageList";
+import type { JumpTarget } from "../lib/useSearchJump";
 import Composer from "./Composer";
 import { useMessages, usePostMessage, useMe } from "../lib/hooks";
 import type { Message } from "../api/client";
@@ -10,9 +11,11 @@ interface Props {
   conversationId: string;
   rootMessage: Message;
   onClose: () => void;
+  // Search jump: flash/scroll to this reply inside the thread.
+  jump?: JumpTarget | null;
 }
 
-export default function ThreadPane({ conversationId, rootMessage, onClose }: Props) {
+export default function ThreadPane({ conversationId, rootMessage, onClose, jump }: Props) {
   const me = useMe();
   const replies = useMessages(conversationId, rootMessage.id);
   const post = usePostMessage(conversationId, rootMessage.id);
@@ -44,7 +47,11 @@ export default function ThreadPane({ conversationId, rootMessage, onClose }: Pro
         </button>
       </header>
       <div className="thread-body">
-        <MessageList messages={all} meMemberId={me.data?.memberId ?? undefined} inThread />
+        <MessageList messages={all} meMemberId={me.data?.memberId ?? undefined} inThread
+          // Wait for the replies to load before looking for the target, or it
+          // would be reported missing against the root-only first render.
+          jump={replies.isSuccess ? jump : null}
+        />
       </div>
       <Composer
         placeholder="Reply in thread…"

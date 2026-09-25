@@ -2,6 +2,7 @@ import { useParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, BellOff } from "lucide-react";
 import MessageList from "../components/MessageList";
+import { useSearchJump } from "../lib/useSearchJump";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
@@ -26,6 +27,11 @@ export default function DMPage() {
   const openDetails = useBus((s) => s.openDetails);
   const [convId, setConvId] = useState<string | null>(null);
   const creatingRef = useRef<string | null>(null);
+
+  // Search jump (?m=<messageId>[&thread=<rootId>]&c=<convId>) — see
+  // Channel.tsx. The DM conversation id resolves asynchronously; the hook
+  // waits until it matches the hit's conversation.
+  const { listJump, threadJump } = useSearchJump(convId);
 
   useEffect(() => {
     if (!otherMemberId || !me.data?.memberId) return;
@@ -136,6 +142,7 @@ export default function DMPage() {
               onLoadOlder={msgs.loadOlder}
               hasOlder={msgs.hasOlder}
               isLoadingOlder={msgs.isLoadingOlder}
+              jump={listJump}
             />
             <AgentActivity conversationId={convId} />
             <Composer
@@ -164,6 +171,7 @@ export default function DMPage() {
           conversationId={convId}
           rootMessage={threadMsg}
           onClose={closeThread}
+          jump={threadJump}
         />
       )}
     </main>
