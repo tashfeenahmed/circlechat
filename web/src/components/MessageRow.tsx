@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTasks } from "../lib/hooks";
 import { CircleDashed, Check, Copy, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
@@ -61,12 +61,22 @@ export default function MessageRow({
   const [hovering, setHovering] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(msg.bodyMd);
+  // Keyboard users reach the row's own buttons/links with Tab; show the hover
+  // bar while focus is (visibly) inside the row so its actions are reachable.
+  const [focusWithin, setFocusWithin] = useState(false);
   const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
+  // Attachment-only messages have no text to copy.
+  const canCopy = msg.bodyMd.trim().length > 0;
 
   async function doCopy() {
+    // Copies the raw markdown as authored (mentions stay `@handle`), which is
+    // also what edit shows — not the rendered HTML.
     if (await copyText(msg.bodyMd)) {
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1500);
     }
   }
 
@@ -102,6 +112,12 @@ export default function MessageRow({
       style={{ minHeight: ROW_MIN_H }}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
+      onFocus={(e) => {
+        if ((e.target as HTMLElement).matches?.(":focus-visible")) setFocusWithin(true);
+      }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusWithin(false);
+      }}
     >
       <div className="msg-gutter">
         {!grouped ? (
@@ -212,12 +228,13 @@ export default function MessageRow({
           </button>
         )}
       </div>
-      {hovering && !editing && !(spectator && inThread) && (
+      {(hovering || focusWithin) && !editing && !(spectator && inThread && !canCopy) && (
         <div
           className="msg-hoverbar"
           onMouseDown={(e) => e.preventDefault()}
         >
-          {!spectator && (
+          {canCopy && (
+            // Read-only, so spectators get it too.
             <>
               <button
                 onClick={doCopy}
@@ -227,7 +244,11 @@ export default function MessageRow({
               >
                 {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={2} />}
               </button>
-              <span className="hb-sep" />
+              {!(spectator && inThread) && <span className="hb-sep" />}
+            </>
+          )}
+          {!spectator && (
+            <>
               {QUICK_EMOJIS.map((e) => (
                 <button
                   key={e}

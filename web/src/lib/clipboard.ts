@@ -16,8 +16,12 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     // fall through to the legacy path
   }
+  let ta: HTMLTextAreaElement | undefined
+  // select() moves focus into the hidden textarea; hand it back afterwards so
+  // copying doesn't yank focus out of e.g. the composer.
+  const prevFocus = document.activeElement as HTMLElement | null
   try {
-    const ta = document.createElement('textarea')
+    ta = document.createElement('textarea')
     ta.value = text
     // Keep it out of view and out of the scroll/aria tree.
     ta.setAttribute('readonly', '')
@@ -27,10 +31,14 @@ export async function copyText(text: string): Promise<boolean> {
     ta.setAttribute('aria-hidden', 'true')
     document.body.appendChild(ta)
     ta.select()
-    const ok = document.execCommand('copy')
-    document.body.removeChild(ta)
-    return ok
+    return document.execCommand('copy')
   } catch {
     return false
+  } finally {
+    // Always detach, even if execCommand threw.
+    if (ta) {
+      try { document.body.removeChild(ta) } catch { /* already gone */ }
+    }
+    try { prevFocus?.focus?.() } catch { /* ignore */ }
   }
 }

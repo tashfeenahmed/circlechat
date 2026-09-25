@@ -94,6 +94,27 @@ describe('copyText', () => {
     } finally { restoreNav(); dom.restore() }
   })
 
+  it('removes the textarea and reports failure when execCommand throws', async () => {
+    const dom = installFakeDom(true)
+    dom.execCommand.mockImplementation(() => { throw new Error('SecurityError') })
+    const restoreNav = setClipboard({})
+    try {
+      expect(await copyText('x')).toBe(false)
+      expect(dom.attached).toHaveLength(0)
+    } finally { restoreNav(); dom.restore() }
+  })
+
+  it('hands focus back to the previously focused element', async () => {
+    const dom = installFakeDom(true)
+    const focus = vi.fn()
+    ;(globalThis as unknown as { document: { activeElement: unknown } }).document.activeElement = { focus }
+    const restoreNav = setClipboard({})
+    try {
+      expect(await copyText('x')).toBe(true)
+      expect(focus).toHaveBeenCalled()
+    } finally { restoreNav(); dom.restore() }
+  })
+
   it('reports failure when both paths fail instead of lying', async () => {
     const dom = installFakeDom(false)
     const restoreNav = setClipboard({})
