@@ -1199,6 +1199,20 @@ body { position: relative; }
   font-size: 12px;
   color: var(--color-muted-2);
 }
+.ml-jump-miss {
+  position: sticky;
+  top: 8px;
+  z-index: 2;
+  width: fit-content;
+  margin: 8px auto 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-ink);
+  background: var(--color-paper);
+  border: 1px solid var(--color-hair);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
 
 /* message row */
 .msg {

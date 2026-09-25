@@ -116,9 +116,8 @@ export default function TopSearch() {
   function pick(m: Match) {
     // Slack parity: land on the matched message, not the newest one. Thread
     // replies carry their root so the page can open the thread pane too.
-    const base = searchHitUrl(m.conversation, me.data?.memberId, m.id);
-    if (!base) return;
-    const url = m.parentId ? `${base}&thread=${encodeURIComponent(m.parentId)}` : base;
+    const url = searchHitUrl(m.conversation, me.data?.memberId, m.id, m.parentId);
+    if (!url) return;
     setOpen(false);
     setQ("");
     setMatches(null);

@@ -1,7 +1,8 @@
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { Trash2, Pencil, Pin, Archive, ArchiveRestore, Bell, BellOff, X, UserMinus, UserPlus, Bot } from "lucide-react";
 import MessageList from "../components/MessageList";
+import { useSearchJump } from "../lib/useSearchJump";
 import Composer from "../components/Composer";
 import ThreadPane from "../components/ThreadPane";
 import AgentActivity from "../components/AgentActivity";
@@ -24,28 +25,7 @@ export default function ChannelPage() {
 
   // Search jump (?m=<messageId>[&thread=<rootId>]): land on the matched
   // message instead of the newest one, opening the thread pane for replies.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [jumpToId, setJumpToId] = useState<string | null>(null);
-  const [jumpThreadMsgId, setJumpThreadMsgId] = useState<string | null>(null);
-  const openThreadForJump = useBus((s) => s.openThread);
-  useEffect(() => {
-    const m = searchParams.get("m");
-    if (!m) return;
-    const thread = searchParams.get("thread");
-    // Flash the thread ROOT in the main list (replies are not top-level rows);
-    // the reply itself is flashed inside the thread pane.
-    setJumpToId(thread ?? m);
-    setJumpThreadMsgId(thread ? m : null);
-    if (thread && id) openThreadForJump(id, thread);
-    // Strip the params so Back/reload don't re-jump.
-    const next = new URLSearchParams(searchParams);
-    next.delete("m");
-    next.delete("thread");
-    setSearchParams(next, { replace: true });
-    const t = window.setTimeout(() => setJumpToId(null), 4000);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  const { listJump, threadJump } = useSearchJump(id);
 
   const conv = useConversation(id);
   const msgs = useMessages(id);
@@ -263,7 +243,7 @@ export default function ChannelPage() {
           onLoadOlder={msgs.loadOlder}
           hasOlder={msgs.hasOlder}
           isLoadingOlder={msgs.isLoadingOlder}
-          jumpToId={jumpToId}
+          jump={listJump}
         />
 
         <AgentActivity conversationId={id} />
@@ -306,7 +286,7 @@ export default function ChannelPage() {
           conversationId={id}
           rootMessage={threadMsg}
           onClose={closeThread}
-          jumpMsgId={jumpThreadMsgId}
+          jump={threadJump}
         />
       )}
       {renameOpen && c && (

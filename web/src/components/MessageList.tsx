@@ -1,9 +1,13 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Message } from "../api/client";
 import MessageRow from "./MessageRow";
 import { api } from "../api/client";
 import { useSpectator, useTogglePin, useMarkUnreadFrom } from "../lib/hooks";
+import { isJumpHandled, markJumpHandled, type JumpTarget } from "../lib/useSearchJump";
+import { nextJumpStep } from "../lib/searchJump";
+
+const FLASH_MS = 2600;
 
 interface Props {
   messages: Message[];
@@ -15,9 +19,10 @@ interface Props {
   onLoadOlder?: () => void;
   hasOlder?: boolean;
   isLoadingOlder?: boolean;
-  // Search jump: scroll to this message id (flashing it) instead of pinning to
-  // the newest row. Pages through older history until the row is found.
-  jumpToId?: string | null;
+  // Search jump: scroll to this message (flashing it) instead of pinning to
+  // the newest row. Pages through older history until the row is found. Each
+  // target (by `key`) is handled once, so later renders never re-scroll.
+  jump?: JumpTarget | null;
 }
 
 export default function MessageList({
@@ -28,7 +33,7 @@ export default function MessageList({
   onLoadOlder,
   hasOlder,
   isLoadingOlder,
-  jumpToId,
+  jump,
 }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
   const spectator = useSpectator();
@@ -45,6 +50,17 @@ export default function MessageList({
   const prevFirstId = useRef<string | null>(null);
   const didInitialScroll = useRef(false);
 
+  // Search-jump bookkeeping: how many older pages this jump has requested,
+  // and the list length when it last asked (so one in-flight page is never
+  // requested twice). Done-ness is tracked by key in useSearchJump.
+  const jumpPages = useRef(0);
+  const jumpAskedAt = useRef<number | null>(null);
+  const jumpRaf = useRef(0);
+  const jumpKey = useRef<number | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const [jumpMissed, setJumpMissed] = useState<"gone" | "too-old" | null>(null);
+  const jumpPending = !!jump && !isJumpHandled(jump.key);
+
   // Pin to bottom on first paint after messages arrive. The virtualizer
   // estimates row heights with `estimateSize: 60` and only learns real heights
   // after items mount and `measureElement` runs — which can shift totalSize
@@ -56,7 +72,7 @@ export default function MessageList({
     if (didInitialScroll.current || visible.length === 0 || !parentRef.current) return;
     // A search jump scrolls to its own target instead — pinning to the bottom
     // first would make the viewport snap back while the jump pages into range.
-    if (jumpToId && visible.some((m) => m.id === jumpToId)) {
+    if (jumpPending && visible.some((m) => m.id === jump!.id)) {
       didInitialScroll.current = true;
       prevCount.current = visible.length;
       prevFirstId.current = visible[0]?.id ?? null;
@@ -77,23 +93,6 @@ export default function MessageList({
     return () => cancelAnimationFrame(raf);
   }, [visible.length]);
 
-  // Search jump: once the target row is loaded, scroll it into view and flash
-  // it. If it isn't loaded yet (older history), page backwards until it is or
-  // there is nothing older to load.
-  useEffect(() => {
-    if (!jumpToId) return;
-    const index = visible.findIndex((m) => m.id === jumpToId);
-    if (index >= 0) {
-      virtualizer.scrollToIndex(index, { align: "center" });
-      // The row may need a frame to mount at its final position after
-      // measurement; re-issue the scroll once so it lands centered.
-      const raf = requestAnimationFrame(() =>
-        virtualizer.scrollToIndex(index, { align: "center" }),
-      );
-      return () => cancelAnimationFrame(raf);
-    }
-    if (hasOlder && !isLoadingOlder) onLoadOlder?.();
-  }, [jumpToId, visible, virtualizer, hasOlder, isLoadingOlder, onLoadOlder]);
 
   useEffect(() => {
     if (!parentRef.current || !didInitialScroll.current) return;
@@ -124,6 +123,67 @@ export default function MessageList({
     prevCount.current = visible.length;
     prevFirstId.current = firstId;
   }, [visible.length, virtualizer, meMemberId, visible]);
+
+  // Search jump: once the target row is loaded, scroll it into view and flash
+  // it. If it isn't loaded yet (older history), page backwards until it is,
+  // there is nothing older, or MAX_JUMP_PAGES is hit — then say so instead of
+  // silently leaving the user at the bottom. Declared after the prepend-anchor
+  // effect above so, on the commit that loads the target's page, the jump
+  // scroll wins over the anchor scroll.
+  useEffect(() => {
+    if (!jump || isJumpHandled(jump.key)) return;
+    if (jumpKey.current !== jump.key) {
+      // A new search replaced one still paging: start its budget afresh.
+      jumpKey.current = jump.key;
+      jumpPages.current = 0;
+      jumpAskedAt.current = null;
+    }
+    const step = nextJumpStep({
+      ids: visible.map((m) => m.id),
+      targetId: jump.id,
+      hasOlder: !!hasOlder,
+      isLoadingOlder: !!isLoadingOlder,
+      canLoadOlder: !!onLoadOlder,
+      pagesRequested: jumpPages.current,
+      askedAtLength: jumpAskedAt.current,
+    });
+    if (step.kind === "wait") return;
+    if (step.kind === "load") {
+      jumpAskedAt.current = visible.length;
+      jumpPages.current += 1;
+      onLoadOlder?.();
+      return;
+    }
+    markJumpHandled(jump.key);
+    jumpPages.current = 0;
+    jumpAskedAt.current = null;
+    if (step.kind === "miss") {
+      setJumpMissed(step.reason);
+      return;
+    }
+    setJumpMissed(null);
+    const index = step.index;
+    virtualizer.scrollToIndex(index, { align: "center" });
+    // The row may need a frame to mount and be measured at its final
+    // position; re-issue the scroll once so it lands centered.
+    cancelAnimationFrame(jumpRaf.current);
+    jumpRaf.current = requestAnimationFrame(() =>
+      virtualizer.scrollToIndex(index, { align: "center" }),
+    );
+    setFlashId(jump.id);
+  }, [jump, visible, virtualizer, hasOlder, isLoadingOlder, onLoadOlder]);
+
+  useEffect(() => () => cancelAnimationFrame(jumpRaf.current), []);
+  useEffect(() => {
+    if (!flashId) return;
+    const t = setTimeout(() => setFlashId(null), FLASH_MS);
+    return () => clearTimeout(t);
+  }, [flashId]);
+  useEffect(() => {
+    if (!jumpMissed) return;
+    const t = setTimeout(() => setJumpMissed(null), 6000);
+    return () => clearTimeout(t);
+  }, [jumpMissed]);
 
   // Load older history when the user scrolls near the top. fetchPreviousPage is
   // a no-op while a fetch is in flight, so firing on every scroll tick is safe.
@@ -161,7 +221,16 @@ export default function MessageList({
   return (
     <div ref={parentRef} className="messages" onScroll={onScroll}>
       {isLoadingOlder && (
-        <div className="ml-loading-older">Loading earlier messages…</div>
+        <div className="ml-loading-older">
+          {jumpPending ? "Finding the message…" : "Loading earlier messages…"}
+        </div>
+      )}
+      {jumpMissed && (
+        <div className="ml-jump-miss" role="status">
+          {jumpMissed === "too-old"
+            ? "That message is further back than we can jump — scroll up to load older history."
+            : "Couldn’t find that message — it may have been deleted."}
+        </div>
       )}
       <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
         {virtualizer.getVirtualItems().map((v) => {
@@ -188,7 +257,7 @@ export default function MessageList({
               <MessageRow
                 msg={m}
                 grouped={grouped}
-                highlighted={jumpToId === m.id}
+                highlighted={flashId === m.id}
                 meMemberId={meMemberId}
                 onReact={(e) => react(m.id, e)}
                 onTogglePin={!spectator ? () => pin(m.id) : undefined}
