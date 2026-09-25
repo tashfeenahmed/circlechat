@@ -1,4 +1,4 @@
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, BellOff } from "lucide-react";
 import MessageList from "../components/MessageList";
@@ -26,6 +26,30 @@ export default function DMPage() {
   const openDetails = useBus((s) => s.openDetails);
   const [convId, setConvId] = useState<string | null>(null);
   const creatingRef = useRef<string | null>(null);
+
+  // Search jump (?m=<messageId>[&thread=<rootId>]) — see Channel.tsx. The DM
+  // conversation id resolves asynchronously, so the jump target waits for it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [jumpToId, setJumpToId] = useState<string | null>(null);
+  const [jumpThreadMsgId, setJumpThreadMsgId] = useState<string | null>(null);
+  useEffect(() => {
+    const m = searchParams.get("m");
+    if (!m) return;
+    const thread = searchParams.get("thread");
+    // A thread jump needs the DM conversation id, which resolves async —
+    // wait for it before consuming the params.
+    if (thread && !convId) return;
+    setJumpToId(thread ?? m);
+    setJumpThreadMsgId(thread ? m : null);
+    if (thread && convId) openThread(convId, thread);
+    const next = new URLSearchParams(searchParams);
+    next.delete("m");
+    next.delete("thread");
+    setSearchParams(next, { replace: true });
+    const t = window.setTimeout(() => setJumpToId(null), 4000);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, convId]);
 
   useEffect(() => {
     if (!otherMemberId || !me.data?.memberId) return;
@@ -136,6 +160,7 @@ export default function DMPage() {
               onLoadOlder={msgs.loadOlder}
               hasOlder={msgs.hasOlder}
               isLoadingOlder={msgs.isLoadingOlder}
+              jumpToId={jumpToId}
             />
             <AgentActivity conversationId={convId} />
             <Composer
@@ -164,6 +189,7 @@ export default function DMPage() {
           conversationId={convId}
           rootMessage={threadMsg}
           onClose={closeThread}
+          jumpMsgId={jumpThreadMsgId}
         />
       )}
     </main>

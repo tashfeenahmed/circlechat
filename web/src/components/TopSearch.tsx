@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { Search, Hash, MessageSquare } from "lucide-react";
 import { api } from "../api/client";
 import { useMe } from "../lib/hooks";
+import { searchHitUrl } from "../lib/searchJump";
 
 interface Match {
   id: string;
@@ -112,18 +113,12 @@ export default function TopSearch() {
 
   const visible = matches ?? [];
 
-  function targetUrl(m: Match): string | null {
-    const c = m.conversation;
-    if (!c) return null;
-    if (c.kind === "channel") return `/c/${c.id}`;
-    if (c.kind === "dm" && c.otherMemberId) return `/d/${c.otherMemberId}`;
-    if (c.kind === "dm" && me.data) return `/d/${me.data.memberId}`;
-    return null;
-  }
-
   function pick(m: Match) {
-    const url = targetUrl(m);
-    if (!url) return;
+    // Slack parity: land on the matched message, not the newest one. Thread
+    // replies carry their root so the page can open the thread pane too.
+    const base = searchHitUrl(m.conversation, me.data?.memberId, m.id);
+    if (!base) return;
+    const url = m.parentId ? `${base}&thread=${encodeURIComponent(m.parentId)}` : base;
     setOpen(false);
     setQ("");
     setMatches(null);

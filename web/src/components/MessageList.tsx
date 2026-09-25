@@ -15,6 +15,9 @@ interface Props {
   onLoadOlder?: () => void;
   hasOlder?: boolean;
   isLoadingOlder?: boolean;
+  // Search jump: scroll to this message id (flashing it) instead of pinning to
+  // the newest row. Pages through older history until the row is found.
+  jumpToId?: string | null;
 }
 
 export default function MessageList({
@@ -25,6 +28,7 @@ export default function MessageList({
   onLoadOlder,
   hasOlder,
   isLoadingOlder,
+  jumpToId,
 }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
   const spectator = useSpectator();
@@ -50,6 +54,14 @@ export default function MessageList({
   // unmounts (channel switch).
   useLayoutEffect(() => {
     if (didInitialScroll.current || visible.length === 0 || !parentRef.current) return;
+    // A search jump scrolls to its own target instead — pinning to the bottom
+    // first would make the viewport snap back while the jump pages into range.
+    if (jumpToId && visible.some((m) => m.id === jumpToId)) {
+      didInitialScroll.current = true;
+      prevCount.current = visible.length;
+      prevFirstId.current = visible[0]?.id ?? null;
+      return;
+    }
     didInitialScroll.current = true;
     prevCount.current = visible.length;
     prevFirstId.current = visible[0]?.id ?? null;
@@ -64,6 +76,24 @@ export default function MessageList({
     raf = requestAnimationFrame(pin);
     return () => cancelAnimationFrame(raf);
   }, [visible.length]);
+
+  // Search jump: once the target row is loaded, scroll it into view and flash
+  // it. If it isn't loaded yet (older history), page backwards until it is or
+  // there is nothing older to load.
+  useEffect(() => {
+    if (!jumpToId) return;
+    const index = visible.findIndex((m) => m.id === jumpToId);
+    if (index >= 0) {
+      virtualizer.scrollToIndex(index, { align: "center" });
+      // The row may need a frame to mount at its final position after
+      // measurement; re-issue the scroll once so it lands centered.
+      const raf = requestAnimationFrame(() =>
+        virtualizer.scrollToIndex(index, { align: "center" }),
+      );
+      return () => cancelAnimationFrame(raf);
+    }
+    if (hasOlder && !isLoadingOlder) onLoadOlder?.();
+  }, [jumpToId, visible, virtualizer, hasOlder, isLoadingOlder, onLoadOlder]);
 
   useEffect(() => {
     if (!parentRef.current || !didInitialScroll.current) return;
@@ -158,6 +188,7 @@ export default function MessageList({
               <MessageRow
                 msg={m}
                 grouped={grouped}
+                highlighted={jumpToId === m.id}
                 meMemberId={meMemberId}
                 onReact={(e) => react(m.id, e)}
                 onTogglePin={!spectator ? () => pin(m.id) : undefined}

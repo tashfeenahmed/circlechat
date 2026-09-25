@@ -10,9 +10,11 @@ interface Props {
   conversationId: string;
   rootMessage: Message;
   onClose: () => void;
+  // Search jump: flash/scroll to this reply inside the thread.
+  jumpMsgId?: string | null;
 }
 
-export default function ThreadPane({ conversationId, rootMessage, onClose }: Props) {
+export default function ThreadPane({ conversationId, rootMessage, onClose, jumpMsgId }: Props) {
   const me = useMe();
   const replies = useMessages(conversationId, rootMessage.id);
   const post = usePostMessage(conversationId, rootMessage.id);
@@ -44,7 +46,7 @@ export default function ThreadPane({ conversationId, rootMessage, onClose }: Pro
         </button>
       </header>
       <div className="thread-body">
-        <MessageList messages={all} meMemberId={me.data?.memberId ?? undefined} inThread />
+        <MessageList messages={all} meMemberId={me.data?.memberId ?? undefined} inThread jumpToId={jumpMsgId} />
       </div>
       <Composer
         placeholder="Reply in thread…"

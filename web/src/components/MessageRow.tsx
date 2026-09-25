@@ -22,6 +22,8 @@ interface Props {
   // Public read-only viewer: hide the reaction affordances (the server refuses
   // spectator reactions, so they'd silently do nothing).
   spectator?: boolean;
+  // Search jump target: flash a background so the found message is obvious.
+  highlighted?: boolean;
 }
 
 const QUICK_EMOJIS = ["👍", "🎉", "✅", "👀", "🔥"];
@@ -54,6 +56,7 @@ export default function MessageRow({
   onOpenThread,
   inThread,
   spectator,
+  highlighted,
 }: Props) {
   const dir = useBus((s) => s.directory);
   const who = dir[msg.memberId];
@@ -108,7 +111,7 @@ export default function MessageRow({
 
   return (
     <div
-      className={`msg ${grouped ? "continued" : "first"} ${isAgent ? "agent" : ""}`}
+      className={`msg ${grouped ? "continued" : "first"} ${isAgent ? "agent" : ""} ${highlighted ? "msg-hit" : ""}`}
       style={{ minHeight: ROW_MIN_H }}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}

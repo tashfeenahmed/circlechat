@@ -245,6 +245,18 @@ body { position: relative; }
   border-radius: 2px;
 }
 
+/* Search jump target: the message a search result pointed at, flashed after
+   the list scrolls to it. Fades back to normal over ~2.5s. */
+@keyframes msg-hit-flash {
+  0% { background: rgba(255, 212, 0, 0.28); }
+  70% { background: rgba(255, 212, 0, 0.18); }
+  100% { background: transparent; }
+}
+.msg.msg-hit {
+  animation: msg-hit-flash 2.5s ease-out 1;
+  border-radius: 6px;
+}
+
 /* ─── skills page ─── */
 .agent-block {
   background: var(--color-paper);
