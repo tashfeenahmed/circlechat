@@ -48,6 +48,39 @@ export function describeSendError(err: SendErrorLike): string {
   return GENERIC
 }
 
+// Edit + delete share the message routes' failure codes (api/src/routes/
+// messages.ts PATCH/DELETE: 404 not_found, 403 not_author, 400 validation
+// too_big). Silent catches here used to mean an edit that vanished or a
+// delete that didn't happen with no explanation.
+export function describeEditError(err: SendErrorLike): string {
+  if (isTooLong(err)) return "Message too long (max 20,000 characters)."
+  switch (err.message) {
+    case "not_found":
+      return "This message is no longer here."
+    case "not_author":
+      return "You can’t edit this message."
+  }
+  if (err.status === 429) return "You’re editing too fast — wait a moment and try again."
+  if (err.status === undefined && err.message && /fetch|network|load failed/i.test(err.message)) {
+    return "You appear to be offline — try again when you’re reconnected."
+  }
+  return "Couldn’t save the edit — try again."
+}
+
+export function describeDeleteError(err: SendErrorLike): string {
+  switch (err.message) {
+    case "not_found":
+      return "This message is no longer here."
+    case "not_author":
+      return "You can’t delete this message."
+  }
+  if (err.status === 429) return "You’re moving too fast — wait a moment and try again."
+  if (err.status === undefined && err.message && /fetch|network|load failed/i.test(err.message)) {
+    return "You appear to be offline — try again when you’re reconnected."
+  }
+  return "Couldn’t delete the message — try again."
+}
+
 export function describeUploadError(err: SendErrorLike, fileName: string): string {
   if (err.status === 413) return `“${fileName}” is too large to upload.`
   return `Couldn’t upload “${fileName}” — try again.`
