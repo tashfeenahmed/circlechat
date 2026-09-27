@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTasks } from "../lib/hooks";
-import { CircleDashed, Check, Copy, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { CircleAlert, CircleDashed, Check, Copy, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
 import { copyText } from "../lib/clipboard";
 import Avatar from "./Avatar";
@@ -10,6 +10,12 @@ import Attachments from "./Attachments";
 import { renderMarkdown } from "../lib/md";
 import { editKeyAction } from "../lib/editKeys";
 import { api, type Message } from "../api/client";
+import {
+  describeDeleteError,
+  describeEditError,
+  EMPTY_EDIT_MESSAGE,
+  type SendErrorLike,
+} from "../lib/sendError";
 
 interface Props {
   msg: Message;
@@ -69,6 +75,9 @@ export default function MessageRow({
   // bar while focus is (visibly) inside the row so its actions are reachable.
   const [focusWithin, setFocusWithin] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Failure copy for edit/delete (see describeEditError/describeDeleteError).
+  const [editError, setEditError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(copiedTimer.current), []);
   // Attachment-only messages have no text to copy.
@@ -99,15 +108,36 @@ export default function MessageRow({
   }
 
   async function saveEdit() {
-    if (draft !== msg.bodyMd) {
-      try { await api.patch(`/messages/${msg.id}`, { bodyMd: draft }); } catch {}
+    if (draft === msg.bodyMd) {
+      setEditing(false);
+      setEditError(null);
+      return;
     }
-    setEditing(false);
+    // Blank edits never reach the API (it rejects an empty body anyway, and a
+    // whitespace-only one would leave an invisible message): point at Delete.
+    if (!draft.trim()) {
+      setEditError(EMPTY_EDIT_MESSAGE);
+      return;
+    }
+    // A failed save used to drop the editor and the draft with it, silently.
+    // Keep editing (draft intact) and say what went wrong instead.
+    try {
+      await api.patch(`/messages/${msg.id}`, { bodyMd: draft });
+      setEditing(false);
+      setEditError(null);
+    } catch (err) {
+      setEditError(describeEditError(err as SendErrorLike));
+    }
   }
 
   async function del() {
     if (!confirm("Delete this message?")) return;
-    try { await api.del(`/messages/${msg.id}`); } catch {}
+    setDeleteError(null);
+    try {
+      await api.del(`/messages/${msg.id}`);
+    } catch (err) {
+      setDeleteError(describeDeleteError(err as SendErrorLike));
+    }
   }
 
   return (
@@ -185,7 +215,7 @@ export default function MessageRow({
               onKeyDown={(e) => {
                 const action = editKeyAction(e.key, e.metaKey || e.ctrlKey, e.shiftKey);
                 if (action === "save") { e.preventDefault(); void saveEdit(); }
-                else if (action === "cancel") { e.preventDefault(); setEditing(false); }
+                else if (action === "cancel") { e.preventDefault(); setEditing(false); setEditError(null); }
               }}
               rows={3}
               autoFocus
@@ -194,9 +224,21 @@ export default function MessageRow({
             />
             <div className="flex gap-2 mt-1 text-[12px]">
               <button onClick={saveEdit} className="btn primary sm">Save</button>
-              <button onClick={() => setEditing(false)} className="btn ghost sm">Cancel</button>
+              <button onClick={() => { setEditing(false); setEditError(null); }} className="btn ghost sm">Cancel</button>
               <span className="self-center text-[var(--color-muted)]">⌘/Ctrl+Enter saves · Esc cancels</span>
             </div>
+            {editError && (
+              <div className="flex items-center gap-1.5 text-[12px] leading-5 mt-1" style={{ color: "var(--color-err)" }} role="alert">
+                <CircleAlert size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+                {editError}
+              </div>
+            )}
+          </div>
+        )}
+        {deleteError && (
+          <div className="flex items-center gap-1.5 text-[12px] leading-5 mt-1" style={{ color: "var(--color-err)" }} role="alert">
+            <CircleAlert size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+            {deleteError}
           </div>
         )}
         {msg.attachmentsJson?.length > 0 && (

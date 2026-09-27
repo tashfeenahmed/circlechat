@@ -2,9 +2,10 @@
 // pure function so the mapping is testable without a DOM (this package has no
 // RTL harness, same reasoning as sendError.ts).
 //
-// The chords mirror the Composer: ⌘/Ctrl+Enter is the universal "submit"
-// binding, Escape is cancel. Plain Enter must stay a newline — Slack/Discord
-// inline editors behave the same way, and Shift+Enter has no meaning here.
+// The chords mirror the task comment editor (TaskModal: ⌘/Ctrl+Enter saves,
+// Esc cancels) — not the Composer, where plain Enter sends. Plain Enter must
+// stay a newline here — Slack/Discord inline editors behave the same way, and
+// Shift+Enter has no meaning.
 
 export type EditKeyAction = "save" | "cancel" | null;
 
