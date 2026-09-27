@@ -63,6 +63,12 @@ describe("describeEditError", () => {
     });
     expect(describeEditError(e)).toBe("Message too long (max 20,000 characters).");
   });
+  it("maps an emptied edit (too_small on bodyMd) to the delete-instead hint", () => {
+    const e = err(400, "validation", {
+      issues: [{ code: "too_small", path: ["bodyMd"] }],
+    });
+    expect(describeEditError(e)).toBe("A message can’t be empty — delete it instead.");
+  });
   it("generic failure says 'edit', not 'send'", () => {
     expect(describeEditError(err(500, "boom"))).toMatch(/edit/i);
     expect(describeEditError(err(500, "boom"))).not.toMatch(/send/i);

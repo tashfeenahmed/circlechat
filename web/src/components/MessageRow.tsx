@@ -12,6 +12,7 @@ import { api, type Message } from "../api/client";
 import {
   describeDeleteError,
   describeEditError,
+  EMPTY_EDIT_MESSAGE,
   type SendErrorLike,
 } from "../lib/sendError";
 
@@ -109,6 +110,12 @@ export default function MessageRow({
     if (draft === msg.bodyMd) {
       setEditing(false);
       setEditError(null);
+      return;
+    }
+    // Blank edits never reach the API (it rejects an empty body anyway, and a
+    // whitespace-only one would leave an invisible message): point at Delete.
+    if (!draft.trim()) {
+      setEditError(EMPTY_EDIT_MESSAGE);
       return;
     }
     // A failed save used to drop the editor and the draft with it, silently.

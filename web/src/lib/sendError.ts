@@ -52,8 +52,24 @@ export function describeSendError(err: SendErrorLike): string {
 // messages.ts PATCH/DELETE: 404 not_found, 403 not_author, 400 validation
 // too_big). Silent catches here used to mean an edit that vanished or a
 // delete that didn't happen with no explanation.
+// An emptied edit: EditBody is bodyMd min(1), so the API answers
+// 400 {error:"validation", issues:[{code:"too_small", path:["bodyMd"]}]}.
+// MessageRow also blocks a blank (whitespace-only) save before it's sent.
+export const EMPTY_EDIT_MESSAGE = "A message can’t be empty — delete it instead."
+
+function isEmptyBody(err: SendErrorLike): boolean {
+  if (err.status !== 400 || err.message !== "validation") return false
+  const issues = err.body?.issues
+  if (!Array.isArray(issues)) return false
+  return issues.some((i) => {
+    const issue = i as { code?: string; path?: unknown[] }
+    return issue.code === "too_small" && Array.isArray(issue.path) && issue.path[0] === "bodyMd"
+  })
+}
+
 export function describeEditError(err: SendErrorLike): string {
   if (isTooLong(err)) return "Message too long (max 20,000 characters)."
+  if (isEmptyBody(err)) return EMPTY_EDIT_MESSAGE
   switch (err.message) {
     case "not_found":
       return "This message is no longer here."
