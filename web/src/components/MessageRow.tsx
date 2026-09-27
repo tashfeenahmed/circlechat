@@ -8,6 +8,7 @@ import MemberHoverCard from "./MemberHoverCard";
 import Tooltip from "./Tooltip";
 import Attachments from "./Attachments";
 import { renderMarkdown } from "../lib/md";
+import { editKeyAction } from "../lib/editKeys";
 import { api, type Message } from "../api/client";
 import {
   describeDeleteError,
@@ -211,12 +212,20 @@ export default function MessageRow({
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                const action = editKeyAction(e.key, e.metaKey || e.ctrlKey, e.shiftKey);
+                if (action === "save") { e.preventDefault(); void saveEdit(); }
+                else if (action === "cancel") { e.preventDefault(); setEditing(false); setEditError(null); }
+              }}
               rows={3}
+              autoFocus
+              aria-label={`Edit message`}
               className="w-full border border-[var(--color-hair-2)] rounded px-3 py-2 text-[14px]"
             />
             <div className="flex gap-2 mt-1 text-[12px]">
               <button onClick={saveEdit} className="btn primary sm">Save</button>
               <button onClick={() => { setEditing(false); setEditError(null); }} className="btn ghost sm">Cancel</button>
+              <span className="self-center text-[var(--color-muted)]">⌘/Ctrl+Enter saves · Esc cancels</span>
             </div>
             {editError && (
               <div className="flex items-center gap-1.5 text-[12px] leading-5 mt-1" style={{ color: "var(--color-err)" }} role="alert">
@@ -335,7 +344,9 @@ export default function MessageRow({
           )}
           {msg.memberId === meMemberId && (
             <>
-              <button onClick={() => setEditing(true)} className="hb-btn" title="Edit">
+              {/* Seed the draft on entry: an edit that landed over WS while this
+                  row was mounted would otherwise show (and save back) stale text. */}
+              <button onClick={() => { setDraft(msg.bodyMd); setEditing(true); }} className="hb-btn" title="Edit">
                 <Pencil size={13} strokeWidth={2} />
               </button>
               <button onClick={del} className="hb-btn hb-danger" title="Delete">
