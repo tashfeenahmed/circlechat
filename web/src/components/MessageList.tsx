@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { useSpectator, useTogglePin, useMarkUnreadFrom } from "../lib/hooks";
 import { isJumpHandled, markJumpHandled, type JumpTarget } from "../lib/useSearchJump";
 import { nextJumpStep } from "../lib/searchJump";
+import { nextTailCount, tailLabel } from "../lib/followTail";
 
 const FLASH_MS = 2600;
 
@@ -60,6 +61,10 @@ export default function MessageList({
   const [flashId, setFlashId] = useState<string | null>(null);
   const [jumpMissed, setJumpMissed] = useState<"gone" | "too-old" | null>(null);
   const jumpPending = !!jump && !isJumpHandled(jump.key);
+  // Messages that arrived while the viewport was NOT at the tail — drives the
+  // "N new messages ↓" pill (Slack/Discord parity). Counting lives in the
+  // pure nextTailCount reducer (lib/followTail) so the rules are unit-tested.
+  const [tailCount, setTailCount] = useState(0);
 
   // Pin to bottom on first paint after messages arrive. The virtualizer
   // estimates row heights with `estimateSize: 60` and only learns real heights
@@ -114,6 +119,19 @@ export default function MessageList({
       // "I just sent this".
       const latestIsMine =
         !!latest && (latest.memberId === "me" || (!!meMemberId && latest.memberId === meMemberId));
+      // Off the tail: remember how many arrivals happened while the user was
+      // reading history so the pill below can name them. (Batched arrivals
+      // count as a run of single events through the same reducer.)
+      if (!atBottom) {
+        const added = visible.length - prevCount.current;
+        setTailCount((c) => {
+          let n = c;
+          for (let i = 0; i < added; i++) {
+            n = nextTailCount(n, { type: "message", atBottom, mine: latestIsMine });
+          }
+          return n;
+        });
+      }
       // Always jump when the newest message is mine (I just sent it) —
       // otherwise only follow along if I was already near the bottom.
       if (atBottom || latestIsMine) {
@@ -189,8 +207,22 @@ export default function MessageList({
   // a no-op while a fetch is in flight, so firing on every scroll tick is safe.
   function onScroll() {
     const el = parentRef.current;
-    if (!el || !onLoadOlder || !hasOlder || isLoadingOlder) return;
+    if (!el) return;
+    // Reaching the tail retires the pill (pure rule: scroll+atBottom => 0).
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    setTailCount((c) => nextTailCount(c, { type: "scroll", atBottom }));
+    if (!onLoadOlder || !hasOlder || isLoadingOlder) return;
     if (el.scrollTop < 240) onLoadOlder();
+  }
+
+  function jumpToLatest() {
+    const el = parentRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    // The smooth scroll fires its own scroll events, but clear eagerly too so
+    // the pill never outlives the click (e.g. a scroll event that lands just
+    // short of the 100px threshold).
+    setTailCount(0);
   }
 
   async function react(msgId: string, emoji: string) {
@@ -270,6 +302,16 @@ export default function MessageList({
           );
         })}
       </div>
+      {tailCount > 0 && (
+        <button
+          type="button"
+          className="ml-new-pill"
+          onClick={jumpToLatest}
+          aria-label={`${tailLabel(tailCount)} — jump to the latest message`}
+        >
+          {tailLabel(tailCount)} ↓
+        </button>
+      )}
     </div>
   );
 }

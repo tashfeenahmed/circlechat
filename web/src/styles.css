@@ -1214,6 +1214,29 @@ body { position: relative; }
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
+/* "N new messages ↓" pill. Last child of the .messages scroller, stuck to
+   its bottom edge while the list is scrolled up — the mirror of
+   .ml-jump-miss's sticky top. It only exists while the count is > 0, and
+   reaching the tail (which clears the count) is where it would have taken
+   layout space, so there is never a shift at the bottom. Clicking scrolls
+   to the tail and clears. */
+.ml-new-pill {
+  position: sticky;
+  bottom: 10px;
+  z-index: 3;
+  display: block;
+  width: fit-content;
+  margin: 8px auto 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-ink);
+  background: var(--color-paper);
+  border: 1px solid var(--color-hair);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+
 /* message row */
 .msg {
   display: grid;
