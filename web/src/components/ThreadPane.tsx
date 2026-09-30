@@ -47,7 +47,7 @@ export default function ThreadPane({ conversationId, rootMessage, onClose, jump 
         </button>
       </header>
       <div className="thread-body">
-        <MessageList messages={all} meMemberId={me.data?.memberId ?? undefined} inThread
+        <MessageList key={rootMessage.id} messages={all} meMemberId={me.data?.memberId ?? undefined} inThread
           // Wait for the replies to load before looking for the target, or it
           // would be reported missing against the root-only first render.
           jump={replies.isSuccess ? jump : null}
