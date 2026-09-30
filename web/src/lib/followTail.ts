@@ -8,7 +8,7 @@
  * and counts arrivals from OTHER members (your own sends never count — you
  * just wrote them, and the auto-scroll already follows you when you're at
  * the bottom). Keeping the counter a pure reducer makes the counting rules
- * unit-testable without a DOM (scripts/test-follow-tail).
+ * unit-testable without a DOM (lib/followTail.test.ts).
  */
 
 export interface TailMessageEvent {
