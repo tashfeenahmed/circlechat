@@ -331,10 +331,39 @@ export async function skillHasDescription(skillDir: string): Promise<boolean> {
   }
 }
 
+// Every equip (re)installs these two. Whatever else the manifest lists was
+// added from the Skills UI and must stay managed across a re-equip.
+export async function managedSkillsAfterEquip(skillsRoot: string): Promise<string[]> {
+  return [...new Set([...(await readManifest(skillsRoot)), "browser", "circlechat"])].sort();
+}
+
+// Shell side of the docker equip: writes the manifest ($1) and moves every
+// skill dir not named in $2.. (Hermes' bundled skills) to skills-disabled/,
+// the same rule quarantineBundledSkills applies on the host path.
+export function manifestAndQuarantineScript(home: string): string[] {
+  return [
+    `printf '%s' "$1" > "${home}/skills/${MANIFEST_NAME}"`,
+    "shift",
+    `mkdir -p "${home}/skills-disabled"`,
+    `for d in "${home}"/skills/*/; do`,
+    `  n=$(basename "$d")`,
+    `  for m in "$@"; do if [ "$n" = "$m" ]; then continue 2; fi; done`,
+    // The image's skills_sync re-adds bundled skills on every container boot,
+    // so an older quarantined copy is normal; mv onto it would nest
+    // (skills-disabled/web/web).
+    `  rm -rf "${home}/skills-disabled/$n"`,
+    `  mv "${home}/skills/$n" "${home}/skills-disabled/$n"`,
+    "done",
+  ];
+}
+
 // Do the skill copy + manifest + quarantine inside a throw-away container so
 // we act as root on the mounted volume — host-side `fs.copyFile` can't write
 // into skills/ after the hermes image's entrypoint has chown'd it to uid=10000.
 async function runSkillOpsViaDocker(hermesHome: string): Promise<void> {
+  // Reading the manifest needs no root. Merging it, instead of resetting it to
+  // the two equip skills, is what keeps skills added from the Skills UI.
+  const managed = await managedSkillsAfterEquip(join(hermesHome, "skills"));
   // Bind-mount both skill templates read-only. The `browser` dir is copied
   // only when the host actually has the template staged — during an old
   // deploy that predates browser-skill this path is silently skipped.
@@ -348,15 +377,7 @@ async function runSkillOpsViaDocker(hermesHome: string): Promise<void> {
     `  rm -rf "${CONTAINER_HERMES_HOME}/skills/browser/agent-browser/"*`,
     `  cp -r /cc-browser-skill-template/. "${CONTAINER_HERMES_HOME}/skills/browser/agent-browser/"`,
     `fi`,
-    // Manifest lists both so future updates can find them.
-    `echo '["circlechat","browser"]' > "${CONTAINER_HERMES_HOME}/skills/.circlechat-managed.json"`,
-    // Quarantine everything except circlechat, browser, and dotfiles.
-    `mkdir -p "${CONTAINER_HERMES_HOME}/skills-disabled"`,
-    `for d in "${CONTAINER_HERMES_HOME}"/skills/*/; do`,
-    `  n=$(basename "$d")`,
-    `  case "$n" in circlechat|browser|.*) continue ;; esac`,
-    `  mv "$d" "${CONTAINER_HERMES_HOME}/skills-disabled/$n" 2>/dev/null || true`,
-    `done`,
+    ...manifestAndQuarantineScript(CONTAINER_HERMES_HOME),
   ].join("\n");
   await new Promise<void>((resolve, reject) => {
     const args = [
@@ -373,6 +394,11 @@ async function runSkillOpsViaDocker(hermesHome: string): Promise<void> {
       HERMES_IMAGE,
       "-c",
       script,
+      // `bash -c` binds the next arg to $0; the script reads the manifest from
+      // $1 and the names to keep from $2.. — argv, so nothing is interpolated.
+      "skill-ops",
+      JSON.stringify(managed, null, 2),
+      ...managed,
     ];
     const p = spawn("docker", args, { env: process.env, timeout: 60_000 });
     let err = "";
