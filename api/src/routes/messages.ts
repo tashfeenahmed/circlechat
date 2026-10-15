@@ -9,6 +9,7 @@ import {
   conversationMembers,
   messages,
   reactions,
+  savedItems,
   agents,
   members,
 } from "../db/schema.js";
@@ -119,6 +120,16 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
     const rx = ids.length
       ? await db.select().from(reactions).where(inArray(reactions.messageId, ids))
       : [];
+    // Which of these messages has the CALLER saved? Drives the hoverbar's
+    // bookmark filled/outline state. Their saves only ever — never anyone
+    // else's (saves are private).
+    const mine = ids.length
+      ? await db
+          .select({ messageId: savedItems.messageId })
+          .from(savedItems)
+          .where(and(inArray(savedItems.messageId, ids), eq(savedItems.memberId, memberId)))
+      : [];
+    const savedSet = new Set(mine.map((s) => s.messageId));
 
     const tc = ids.length
       ? await db
@@ -158,6 +169,7 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
           bodyMd: forPublic ? scrubPublicBody(row.bodyMd) : row.bodyMd,
           reactions: rxMap.get(m.id) ?? [],
           replyCount: tcMap.get(m.id) ?? 0,
+          savedByMe: savedSet.has(m.id),
         };
       }),
       hasMore,
@@ -494,6 +506,98 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
       pinnedAt: now ? now.toISOString() : null,
     });
     return { ok: true, pinned: !!now };
+  });
+
+  // ───────────────── saved items ─────────────────
+  // "Save for later" (Slack/Discord parity): a PERSONAL bookmark, private to
+  // the saver — pins are a shared channel act, saves are not. Toggle
+  // semantics mirror pins: the same route saves and unsaves. Membership of
+  // the message's conversation is required (you can only save what you can
+  // see); deleted messages can be saved but read back redacted.
+  app.post("/messages/:id/save", async (req, reply) => {
+    const mId = (req.params as { id: string }).id;
+    const memberId = req.auth!.memberId!;
+    const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
+    if (!m || m.deletedAt) return reply.code(404).send({ error: "not_found" });
+    const [inConv] = await db
+      .select({ memberId: conversationMembers.memberId })
+      .from(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, m.conversationId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      )
+      .limit(1);
+    if (!inConv) return reply.code(403).send({ error: "not_a_member" });
+
+    const [existing] = await db
+      .select({ messageId: savedItems.messageId })
+      .from(savedItems)
+      .where(and(eq(savedItems.messageId, mId), eq(savedItems.memberId, memberId)))
+      .limit(1);
+    if (existing) {
+      await db
+        .delete(savedItems)
+        .where(and(eq(savedItems.messageId, mId), eq(savedItems.memberId, memberId)));
+      return { ok: true, saved: false };
+    }
+    await db.insert(savedItems).values({ messageId: mId, memberId }).onConflictDoNothing();
+    return { ok: true, saved: true };
+  });
+
+  // My saved items, newest first, with the conversation each lives in so the
+  // page can link/jump to it. Redacted rows (deleted messages) are dropped —
+  // a tombstone is not worth coming back to.
+  app.get("/saved", async (req) => {
+    const memberId = req.auth!.memberId!;
+    const limit = parseLimit((req.query as { limit?: unknown })?.limit, 50, 200);
+    const rows = await db
+      .select({
+        messageId: messages.id,
+        conversationId: messages.conversationId,
+        parentId: messages.parentId,
+        conversationKind: conversations.kind,
+        conversationName: conversations.name,
+        memberId: messages.memberId,
+        bodyMd: messages.bodyMd,
+        attachmentsJson: messages.attachmentsJson,
+        msgTs: messages.ts,
+        savedAt: savedItems.savedAt,
+        deletedAt: messages.deletedAt,
+      })
+      .from(savedItems)
+      .innerJoin(messages, eq(savedItems.messageId, messages.id))
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .where(and(eq(savedItems.memberId, memberId), isNull(messages.deletedAt)))
+      .orderBy(desc(savedItems.savedAt))
+      .limit(limit);
+    // DM rows need the OTHER member to build a /d/<memberId> link (same
+    // resolution the files list does).
+    const dmConvIds = Array.from(
+      new Set(rows.filter((r) => r.conversationKind === "dm").map((r) => r.conversationId)),
+    );
+    const dmOtherByConv = new Map<string, string>();
+    if (dmConvIds.length) {
+      const dm = await db
+        .select({
+          conversationId: conversationMembers.conversationId,
+          memberId: conversationMembers.memberId,
+        })
+        .from(conversationMembers)
+        .where(inArray(conversationMembers.conversationId, dmConvIds));
+      for (const cid of dmConvIds) {
+        const these = dm.filter((r) => r.conversationId === cid);
+        dmOtherByConv.set(cid, these.find((r) => r.memberId !== memberId)?.memberId ?? memberId);
+      }
+    }
+    return {
+      saved: rows.map((r) => ({
+        ...r,
+        conversationOtherMemberId:
+          r.conversationKind === "dm" ? dmOtherByConv.get(r.conversationId) ?? null : null,
+      })),
+    };
   });
 
   // "Mark unread from here": move the caller's read cursor back to just before

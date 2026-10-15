@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTasks } from "../lib/hooks";
-import { CircleAlert, CircleDashed, Check, Copy, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { Bookmark, BookmarkCheck, CircleAlert, CircleDashed, Check, Copy, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
 import { copyText } from "../lib/clipboard";
 import Avatar from "./Avatar";
@@ -23,6 +23,7 @@ interface Props {
   meMemberId: string | undefined;
   onReact: (emoji: string) => void;
   onTogglePin?: () => void;
+  onToggleSave?: () => void;
   onMarkUnread?: () => void;
   onOpenThread?: (msgId: string) => void;
   inThread?: boolean;
@@ -59,6 +60,7 @@ export default function MessageRow({
   meMemberId,
   onReact,
   onTogglePin,
+  onToggleSave,
   onMarkUnread,
   onOpenThread,
   inThread,
@@ -329,6 +331,17 @@ export default function MessageRow({
               aria-label="Mark unread from here"
             >
               <CircleDashed size={13} strokeWidth={2} />
+            </button>
+          )}
+          {onToggleSave && (
+            <button
+              onClick={onToggleSave}
+              className="hb-btn"
+              title={msg.savedByMe ? "Remove from Saved" : "Save for later"}
+              aria-label={msg.savedByMe ? "Remove from Saved" : "Save for later"}
+              aria-pressed={!!msg.savedByMe}
+            >
+              {msg.savedByMe ? <BookmarkCheck size={13} strokeWidth={2} /> : <Bookmark size={13} strokeWidth={2} />}
             </button>
           )}
           {onTogglePin && (
