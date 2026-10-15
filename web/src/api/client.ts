@@ -107,6 +107,8 @@ export interface Message {
   replyCount: number;
   pinnedAt?: string | null;
   pinnedBy?: string | null;
+  /** True when *I* saved this message (hoverbar bookmark state). */
+  savedByMe?: boolean;
 }
 
 export interface Attachment {

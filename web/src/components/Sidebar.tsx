@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Hash, Plus, FolderOpen, Network, BookOpen, Inbox, LayoutGrid, Target, BarChart3, MoreHorizontal, Workflow, Boxes, Sparkles, CircleHelp } from "lucide-react";
+import { Hash, Plus, FolderOpen, Network, BookOpen, Inbox, LayoutGrid, Target, BarChart3, MoreHorizontal, Workflow, Boxes, Sparkles, CircleHelp, Bookmark } from "lucide-react";
 import { useOnboarding } from "../lib/onboarding";
 import { useConversations, useMe, useMembersDirectory, useNeedsYou, useTasks, useSpectator, useUnreadHolds } from "../lib/hooks";
 import { api, type Conversation, type DirMember } from "../api/client";
@@ -167,6 +167,15 @@ export default function Sidebar() {
             <Target size={14} strokeWidth={2} />
           </span>
           <span className="sb-name">Projects &amp; Goals</span>
+        </Link>
+        <Link
+          to="/saved"
+          className={`sb-item ${location.pathname === "/saved" ? "active" : ""}`}
+        >
+          <span className="sb-glyph">
+            <Bookmark size={14} strokeWidth={2} />
+          </span>
+          <span className="sb-name">Saved</span>
         </Link>
         <Link
           to="/files"

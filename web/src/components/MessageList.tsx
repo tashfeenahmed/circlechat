@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Message } from "../api/client";
 import MessageRow from "./MessageRow";
 import { api } from "../api/client";
-import { useSpectator, useTogglePin, useMarkUnreadFrom } from "../lib/hooks";
+import { useSpectator, useTogglePin, useToggleSave, useMarkUnreadFrom } from "../lib/hooks";
 import { isJumpHandled, markJumpHandled, type JumpTarget } from "../lib/useSearchJump";
 import { nextJumpStep } from "../lib/searchJump";
 import { nextTailCount, tailLabel } from "../lib/followTail";
@@ -241,6 +241,11 @@ export default function MessageList({
     togglePin.mutate(msgId);
   }
 
+  // Save-for-later: personal bookmark (private, no WS echo — the hook patches
+  // the caches itself). Lives here for the same reason pin does: the thread
+  // pane gets it too.
+  const toggleSave = useToggleSave();
+
   // Mark-unread lives here for the same reason. The read cursor is per
   // conversation and the badge counts top-level messages only, so it's offered
   // on top-level messages (including a thread's root in the thread pane) but
@@ -293,6 +298,7 @@ export default function MessageList({
                 meMemberId={meMemberId}
                 onReact={(e) => react(m.id, e)}
                 onTogglePin={!spectator ? () => pin(m.id) : undefined}
+                onToggleSave={!spectator ? () => toggleSave.mutate({ messageId: m.id, convId: m.conversationId }) : undefined}
                 onMarkUnread={!spectator && !m.parentId ? () => unreadFrom(m.id) : undefined}
                 onOpenThread={onOpenThread}
                 inThread={inThread}

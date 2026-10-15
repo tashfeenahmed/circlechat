@@ -220,6 +220,23 @@ export const reactions = pgTable(
   }),
 );
 
+// Saved items ("Save for later", Slack/Discord parity): a PERSONAL bookmark
+// list, private to the saver — unlike pins, which are a shared channel act.
+// The (message, member) PK is the toggle: insert saves, delete unsaves.
+// See migrations/0030.
+export const savedItems = pgTable(
+  "saved_items",
+  {
+    messageId: varchar("message_id", { length: 32 }).notNull(),
+    memberId: varchar("member_id", { length: 32 }).notNull(),
+    savedAt: timestamp("saved_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.messageId, t.memberId] }),
+    memberIdx: index("saved_items_member_idx").on(t.memberId, t.savedAt),
+  }),
+);
+
 // ───────────────── agent_runs ─────────────────
 export const agentRuns = pgTable(
   "agent_runs",

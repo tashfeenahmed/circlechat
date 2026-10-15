@@ -11,6 +11,7 @@ import ChannelPage from "./pages/Channel";
 import DMPage from "./pages/DM";
 import MembersPage from "./pages/Members";
 import FilesPage from "./pages/Files";
+import SavedPage from "./pages/Saved";
 import OrgPage from "./pages/Org";
 import SkillsPage from "./pages/Skills";
 import AgentPage from "./pages/AgentDetail";
@@ -100,6 +101,7 @@ function Shell() {
         <Route path="/board" element={<BoardPage />} />
         <Route path="/goals" element={<GoalsPage />} />
         <Route path="/files" element={<FilesPage />} />
+        <Route path="/saved" element={<SavedPage />} />
         <Route path="/org" element={<OrgPage />} />
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/agents/:id" element={<AgentPage />} />

@@ -365,6 +365,60 @@ export function useTogglePin() {
   });
 }
 
+// "Save for later" (Slack/Discord parity): a personal, private bookmark.
+// There is no WS echo for saves (they're private), so the mutation patches
+// the message caches itself for instant hoverbar feedback, and refreshes the
+// /saved list page.
+export function useToggleSave() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ messageId }: { messageId: string; convId: string }) =>
+      api.post<{ ok: boolean; saved: boolean }>(`/messages/${messageId}/save`, {}),
+    onSuccess: (r, { messageId, convId }) => {
+      for (const parent of [null, messageId]) {
+        qc.setQueryData<{ pages: Array<{ messages: Message[] }> }>(
+          ["messages", convId, parent ?? "root"],
+          (old) =>
+            old
+              ? {
+                  ...old,
+                  pages: old.pages.map((p) => ({
+                    ...p,
+                    messages: p.messages.map((m) =>
+                      m.id === messageId ? { ...m, savedByMe: r.saved } : m,
+                    ),
+                  })),
+                }
+              : old,
+        );
+      }
+      qc.invalidateQueries({ queryKey: ["saved"] });
+    },
+  });
+}
+
+export function useSavedItems() {
+  return useQuery({
+    queryKey: ["saved"],
+    queryFn: () =>
+      api.get<{
+        saved: Array<{
+          messageId: string;
+          conversationId: string;
+          parentId: string | null;
+          conversationKind: "channel" | "dm";
+          conversationName: string | null;
+          conversationOtherMemberId: string | null;
+          memberId: string;
+          bodyMd: string;
+          attachmentsJson: unknown[];
+          msgTs: string;
+          savedAt: string;
+        }>;
+      }>("/saved"),
+  });
+}
+
 // "Mark unread from here": moves the read cursor back so the anchor message
 // and everything after it badge as unread again (Slack parity). Holds the
 // conversation so auto-mark-read doesn't immediately undo it, and invalidates
