@@ -26,6 +26,13 @@ import {
   COOKIE_NAME,
 } from "../auth/session.js";
 import { id, rawToken } from "../lib/ids.js";
+import {
+  checkLoginAllowed,
+  clearLoginFailures,
+  loginFailures,
+  loginThrottleKey,
+  noteLoginFailure,
+} from "../lib/login-throttle.js";
 import { config } from "../lib/config.js";
 import { deriveUniqueWorkspaceHandle } from "../lib/workspace-handle.js";
 import { workspaceAccess } from "../lib/access-control.js";
@@ -188,12 +195,31 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ─────────── login: picks a default workspace if the user has any ──────
+  // Two limiter axes: the per-IP config below (5/min-ish burst) AND a
+  // per-account failure window (lib/login-throttle.ts) — 10 failures per
+  // address per 15 minutes regardless of source IP. Per-IP alone lets a
+  // distributed guesser spray one account from a fresh IP per attempt.
   app.post("/auth/login", { config: { rateLimit: { max: 5, timeWindow: "15 minutes" } } }, async (req, reply) => {
     const body = LoginBody.parse(req.body);
+    const throttleKey = loginThrottleKey(body.email);
+    const verdict = checkLoginAllowed(loginFailures, throttleKey, Date.now());
+    if (!verdict.allowed) {
+      // Same shape for unknown emails: the 429 never confirms an account exists.
+      return reply
+        .code(429)
+        .headers({ "retry-after": String(verdict.retryAfterSeconds) })
+        .send({ error: "too_many_attempts", retryAfterSeconds: verdict.retryAfterSeconds });
+    }
     const [u] = await db.select().from(users).where(eq(users.email, body.email)).limit(1);
-    if (!u) return reply.code(401).send({ error: "invalid_credentials" });
-    if (!(await verifyPassword(body.password, u.passwordHash)))
+    if (!u) {
+      noteLoginFailure(throttleKey);
       return reply.code(401).send({ error: "invalid_credentials" });
+    }
+    if (!(await verifyPassword(body.password, u.passwordHash))) {
+      noteLoginFailure(throttleKey);
+      return reply.code(401).send({ error: "invalid_credentials" });
+    }
+    clearLoginFailures(loginFailures, throttleKey);
 
     const [wm] = await db
       .select({ workspaceId: workspaceMembers.workspaceId })
