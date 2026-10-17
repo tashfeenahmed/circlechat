@@ -204,6 +204,16 @@ export default function NotificationBell() {
                   </span>
                 </button>
               ))}
+              {list.hasOlder && (
+                <button
+                  type="button"
+                  className="notif-loadolder"
+                  onClick={() => void list.loadOlder()}
+                  disabled={list.isFetching}
+                >
+                  {list.isFetching ? "Loading…" : "Load older"}
+                </button>
+              )}
             </div>
         </Dialog.Popup>
       </Dialog.Portal>

@@ -561,11 +561,9 @@ export function useAnalytics(days: number) {
 
 // ─────────────────── Notifications (per-member inbox) ───────────────────
 
-interface NotificationsPage {
-  notifications: Notification[];
-  hasMore: boolean;
-  nextBefore: string | null;
-}
+export type { NotificationsPage } from "./notificationsPaging";
+import type { NotificationsPage } from "./notificationsPaging";
+import { canLoadOlder, mergeOlderPage, olderCursor } from "./notificationsPaging";
 
 // Notification list + live updates. Keeps the first page in cache; new
 // notifications are prepended on the notification.new event, and reads are
@@ -605,7 +603,23 @@ export function useNotifications() {
       }
     });
   }, [qc]);
-  return q;
+
+  // Page in notifications older than the loaded window. The API cursor is
+  // `before=<ISO ts>`; merging dedupes rows that arrived live in the
+  // meantime. Exposed on the hook so the drawer can offer a "load older"
+  // button instead of dead-ending at 30 items.
+  const loadOlder = useCallback(async () => {
+    const page = qc.getQueryData<NotificationsPage>(["notifications"]);
+    const before = olderCursor(page);
+    if (!before || !page) return false;
+    const older = await api.get<NotificationsPage>(
+      `/notifications?limit=30&before=${encodeURIComponent(before)}`,
+    );
+    qc.setQueryData<NotificationsPage>(["notifications"], (old) => mergeOlderPage(old, older));
+    return older.notifications.length > 0;
+  }, [qc]);
+
+  return { ...q, loadOlder, hasOlder: canLoadOlder(q.data) };
 }
 
 // Cheap unread badge count. Kept as its own query so the bell can show a

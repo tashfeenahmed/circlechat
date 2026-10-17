@@ -839,6 +839,20 @@ body { position: relative; }
   font-size: 12.5px;
   color: var(--color-muted);
 }
+.notif-loadolder {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 4px 12px 8px;
+  padding: 7px 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.notif-loadolder:hover:not(:disabled) { color: var(--color-ink); }
+.notif-loadolder:disabled { opacity: 0.6; cursor: default; }
 .notif-item {
   display: flex;
   align-items: flex-start;
