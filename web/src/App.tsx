@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Route, Routes, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { bus } from "./ws/client";
-import { useMe, usePresenceBus, useRegistrationOpen } from "./lib/hooks";
+import { useMe, usePresenceBus, useRegistrationOpen, useResyncOnReconnect } from "./lib/hooks";
 import AppShell from "./components/AppShell";
 import SignupPage from "./pages/Signup";
 import LoginPage from "./pages/Login";
@@ -45,6 +45,7 @@ function Shell() {
   const location = useLocation();
   const nav = useNavigate();
   usePresenceBus();
+  useResyncOnReconnect();
 
   useEffect(() => {
     if (me.data) {

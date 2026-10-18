@@ -15,6 +15,12 @@ class EventBus {
   private closed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private backoff = 500;
+  // True once this bus instance has completed at least one successful open
+  // (cleared again by disconnect(), which is a deliberate identity teardown).
+  // A SECOND open is a reconnect: every event the server pushed while the
+  // socket was down is gone — the server does not replay — so listeners must
+  // refetch from REST or the UI keeps showing a stale snapshot.
+  private openedBefore = false;
   // Conversations the UI has asked the server to fan events out for. We
   // remember them so we can replay the subscribe frames whenever the socket
   // (re)opens — a fresh DM opened after connect, or any reconnect, would
@@ -43,6 +49,14 @@ class EventBus {
       for (const cid of this.subscribedConvs) {
         try { s.send(JSON.stringify({ type: "subscribe", conversationId: cid })); } catch { /* retry on reconnect */ }
       }
+      // Reconnect (not the first open of this identity): broadcast a resync so
+      // every live-query listener refetches what it missed while we were down.
+      if (this.openedBefore) {
+        for (const l of this.listeners) {
+          try { l({ type: "bus.resync" }); } catch { /* one bad listener must not break the rest */ }
+        }
+      }
+      this.openedBefore = true;
     };
     s.onmessage = (ev) => {
       try {
@@ -74,6 +88,9 @@ class EventBus {
 
   disconnect(): void {
     this.closed = true;
+    // A deliberate teardown ends this identity's session: the next connect()
+    // is a first open (fresh REST load already happened), not a resync.
+    this.openedBefore = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
