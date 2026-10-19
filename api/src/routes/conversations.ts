@@ -21,6 +21,7 @@ import { filterWorkspaceMemberIds } from "../lib/workspace-scope.js";
 import { canSeeAgentInternals } from "../lib/agent-view.js";
 import { agentPresenceStatus } from "../lib/agent-presence.js";
 import { envNum } from "../lib/env.js";
+import { leaveChannelRejection } from "../lib/leave-channel.js";
 
 function dmId(a: string, b: string): string {
   const sorted = [a, b].sort().join(":");
@@ -472,9 +473,44 @@ export default async function conversationRoutes(app: FastifyInstance): Promise<
     return { ok: true };
   });
 
+  // Self-leave (Slack/Discord/Teams parity): any member can leave a channel
+  // they belong to. DMs are rejected — archive the DM instead, which hides it
+  // for you without breaking the other person's conversation. Guards live in
+  // lib/leave-channel.js so they stay unit-testable.
+  app.delete("/conversations/:id/leave", async (req, reply) => {
+    const convId = (req.params as { id: string }).id;
+    const memberId = req.auth!.memberId!;
+    const [conv] = await db
+      .select({ kind: conversations.kind, workspaceId: conversations.workspaceId })
+      .from(conversations)
+      .where(eq(conversations.id, convId))
+      .limit(1);
+    const [mem] = await db
+      .select({ role: conversationMembers.role })
+      .from(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, convId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      )
+      .limit(1);
+    const rejection = leaveChannelRejection(conv, mem, req.auth!.workspaceId!);
+    if (rejection) return reply.code(rejection.status).send({ error: rejection.error });
+    await db
+      .delete(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, convId),
+          eq(conversationMembers.memberId, memberId),
+        ),
+      );
+    return { ok: true };
+  });
+
   // Admin-only member removal. Kicks a member out of a channel; they lose
-  // the ability to see it and stop receiving events for it. Admins can't
-  // remove themselves this way (that's a self-leave, not implemented).
+  // the ability to see it and stop receiving events for it. Use
+  // DELETE /conversations/:id/leave to exit a channel yourself.
   app.delete("/conversations/:id/members/:memberId", async (req, reply) => {
     const convId = (req.params as { id: string }).id;
     const target = (req.params as { memberId: string }).memberId;
