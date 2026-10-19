@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Trash2, Pencil, Pin, Archive, ArchiveRestore, Bell, BellOff, X, UserMinus, UserPlus, Bot } from "lucide-react";
+import { Trash2, Pencil, Pin, Archive, ArchiveRestore, Bell, BellOff, LogOut, X, UserMinus, UserPlus, Bot } from "lucide-react";
 import MessageList from "../components/MessageList";
 import { useSearchJump } from "../lib/useSearchJump";
 import Composer from "../components/Composer";
@@ -130,6 +130,19 @@ export default function ChannelPage() {
     }
   }
 
+  async function leaveChannel() {
+    if (!c) return;
+    const name = c.name ?? "this channel";
+    if (!confirm(`Leave #${name}? You'll stop seeing it and its messages until someone adds you back.`)) return;
+    try {
+      await api.del(`/conversations/${id}/leave`);
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
+      nav("/members");
+    } catch (e) {
+      alert(`Leave failed: ${(e as Error).message}`);
+    }
+  }
+
   async function hardDeleteChannel() {
     if (!c) return;
     const name = c.name ?? "this channel";
@@ -223,6 +236,20 @@ export default function ChannelPage() {
                         icon: <Trash2 size={13} strokeWidth={2} />,
                         danger: true,
                         onSelect: hardDeleteChannel,
+                      },
+                    ]
+                  : []),
+                // Every member can leave (Slack parity). Kept out of the
+                // admin-only spread above so plain members get the item too.
+                // DMs never render this menu's leave path — the ChannelPage
+                // guards it on kind.
+                ...(c?.kind === "channel"
+                  ? [
+                      {
+                        label: "Leave channel…",
+                        icon: <LogOut size={13} strokeWidth={2} />,
+                        danger: true,
+                        onSelect: leaveChannel,
                       },
                     ]
                   : []),
