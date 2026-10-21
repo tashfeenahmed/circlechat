@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useTasks } from "../lib/hooks";
-import { CircleAlert, CircleDashed, Check, Copy, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { CircleAlert, CircleDashed, Check, Copy, Link2, MessageSquare, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useBus } from "../state/store";
 import { copyText } from "../lib/clipboard";
+import { messagePermalink } from "../lib/permalink";
 import Avatar from "./Avatar";
 import MemberHoverCard from "./MemberHoverCard";
 import Tooltip from "./Tooltip";
@@ -75,11 +77,19 @@ export default function MessageRow({
   // bar while focus is (visibly) inside the row so its actions are reachable.
   const [focusWithin, setFocusWithin] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   // Failure copy for edit/delete (see describeEditError/describeDeleteError).
   const [editError, setEditError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(copiedTimer.current), []);
+  const linkCopiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(
+    () => () => {
+      clearTimeout(copiedTimer.current);
+      clearTimeout(linkCopiedTimer.current);
+    },
+    [],
+  );
   // Attachment-only messages have no text to copy.
   const canCopy = msg.bodyMd.trim().length > 0;
 
@@ -90,6 +100,24 @@ export default function MessageRow({
       setCopied(true);
       clearTimeout(copiedTimer.current);
       copiedTimer.current = setTimeout(() => setCopied(false), 1500);
+    }
+  }
+
+  const location = useLocation();
+  async function doCopyLink() {
+    // Permalink to THIS message (Slack "Copy link"). The route we're on
+    // resolves to this message's conversation; the jump keys are the same
+    // ones the search-jump machinery consumes (see lib/permalink.ts).
+    const url = messagePermalink(msg.id, {
+      pathname: location.pathname,
+      conversationId: msg.conversationId,
+      parentId: msg.parentId,
+      origin: window.location.origin,
+    });
+    if (await copyText(url)) {
+      setLinkCopied(true);
+      clearTimeout(linkCopiedTimer.current);
+      linkCopiedTimer.current = setTimeout(() => setLinkCopied(false), 1500);
     }
   }
 
@@ -297,6 +325,14 @@ export default function MessageRow({
                 aria-label={copied ? "Copied" : "Copy message text"}
               >
                 {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={2} />}
+              </button>
+              <button
+                onClick={doCopyLink}
+                className="hb-btn"
+                title={linkCopied ? "Link copied" : "Copy link to message"}
+                aria-label={linkCopied ? "Link copied" : "Copy link to message"}
+              >
+                {linkCopied ? <Check size={13} strokeWidth={2} /> : <Link2 size={13} strokeWidth={2} />}
               </button>
               {!(spectator && inThread) && <span className="hb-sep" />}
             </>
