@@ -25,6 +25,28 @@ export interface ApplyOutcomeLike {
   errors: string[];
 }
 
+// Count one action as applied only when applying it added no error.
+//
+// The executor's per-action handlers report a rejection by pushing to
+// `errors` and returning normally (reply-guard rejections, near-duplicate
+// comments, "blocked" restatements, done-requires-review, unknown teammate…),
+// so "applyOne returned" does not mean "applyOne applied". Counting every
+// return as applied made a turn whose only output was a rejected comment
+// look productive: it cleared the heartbeat backoff and the scheduled-skip
+// backoff, and the stale-task wake fired again a minute later because the
+// agent's own comment never landed. One agent ran 1,428 times in 24 hours
+// this way, 263 of them posting a comment the guard then rejected.
+export async function applyCounted(
+  out: ApplyOutcomeLike,
+  apply: () => Promise<void>,
+): Promise<boolean> {
+  const before = out.errors.length;
+  await apply();
+  const applied = out.errors.length === before;
+  if (applied) out.actionsApplied++;
+  return applied;
+}
+
 export type RunClass =
   | { status: "ok"; productive: true; errorText: null }
   | { status: "ok"; productive: false; errorText: null; idle: true }
