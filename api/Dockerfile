@@ -1,4 +1,4 @@
-FROM node:22-alpine AS deps
+FROM node:22.23.4-alpine AS deps
 WORKDIR /app
 # Use `npm ci` against the committed lockfile so the dependency tree is
 # reproducible. A bare `npm install` resolves fresh and can pull an ioredis
@@ -6,13 +6,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=optional --no-audit --no-fund
 
-FROM node:22-alpine AS build
+FROM node:22.23.4-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npx tsc -p tsconfig.json
 
-FROM node:22-alpine
+FROM node:22.23.4-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 # docker-cli lets the agent-install route and the multi-bridge spawn

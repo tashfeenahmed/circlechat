@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:22.23.4-alpine AS build
 WORKDIR /app
 ARG VITE_API_URL=/api
 ARG VITE_WS_URL=/events
