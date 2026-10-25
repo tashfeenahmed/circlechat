@@ -16,6 +16,7 @@ import { requireWorkspace } from "../auth/session.js";
 import { id } from "../lib/ids.js";
 import { publishToConversation, publishToMember } from "../lib/events.js";
 import { markUnreadRejection, unreadAnchorSql } from "../lib/unread.js";
+import { editRejection, reactRejection } from "../lib/message-mutations.js";
 import { enqueueAgentEvent } from "../agents/enqueue.js";
 import { fireChannelPostTrigger, resolveHandlesToMemberIds } from "../agents/mention-triggers.js";
 import { notifyForMessage } from "../lib/notifications.js";
@@ -430,8 +431,10 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
     const body = EditBody.parse(req.body);
     const memberId = req.auth!.memberId!;
     const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
-    if (!m) return reply.code(404).send({ error: "not_found" });
-    if (m.memberId !== memberId) return reply.code(403).send({ error: "not_author" });
+    // A deleted message is 404 (not 200-then-invisible): editing one used to
+    // write a live body back onto the tombstone. See lib/message-mutations.ts.
+    const rejected = editRejection(m, memberId);
+    if (rejected) return reply.code(rejected.status).send({ error: rejected.error });
     const editedAt = new Date();
     await db.update(messages).set({ bodyMd: body.bodyMd, editedAt }).where(eq(messages.id, mId));
     await publishToConversation(m.conversationId, {
@@ -596,7 +599,9 @@ export default async function messageRoutes(app: FastifyInstance): Promise<void>
     const body = ReactBody.parse(req.body);
     const memberId = req.auth!.memberId!;
     const [m] = await db.select().from(messages).where(eq(messages.id, mId)).limit(1);
-    if (!m) return reply.code(404).send({ error: "not_found" });
+    // Deleted rows accept no reactions either (see lib/message-mutations.ts).
+    const react404 = reactRejection(m);
+    if (react404) return reply.code(react404.status).send({ error: react404.error });
     // Only conversation members may react — any authenticated member used to
     // be able to toggle reactions on any message by id (and the event was
     // broadcast into that conversation).
