@@ -13,6 +13,7 @@ const MESSAGES: Record<string, string> = {
   invite_expired: "That invite has expired. Ask a workspace admin for a new one.",
   invite_email_mismatch: "Sign in with, or enter, the email address this invite was sent to.",
   not_found: "Not found.",
+  not_a_channel: "Only channels can be left — archive a direct message instead.",
   validation: "Some fields are missing or invalid.",
   freeapi_base_url_required: "FreeLLMAPI needs a base URL (e.g. http://your-server:3200/v1).",
   hermes_home_exists: "An agent with that handle already has a Hermes directory. Pick a different handle.",
