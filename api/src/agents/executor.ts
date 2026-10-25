@@ -54,6 +54,7 @@ import {
 import { writeAudit } from "../lib/access-control.js";
 import { enqueueAgentEvent } from "./enqueue.js";
 import { safePublicFetch } from "../lib/safe-fetch.js";
+import { applyCounted } from "../lib/run-outcome.js";
 
 export interface AgentAttachment {
   key: string;
@@ -683,8 +684,7 @@ export async function applyActions(params: {
             .set({ status: "applied" })
             .where(eq(approvals.id, granted.id));
           out.trace.push(`gated ${a.type} allowed by approval ${granted.id} (consumed)`);
-          await applyOne(agentId, runId, agentMember.id, a, out);
-          out.actionsApplied++;
+          await applyCounted(out, () => applyOne(agentId, runId, agentMember.id, a, out));
           continue;
         }
         const opened = await openApproval({
@@ -709,8 +709,7 @@ export async function applyActions(params: {
           // Policy says this scope needs no human: run it now, leave the
           // audit row (status applied) so the decision is reviewable later.
           out.trace.push(`gated ${a.type} auto-approved by ${opened.rule} (approval ${opened.id}, audited)`);
-          await applyOne(agentId, runId, agentMember.id, a, out);
-          out.actionsApplied++;
+          await applyCounted(out, () => applyOne(agentId, runId, agentMember.id, a, out));
           continue;
         }
         const apId = opened.id;
@@ -719,8 +718,7 @@ export async function applyActions(params: {
         out.errors.push(`${a.type} ${why} — opened approval ${apId}`);
         continue;
       }
-      await applyOne(agentId, runId, agentMember.id, a, out);
-      out.actionsApplied++;
+      await applyCounted(out, () => applyOne(agentId, runId, agentMember.id, a, out));
     } catch (e) {
       out.errors.push(`${a.type}: ${(e as Error).message}`);
     }
