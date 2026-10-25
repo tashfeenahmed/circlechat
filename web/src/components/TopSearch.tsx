@@ -5,6 +5,7 @@ import { Search, Hash, MessageSquare } from "lucide-react";
 import { api } from "../api/client";
 import { useMe } from "../lib/hooks";
 import { searchHitUrl } from "../lib/searchJump";
+import { searchPanelState } from "../lib/searchPanel";
 
 interface Match {
   id: string;
@@ -26,7 +27,10 @@ const DEBOUNCE_MS = 220;
 
 export default function TopSearch() {
   const [q, setQ] = useState("");
-  const [matches, setMatches] = useState<Match[] | null>(null);
+  // Rows tagged with the needle they were fetched for — rendering rows for a
+  // different query than the input shows is the stale-results bug (below).
+  const [rows, setRows] = useState<{ needle: string; matches: Match[] } | null>(null);
+  const [failedNeedle, setFailedNeedle] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [idx, setIdx] = useState(0);
@@ -42,14 +46,16 @@ export default function TopSearch() {
   useEffect(() => {
     const needle = q.trim();
     if (needle.length < MIN_LEN) {
-      setMatches(null);
+      setRows(null);
+      setFailedNeedle(null);
       setLoading(false);
       abortRef.current?.abort();
       return;
     }
     const cached = cacheRef.current.get(needle);
     if (cached) {
-      setMatches(cached);
+      setRows({ needle, matches: cached });
+      setFailedNeedle(null);
       setLoading(false);
       return;
     }
@@ -67,11 +73,16 @@ export default function TopSearch() {
           if (firstKey !== undefined) cacheRef.current.delete(firstKey);
         }
         if (!ac.signal.aborted) {
-          setMatches(res.matches);
+          setRows({ needle, matches: res.matches });
+          setFailedNeedle(null);
           setIdx(0);
         }
       } catch (e) {
         if ((e as { name?: string }).name === "AbortError") return;
+        // The request for THIS needle failed. Say so in the panel — the rows
+        // still on screen belong to an older query and must not be clickable
+        // as if they answered the current one.
+        if (!ac.signal.aborted) setFailedNeedle(needle);
       } finally {
         if (abortRef.current === ac) setLoading(false);
       }
@@ -111,7 +122,18 @@ export default function TopSearch() {
     };
   }, [open]);
 
-  const visible = matches ?? [];
+  const needle = q.trim();
+  const panel = searchPanelState({
+    open,
+    needle,
+    minLength: MIN_LEN,
+    loading,
+    resultNeedle: rows?.needle ?? null,
+    matchCount: rows?.matches.length ?? 0,
+    failedNeedle,
+  });
+  // Rows are only ever visible when they belong to the current needle.
+  const visible = panel.kind === "results" && rows ? rows.matches : [];
 
   function pick(m: Match) {
     // Slack parity: land on the matched message, not the newest one. Thread
@@ -120,7 +142,8 @@ export default function TopSearch() {
     if (!url) return;
     setOpen(false);
     setQ("");
-    setMatches(null);
+    setRows(null);
+    setFailedNeedle(null);
     nav(url);
   }
 
@@ -144,8 +167,7 @@ export default function TopSearch() {
     }
   }
 
-  const needle = q.trim();
-  const showPanel = open && (needle.length >= MIN_LEN || visible.length > 0);
+  const showPanel = panel.kind !== "idle";
 
   return (
     <div ref={wrapRef} className="topbar-search-wrap">
@@ -175,10 +197,15 @@ export default function TopSearch() {
             }}
             onMouseDown={(e) => e.preventDefault()}
           >
-            {needle.length < MIN_LEN && (
+            {panel.kind === "too_short" && (
               <div className="search-empty">Type at least {MIN_LEN} characters…</div>
             )}
-            {needle.length >= MIN_LEN && !loading && visible.length === 0 && (
+            {panel.kind === "error" && (
+              <div className="search-empty">
+                Search failed for “{needle}” — check your connection and try again.
+              </div>
+            )}
+            {panel.kind === "empty" && !loading && (
               <div className="search-empty">No matches for “{needle}”.</div>
             )}
             {visible.map((m, i) => (
