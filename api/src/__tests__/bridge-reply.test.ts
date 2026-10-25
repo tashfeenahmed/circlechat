@@ -111,3 +111,23 @@ describe("bridge stripRuntimeNoise — file-mutation verifier notice", () => {
     expect(out).toBe("Backend is live.");
   });
 });
+
+describe("clipChatBody", () => {
+  it("leaves a reply that fits unchanged", () => {
+    const b = bridge as unknown as { clipChatBody: (s: string) => string };
+    expect(b.clipChatBody("short reply")).toBe("short reply");
+  });
+
+  it("cuts a long reply at a boundary and says how much was left out", () => {
+    const b = bridge as unknown as { clipChatBody: (s: string) => string };
+    const para = "This is one sentence of a long review. ".repeat(20);
+    const text = Array.from({ length: 6 }, (_, i) => `Section ${i}. ${para}`).join("\n\n");
+    const out = b.clipChatBody(text);
+    expect(out.length).toBeLessThanOrEqual(bridge.CHAT_BODY_MAX);
+    const m = out.match(/Cut to fit chat: (\d+) more characters were not posted/);
+    expect(m).not.toBeNull();
+    const kept = out.slice(0, out.indexOf("\n\n_Cut to fit chat"));
+    expect(Number(m![1])).toBe(text.length - kept.length);
+    expect(text.startsWith(kept)).toBe(true);
+  });
+});

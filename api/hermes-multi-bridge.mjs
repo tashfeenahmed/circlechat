@@ -670,6 +670,18 @@ function truncateAtBoundary(text, max) {
   return s.slice(0, cut).trimEnd();
 }
 
+// Fit a long reply into one chat message when it has no task card to go to.
+// The cut is visible: a note at the end says how much was left out, so a
+// reader knows the message is incomplete instead of mistaking the cut for the
+// whole answer (a review's findings sit at the end, and were what got lost).
+function clipChatBody(text, max = CHAT_BODY_MAX) {
+  const s = String(text || "");
+  if (s.length <= max) return s;
+  const cut = truncateAtBoundary(s, max - 120);
+  const left = s.length - cut.length;
+  return `${cut}\n\n_Cut to fit chat: ${left} more characters were not posted. Ask for the full text as a file._`;
+}
+
 // The first sentence/paragraph of a body, capped — used as the short chat
 // pointer when the long form is routed to a task card.
 function leadOf(text, max) {
@@ -1902,8 +1914,7 @@ function connect(entry) {
             chatBody = `${leadOf(postBody, CHAT_POINTER_MAX)}\n\n_Full update on the task card: ${routeTaskId}_`;
             console.log(`[${entry.handle}] ${trigger} → ${postBody.length}-char prose routed to task_comment on ${routeTaskId}; chat gets a ${chatBody.length}-char pointer`);
           } else {
-            const cut = truncateAtBoundary(postBody, CHAT_BODY_MAX - 80);
-            chatBody = cut;
+            chatBody = clipChatBody(postBody);
             console.log(`[${entry.handle}] ${trigger} → ${postBody.length}-char prose cut at a boundary to ${chatBody.length} for chat`);
           }
         }
@@ -2004,6 +2015,7 @@ export {
   sanitizeProse,
   applyProseRewrites,
   truncateAtBoundary,
+  clipChatBody,
   leadOf,
   isEntrypointNoise,
   CHAT_BODY_MAX,
