@@ -34,6 +34,26 @@ export function useSpectator(): boolean {
   return useMe().data?.spectator === true;
 }
 
+// The websocket carries every live update (message.new, approval events,
+// notification.new…) and the server does not replay frames a client missed.
+// Before this hook, a laptop sleeping through the night or a 30-second wifi
+// drop reconnected the socket and then showed a FROZEN board, approvals list,
+// and unread badge until a manual refresh — the reconnect looked identical to
+// "nothing happened", which is the worst failure mode for an agent-driven
+// team: work done while you were away was invisible. On every reconnect
+// (bus.resync, fired by ws/client.ts), invalidate every query so React Query
+// refetches each mounted view once. First opens are excluded (the queries were
+// just loaded), and invalidation only marks mounted observers stale — no storm
+// for views that aren't open.
+export function useResyncOnReconnect(): void {
+  const qc = useQueryClient();
+  useEffect(() => {
+    return bus.on((ev) => {
+      if (ev.type === "bus.resync") void qc.invalidateQueries();
+    });
+  }, [qc]);
+}
+
 export function useMe() {
   return useQuery<Me | null>({
     queryKey: ["me"],
