@@ -106,7 +106,10 @@ function Detail({ ap }: { ap: Approval }) {
     }
   };
   const requester = d.requester?.type === "user" ? user(d.requester.id)?.name : d.requester?.type === "agent" ? agent(d.requester.id)?.name : "";
-  const hoursLeft = Math.max(0, Math.round((ap.expiresAt - Date.now()) / 3600_000));
+  const msLeft = Math.max(0, ap.expiresAt - Date.now());
+  const hoursLeft = Math.round(msLeft / 3600_000);
+  const minsLeft = Math.max(1, Math.round(msLeft / 60_000));
+  const timeLeft = msLeft < 90 * 60_000 ? `${minsLeft} ${minsLeft === 1 ? "minute" : "minutes"}` : `${hoursLeft} hours`;
   return (
     <div style={{ maxWidth: 560, margin: "0 auto", padding: "40px 24px", width: "100%" }} className="col">
       <div className="row" style={{ gap: 14 }}>
@@ -192,7 +195,7 @@ function Detail({ ap }: { ap: Approval }) {
             </button>
           </div>
           <div className="row small" style={{ gap: 10, marginTop: 14, color: "var(--ink-2)" }}>
-            No answer in {hoursLeft} {hoursLeft === 1 ? "hour" : "hours"} means no. {a?.name ?? "The agent"} will be told.
+            No answer in {timeLeft} means no. {a?.name ?? "The agent"} will be told.
           </div>
         </>
       ) : (

@@ -2,7 +2,7 @@
 // README screenshots: a throwaway workspace with demo agents (mock engine, no
 // models, no Docker), a realistic group chat, then Chrome takes the pictures.
 //   npm run build && node tools/screenshots.ts [outDir]
-// Writes chat.png, apps.png and add-agent.png (default: docs/screenshots).
+// Writes chat, plan, tasks, memory, needs, apps, engines and add-agent PNGs (default: docs/screenshots).
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import puppeteer from "puppeteer-core";
@@ -66,6 +66,38 @@ h.app.db.prepare("DELETE FROM messages WHERE id = ?").run(trigger.id);
 h.app.db.prepare("UPDATE messages SET ts = ? WHERE chat_id = ? AND kind = 'approval'").run(t + 60_000, launch.id);
 h.app.db.prepare("UPDATE approvals SET created_at = ?").run(t + 60_000);
 
+// a plan with tasks and some team memory, made by Juno through the real tools
+const junoDm = (await c.post("/api/chats", { dmAgent: juno.id })).json.chat;
+const plan = {
+  title: "Launch on Tuesday",
+  steps: [
+    { title: "Review the signup fix", assignee: "milo" },
+    { title: "Post the launch thread on X", assignee: "wren" },
+    { title: "Write the changelog", assignee: "juno" },
+    { title: "Email the beta customers", assignee: "wren" },
+    { title: "Check competitor launches", assignee: "pip" },
+  ],
+};
+const memories = [
+  "Launch is Tuesday at 09:00 CET",
+  "Pricing: Hosted is 29 euros a month, Hosted Plus is 79",
+  "Brand voice: plain words, short sentences, no hype",
+  "Support replies within one working day",
+];
+const tools = [`!tool propose_plan ${JSON.stringify(plan)}`, ...memories.map((m) => `!tool remember ${JSON.stringify({ text: m, scope: "team" })}`)].join("\n");
+const ask = (await c.post(`/api/chats/${junoDm.id}/messages`, { body: tools })).json.message;
+await waitFor(async () => (await c.get("/api/tasks")).json.tasks?.length >= plan.steps.length, "plan tasks", 15_000);
+await waitFor(async () => (await c.get(`/api/chats/${junoDm.id}/messages`)).json.messages.some((m: any) => m.authorType === "agent" && m.kind === "text" && m.ts > ask.ts), "juno's turn to end", 15_000);
+// keep the plan card and memory pills, drop the instruction and the mock's tool report
+h.app.db.prepare("DELETE FROM messages WHERE chat_id = ? AND kind = 'text'").run(junoDm.id);
+say(junoDm.id, U, "Can you turn the launch into a plan and keep the key facts in memory?", 0);
+h.app.db.prepare("UPDATE messages SET ts = ? WHERE chat_id = ? AND kind != 'text'").run(t + 30_000, junoDm.id);
+say(junoDm.id, A(juno), "Done. Five tasks, one per owner, and four facts saved for the whole team. Milo's review is first.", 1);
+h.app.db.prepare("UPDATE memories SET created_at = ?").run(t);
+const st = ["done", "working", "checking", "todo", "needs_you"];
+const taskRows = h.app.db.prepare("SELECT id FROM tasks ORDER BY created_at, rowid").all() as any[];
+for (const [i, r] of taskRows.entries()) await c.patch(`/api/tasks/${r.id}`, { status: st[i % st.length] });
+
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ["--no-sandbox"] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 2 });
@@ -81,6 +113,13 @@ await shot(`/chats/${launch.id}`, "chat.png", async () => {
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 });
 await shot("/settings/apps", "apps.png");
+await shot(`/chats/${junoDm.id}`, "plan.png", async () => {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+});
+await shot("/tasks", "tasks.png");
+await shot("/memory", "memory.png");
+await shot("/needs", "needs.png");
+await shot("/settings/engines", "engines.png");
 await shot("/agents/new", "add-agent.png", async () => {
   await page.type('input[placeholder="Kit"]', "Biscuit");
   await page.type('input[placeholder="Sales"]', "Sales");

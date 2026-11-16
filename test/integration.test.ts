@@ -505,3 +505,15 @@ test("the tool log is intact after everything", async () => {
   assert.equal(v.ok, true);
   assert.ok(v.count > 10);
 });
+
+test("a stored token can't be moved to another host without typing it again", async () => {
+  const slack = (await c.post("/api/connections", { preset: "slack", secret: "xoxb-test" })).json.connection;
+  const r1 = await c.patch(`/api/connections/${slack.id}`, { baseUrl: "https://evil.example.com" });
+  assert.equal(r1.status, 400, "catalog app address is fixed");
+  const api = (await c.post("/api/connections", { app: "http", name: "Billing", baseUrl: "https://billing.example.com/v1", secret: "s3cret" })).json.connection;
+  assert.equal((await c.patch(`/api/connections/${api.id}`, { baseUrl: "https://other.example.com" })).status, 400, "new host needs the token again");
+  assert.equal((await c.patch(`/api/connections/${api.id}`, { baseUrl: "https://billing.example.com/v2" })).status, 200, "same host is fine");
+  assert.equal((await c.patch(`/api/connections/${api.id}`, { baseUrl: "https://other.example.com", secret: "new-token" })).status, 200, "with a new token it's fine");
+  await c.del(`/api/connections/${slack.id}`);
+  await c.del(`/api/connections/${api.id}`);
+});

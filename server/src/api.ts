@@ -114,7 +114,7 @@ export function buildApi(app: App): Hono<Env> {
       setupNeeded: users === 0,
       workspace: getSetting(db, "workspace_name") ?? "",
       user: u ?? null,
-      version: "2.0.0-dev",
+      version: "2.0.0",
       // hosted installs: where to sign in (the control plane), never the secret
       hosted: h ? { signInUrl: `${h.consoleUrl}/login` } : null,
     });
@@ -714,9 +714,14 @@ export function buildApi(app: App): Hono<Env> {
     if (b.name) db.prepare("UPDATE connections SET name = ? WHERE id = ?").run(String(b.name).slice(0, 60), r.id);
     if (r.app === "github" && Array.isArray(b.repos)) cfg.repos = b.repos.map(String);
     if (r.app === "http" && b.baseUrl) {
+      // a catalog app's address is fixed: its token only ever goes to that service
+      if (cfg.preset) throw bad("The address of a catalog app can't be changed. Remove it and connect again.");
       let url: URL;
       try { url = new URL(String(b.baseUrl)); } catch { throw bad("baseUrl must be a full URL"); }
       if (!["https:", "http:"].includes(url.protocol)) throw bad("only http and https");
+      // moving a stored token to another host needs the token typed again
+      const oldHost = (() => { try { return new URL(cfg.baseUrl).host; } catch { return ""; } })();
+      if (url.host !== oldHost && r.secret_id && !(typeof b.secret === "string" && b.secret)) throw bad("Enter the token again when you change the address to another host.");
       cfg.baseUrl = String(b.baseUrl).replace(/\/+$/, "");
     }
     db.prepare("UPDATE connections SET config = ? WHERE id = ?").run(JSON.stringify(cfg), r.id);

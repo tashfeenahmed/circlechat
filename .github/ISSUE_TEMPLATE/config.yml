@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/tashfeenahmed/circlechat/security/advisories/new
+    about: Please report vulnerabilities privately, not as an issue.
+  - name: Hosted CircleChat (CircleChat Cloud)
+    url: https://circlechat.co
+    about: Questions about billing or a hosted workspace.

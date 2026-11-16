@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Real engine smoke test (not part of `npm test`: costs real model calls).
 //   node test/real/real-engines.ts claude opencode hermes openclaw
-// Env: LOCAL_MODEL_URL (OpenAI-compatible, e.g. the Mac mini Qwen), LOCAL_MODEL, SANDBOX=docker|local
+// Env: LOCAL_MODEL_URL (any OpenAI-compatible server, e.g. Ollama or LM Studio), LOCAL_MODEL, SANDBOX=docker|local
 import { startApp, setupOwner, agentReply, waitFor } from "../helpers.ts";
 
 const which = process.argv.slice(2);
-const url = process.env.LOCAL_MODEL_URL ?? "http://192.168.1.140:8080/v1";
-const model = process.env.LOCAL_MODEL ?? "mlx-community/Qwen3.8-27B-4bit";
+const url = process.env.LOCAL_MODEL_URL ?? "http://127.0.0.1:11434/v1";
+const model = process.env.LOCAL_MODEL ?? "llama3.2";
 const results: { engine: string; check: string; ok: boolean; detail: string; ms: number }[] = [];
 
 const docker = process.env.SANDBOX === "docker" || which.some((e) => e === "hermes" || e === "openclaw");
 const h = await startApp({ turnTimeoutMs: 600_000, baseDir: docker ? new URL("../../.test-data", import.meta.url).pathname : undefined });
 const c = await setupOwner(h);
-h.app.upsertProvider({ id: "local", kind: "openai-compatible", baseUrl: url, apiKey: "", models: [model], label: "Mac mini Qwen" });
+h.app.upsertProvider({ id: "local", kind: "openai-compatible", baseUrl: url, apiKey: "", models: [model], label: "Local model" });
 h.app.gateway.agentReachableUrl = h.url.replace("127.0.0.1", "host.docker.internal");
 
 async function check(engine: string, name: string, fn: () => Promise<string>) {

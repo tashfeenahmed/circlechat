@@ -1,0 +1,45 @@
+name: Bug report
+description: Something doesn't work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time. Please don't paste tokens, keys or passwords. Security problems go to SECURITY.md, not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add an agent with the Hermes engine
+        2. Mention it in a group chat
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From Settings, Server, or `git rev-parse --short HEAD`.
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      options: [Not about an engine, Hermes, OpenClaw, Claude Code, opencode, Codex CLI, Gemini CLI, goose]
+  - type: input
+    id: env
+    attributes:
+      label: Where it runs
+      placeholder: "Ubuntu 24.04, Docker 28, Node 24.18 / CircleChat Cloud"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Server output or the agent's Watch view. Check that nothing secret is in it.
+      render: text
