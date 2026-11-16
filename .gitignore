@@ -1,0 +1,5 @@
+.test-data/
+node_modules/
+data/
+web/dist/
+*.log

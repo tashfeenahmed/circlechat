@@ -1,0 +1,25 @@
+{
+  "name": "circlechat",
+  "version": "2.0.0-dev",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "web",
+    "desktop"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w server & npm run dev -w web",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server",
+    "test": "node --test --test-concurrency=1 'test/*.test.ts'",
+    "typecheck": "tsc -p server --noEmit && tsc -p web --noEmit",
+    "desktop": "npm start -w desktop",
+    "test:e2e": "npm run build && node --test --test-concurrency=1 e2e/ui.e2e.ts",
+    "test:engines": "node test/real/real-engines.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

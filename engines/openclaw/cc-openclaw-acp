@@ -1,0 +1,34 @@
+#!/bin/sh
+# Start a private OpenClaw gateway bound to loopback, wait for it, then run the
+# ACP bridge on our stdio. Gateway logs never touch stdout (stdout is ACP).
+# If either process dies, stop both and exit non-zero, so CircleChat sees a crash
+# and restarts the agent instead of keeping a bridge with no gateway behind it.
+set -eu
+mkdir -p "$OPENCLAW_STATE_DIR"
+TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+openclaw gateway run --port 18789 --bind loopback --auth token --token "$TOKEN" --allow-unconfigured \
+  >"$OPENCLAW_STATE_DIR/gateway.log" 2>&1 &
+GW=$!
+i=0
+until node -e "require('net').connect(18789,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" 2>/dev/null; do
+  i=$((i+1))
+  if [ "$i" -gt 120 ] || ! kill -0 "$GW" 2>/dev/null; then
+    echo "openclaw gateway did not start" >&2; tail -20 "$OPENCLAW_STATE_DIR/gateway.log" >&2; exit 1
+  fi
+  sleep 0.5
+done
+# Background jobs get /dev/null as stdin unless redirected explicitly, so pass ours through fd 3.
+exec 3<&0
+openclaw acp --url ws://127.0.0.1:18789 --token "$TOKEN" <&3 &
+ACP=$!
+exec 3<&-
+trap 'kill "$GW" "$ACP" 2>/dev/null; exit 143' TERM INT
+while kill -0 "$GW" 2>/dev/null && kill -0 "$ACP" 2>/dev/null; do sleep 1; done
+if kill -0 "$ACP" 2>/dev/null; then
+  echo "openclaw gateway stopped; last log lines:" >&2; tail -5 "$OPENCLAW_STATE_DIR/gateway.log" >&2
+  kill "$ACP" 2>/dev/null
+  exit 1
+fi
+# the bridge exited (stdin closed or it failed): take the gateway down with it
+kill "$GW" 2>/dev/null
+wait "$ACP" || exit $?
