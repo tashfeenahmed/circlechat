@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Engine definitions: how to start each CLI agent so it speaks ACP on stdio,
 // either inside its own Docker sandbox or (dev only) as a local process.
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { mkdirSync, existsSync, lstatSync, unlinkSync, openSync, writeSync, closeSync, chmodSync, constants as FS } from "node:fs";
+import { join, resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
@@ -67,8 +67,35 @@ function resolveBin(pkg: string, rel: string): string | null {
 }
 
 function ensure(dir: string): string {
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
+}
+
+/**
+ * Write a file inside an agent's home without following links. The agent can change
+ * anything in its home, including swapping a config file or folder for a symlink to a
+ * server file; writing through it would overwrite that file. Any link on the way is
+ * removed and replaced with a real folder or file, and the final open refuses links.
+ */
+export function writeInHome(home: string, path: string, content: string): void {
+  const rel = relative(home, path);
+  if (!rel || rel.startsWith("..") || rel.startsWith(sep)) throw new Error(`refusing to write outside the agent home: ${path}`);
+  const parts = rel.split(sep);
+  let cur = home;
+  for (const part of parts.slice(0, -1)) {
+    cur = join(cur, part);
+    const st = lstatSync(cur, { throwIfNoEntry: false });
+    if (st?.isSymbolicLink() || (st && !st.isDirectory())) unlinkSync(cur);
+    if (!st || st.isSymbolicLink() || !st.isDirectory()) mkdirSync(cur, { mode: 0o700 });
+  }
+  const st = lstatSync(path, { throwIfNoEntry: false });
+  if (st && !st.isFile()) unlinkSync(path); // a link (or anything else) where the file should be
+  const fd = openSync(path, FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW, 0o600);
+  try {
+    writeSync(fd, content);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Path the engine sees for the agent home: /home/agent in docker, the real folder locally. */
@@ -93,11 +120,12 @@ export const ENGINES: EngineDef[] = [
     providerKinds: ["openai-compatible", "anthropic", "openai"],
     defaultModel: "local",
     launch(ctx) {
-      const hh = ensure(join(ctx.home, ".hermes"));
+      const hh = join(ctx.home, ".hermes");
       const p = ctx.provider;
       // Hermes reads ~/.hermes/config.yaml and ~/.hermes/.env
       const model = ctx.model || p?.models[0] || "";
-      writeFileSync(
+      writeInHome(
+        ctx.home,
         join(hh, "config.yaml"),
         [
           "model:",
@@ -115,7 +143,8 @@ export const ENGINES: EngineDef[] = [
           .filter(Boolean)
           .join("\n"),
       );
-      writeFileSync(
+      writeInHome(
+        ctx.home,
         join(hh, ".env"),
         p?.apiKey
           ? p.kind === "anthropic"
@@ -139,7 +168,7 @@ export const ENGINES: EngineDef[] = [
     sessionMcp: false,
     minMemory: "4g", // gateway + worker threads + ACP bridge; 2g gets OOM-killed on the first turn
     launch(ctx) {
-      const oc = ensure(join(ctx.home, ".openclaw"));
+      const oc = join(ctx.home, ".openclaw");
       const p = ctx.provider;
       const model = ctx.model || p?.models[0] || "";
       const cfg: any = {
@@ -154,7 +183,7 @@ export const ENGINES: EngineDef[] = [
         };
       }
       if (ctx.agentMcpUrl) cfg.mcp = { servers: { circlechat: { url: ctx.agentMcpUrl, transport: "streamable-http", requestTimeoutMs: 24 * 3600 * 1000 } } };
-      writeFileSync(join(oc, "openclaw.json"), JSON.stringify(cfg, null, 2));
+      writeInHome(ctx.home, join(oc, "openclaw.json"), JSON.stringify(cfg, null, 2));
       return {
         command: "cc-openclaw-acp",
         args: [],
@@ -201,7 +230,7 @@ export const ENGINES: EngineDef[] = [
     launch(ctx) {
       const p = ctx.provider;
       const model = ctx.model || p?.models[0] || "";
-      const cfgPath = join(ensure(join(ctx.home, ".config", "opencode")), "opencode.json");
+      const cfgPath = join(ctx.home, ".config", "opencode", "opencode.json");
       const cfg: any = { $schema: "https://opencode.ai/config.json", autoupdate: false, share: "disabled" };
       if (p && p.kind === "openai-compatible") {
         cfg.provider = {
@@ -220,7 +249,7 @@ export const ENGINES: EngineDef[] = [
         cfg.model = `openai/${model}`;
         if (p.baseUrl) cfg.provider = { openai: { options: { baseURL: openaiBase(p), apiKey: p.apiKey } } };
       }
-      writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      writeInHome(ctx.home, cfgPath, JSON.stringify(cfg, null, 2));
       const env: Record<string, string> = { OPENCODE_CONFIG: ctx.sandbox === "docker" ? "/home/agent/.config/opencode/opencode.json" : cfgPath };
       if (p?.kind === "anthropic") env.ANTHROPIC_API_KEY = p.apiKey;
       if (p?.kind === "openai") env.OPENAI_API_KEY = p.apiKey;
@@ -317,7 +346,16 @@ export function engineById(id: string): EngineDef | undefined {
 
 export function agentDirs(dataDir: string, agentId: string): { home: string; work: string } {
   const home = ensure(join(dataDir, "agents", agentId, "home"));
-  const work = ensure(join(home, "work"));
+  // private to the server's user (older homes were made 0755)
+  for (const d of [join(dataDir, "agents", agentId), home]) {
+    try {
+      chmodSync(d, 0o700);
+    } catch {}
+  }
+  const work = join(home, "work");
+  const st = lstatSync(work, { throwIfNoEntry: false });
+  if (st?.isSymbolicLink()) unlinkSync(work);
+  if (!st || st.isSymbolicLink()) mkdirSync(work, { mode: 0o700 });
   return { home, work };
 }
 

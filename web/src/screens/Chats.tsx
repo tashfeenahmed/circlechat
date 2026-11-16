@@ -20,6 +20,7 @@ import {
   statusLabel,
   tintVars,
   vis,
+  WorkingMark,
   withMentions,
 } from "../ui/ui.tsx";
 
@@ -587,6 +588,7 @@ function PlanCard({ m }: { m: Message }) {
               <span className={t.status === "done" ? "done-t" : ""}>{t.title}</span>
               <span className="who">
                 {t.status === "needs_you" && <Icon n="lock" size="sm" className="muted" />}
+                {t.assigneeType === "agent" && <WorkingMark a={agent(t.assigneeId)} chatId={m.chatId} done={t.status === "done"} />}
                 {t.assigneeType === "agent" && <AgentAv a={agent(t.assigneeId)} size={28} dot={false} />}
                 {t.assigneeType === "user" && <UserAv u={user(t.assigneeId)} size={28} />}
               </span>

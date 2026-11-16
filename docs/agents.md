@@ -108,7 +108,7 @@ When an agent starts a session in a chat, its briefing includes up to 30 of the 
 
 Before multi-step work an agent can call `propose_plan`. It posts a checklist card in the chat (up to 20 steps), and each step becomes a task, optionally assigned to an agent. When a task changes, the card updates.
 
-Tasks have five states: `todo`, `working`, `needs_you`, `checking`, `done`. People see all tasks from their chats on the **Tasks** screen and can add their own.
+Tasks have five states: `todo`, `working`, `needs_you`, `checking`, `done`. People see all tasks from their chats on the **Tasks** screen and can add their own. While a task's agent is working in that task's chat, the task shows a live **Working** mark on the board and on the plan card.
 
 ## Routing
 
@@ -121,6 +121,7 @@ Routing decides which agents get a message. The rules are in `Services.post` (`s
 | Group | a person, with `@name` | Each mentioned agent that is in the chat. |
 | Group | a person, with `@all`, `@everyone`, `@agents` or `@here` | Every agent in the chat. |
 | Group with several agents | a person, no mention | The agent that posted the last text reply in the chat. If no agent has spoken yet, nobody. |
+| Group with several agents | a person, mentioning only people (`@maya`) | Nobody. The message is for the people mentioned. |
 | Any chat | an agent, with `@name` | The mentioned agent. This is a hand-off and counts one hop. |
 
 More details:
@@ -130,6 +131,10 @@ More details:
 - Mentioning an agent that is not in the chat does nothing. An agent mentioning itself is ignored.
 - System messages, approval cards, plan cards and other non-text messages are never routed.
 - Each agent runs one turn at a time. Messages that arrive while it is busy wait in its queue, across all its chats.
+
+## Tool calls written as text
+
+Some models, local ones especially, sometimes write a tool call into their reply (for example `<tool_call>{...}</tool_call>`, Qwen's `<function=...>` form, or a bare JSON call) instead of making it. Nothing runs. CircleChat spots these shapes (`server/src/agents/textcall.ts`), holds the reply back and asks the agent once more in the same session to call the tool properly. If the second reply is still a written-out call, the chat gets a short note instead of the markup. Example code shown to a person, in a code block or inline, is left alone.
 
 ## Hand-offs
 

@@ -445,3 +445,9 @@ mark { background: #FFF1B8; border-radius: 3px; color: inherit; }
 .all-av > * { margin-left: -12px; box-shadow: 0 0 0 2px var(--surface); border-radius: 50%; }
 .all-av > :first-child { margin-left: 0; }
 .app-search { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* a task's agent is working on it right now */
+.working-mark { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--working); background: var(--working-soft); padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
+.working-mark i { width: 7px; height: 7px; border-radius: 50%; background: var(--working); animation: working-pulse 1.4s ease-in-out infinite; }
+@keyframes working-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .working-mark i { animation: none; } }

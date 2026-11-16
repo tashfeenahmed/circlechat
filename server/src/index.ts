@@ -5,6 +5,8 @@
 //   CIRCLECHAT_HOST       bind address (default 127.0.0.1)
 //   CIRCLECHAT_MASTER_KEY 32-byte base64url key for the vault (created on first run if missing)
 //   CIRCLECHAT_AGENT_URL  how agents in containers reach this server (default http://host.docker.internal:<port>)
+//   CIRCLECHAT_AGENT_EGRESS  open (default) | none | allowlist: what agent containers may reach (see agents/egress.ts)
+//   CIRCLECHAT_AGENT_EGRESS_ALLOW  hosts agents may reach in allowlist mode, e.g. github.com,*.npmjs.org
 //   CIRCLECHAT_AGENT_LISTEN  extra address (IP or interface, e.g. docker0) that serves only /mcp/* for agent
 //                         containers on Linux, where host.docker.internal is the bridge IP, not loopback
 //   CIRCLECHAT_TRUST_PROXY 1 = behind a TLS reverse proxy: honour X-Forwarded-Proto/Host (Secure cookies)
@@ -16,6 +18,7 @@ import { createHttpServer, createAgentServer } from "./server.ts";
 import { applySeedFile, resolveListenAddress } from "./hosting.ts";
 import { REPO_ROOT } from "./agents/engines.ts";
 import { getSetting } from "./db.ts";
+import { egressConfigFromEnv, ensureEgress } from "./agents/egress.ts";
 
 const dataDir = resolve(process.env.CIRCLECHAT_DATA ?? join(REPO_ROOT, "data"));
 mkdirSync(dataDir, { recursive: true });
@@ -80,9 +83,24 @@ if (agentServer) {
   };
   tryListen();
 }
-server.listen(port, host, () => {
+server.listen(port, host, async () => {
   app.gateway.publicUrl = `http://127.0.0.1:${port}`;
   app.gateway.agentReachableUrl = process.env.CIRCLECHAT_AGENT_URL ?? `http://host.docker.internal:${agentPort}`;
+  // network limits for agent containers: set up before any agent starts, and fail closed
+  try {
+    const eg = egressConfigFromEnv();
+    if (eg.mode !== "open") {
+      app.runtime.egressPending = true;
+      const u = new URL(app.gateway.agentReachableUrl);
+      app.runtime.egress = await ensureEgress(eg, dataDir, [`${u.hostname}:${u.port || (u.protocol === "https:" ? 443 : 80)}`]);
+      console.log(`Agent network: ${eg.mode}${eg.allow.length ? ` (${eg.allow.join(", ")})` : ""}, through ${app.runtime.egress?.network}`);
+    }
+  } catch (e) {
+    app.runtime.egressError = (e as Error).message;
+    console.error(`Agent network limits could not be set up, so agents won't start: ${app.runtime.egressError}`);
+  } finally {
+    app.runtime.egressPending = false;
+  }
   app.start();
   console.log(`CircleChat is running on http://${host === "0.0.0.0" ? "localhost" : host}:${port}`);
 });

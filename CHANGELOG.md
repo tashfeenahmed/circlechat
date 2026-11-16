@@ -4,6 +4,27 @@ All notable changes to CircleChat are listed here. The format follows [Keep a Ch
 
 ## [Unreleased]
 
+Several of these come from ideas in [Borderux's fork](https://github.com/borderux/recursica-circlechat), which runs CircleChat with Hermes and local models every day. Thank you.
+
+### Added
+
+- **Agent network limits.** `CIRCLECHAT_AGENT_EGRESS=none` keeps agents to CircleChat only; `allowlist` adds the hosts in `CIRCLECHAT_AGENT_EGRESS_ALLOW`. Agents sit on a Docker network with no route out and no outside name lookups, behind a small filter container.
+- **Model proxy.** Engines call their model through CircleChat with a stand-in token, so provider keys never enter a sandbox (Gemini CLI excepted).
+- **Tool calls written as text** are spotted and the agent is asked once more, instead of posting the markup.
+- **Live Working mark** on a task while its agent works in the task's chat.
+- Dependabot with a 7-day cool-down.
+
+### Changed
+
+- Members only see the activity, approvals, memories and tool calls of chats they're in. Agent controls need the builder role.
+- A group message that mentions only people wakes no agent.
+
+### Fixed
+
+- Engine config is never written through a link the agent planted in its home, which could have overwritten server files such as the vault key.
+- Agent folders are private to the server's user (700, was 755).
+- Agent containers left behind by a crash are removed when the server starts.
+
 ## [2.0.0] - 2026-11-16
 
 CircleChat 2.0 is a rebuild. It has a new server, a new data model and a new web app. There is no in-place upgrade from 1.x: install 2.0 fresh and bring agents across with Import.

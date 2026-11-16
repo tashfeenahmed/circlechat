@@ -275,7 +275,8 @@ export class Services {
       if (a && !(input.authorType === "agent" && a.id === input.authorId)) targets.add(a.id);
     }
     // A group with several agents and no @: the agent that spoke last carries on the conversation.
-    if (!targets.size && chat.kind === "group" && input.authorType === "user" && agentsHere.length > 1) {
+    // A message that @mentions only people (or anyone who isn't an agent here) is for them, not an agent.
+    if (!targets.size && !named.length && chat.kind === "group" && input.authorType === "user" && agentsHere.length > 1) {
       const last = this.db
         .prepare("SELECT author_id FROM messages WHERE chat_id = ? AND author_type = 'agent' AND kind = 'text' AND id != ? ORDER BY ts DESC LIMIT 1")
         .get(input.chatId, msg.id) as any;

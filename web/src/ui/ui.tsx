@@ -74,6 +74,17 @@ export function vis(s?: AgentStatus): Vis {
       return "sleeping";
   }
 }
+/** A live "Working" mark for a task card while its agent is busy in the task's chat. */
+export function WorkingMark({ a, chatId, done }: { a?: Agent; chatId: string; done?: boolean }) {
+  if (done || !a || vis(a.status) !== "working" || (a.status.chatId && a.status.chatId !== chatId)) return null;
+  return (
+    <span className="working-mark" title={a.status.detail || "Working"}>
+      <i />
+      Working
+    </span>
+  );
+}
+
 export function statusLabel(s?: AgentStatus): string {
   switch (s?.state) {
     case "working":

@@ -67,8 +67,13 @@ export class App {
   }
 
   start(): void {
-    this.runtime.resume();
-    if (this.cfg.warmOnBoot) void this.runtime.warmRecent().catch(() => undefined);
+    // leftovers from a crash go first, then queued work and the warm-up start fresh containers
+    const swept = this.cfg.warmOnBoot ? this.runtime.sweepContainers().catch(() => 0) : Promise.resolve(0);
+    void swept.then((n) => {
+      if (n) console.log(`Removed ${n} agent container${n === 1 ? "" : "s"} left from the last run.`);
+      this.runtime.resume();
+      if (this.cfg.warmOnBoot) void this.runtime.warmRecent().catch(() => undefined);
+    });
     this.triggers.start();
     void this.startBridges();
   }
