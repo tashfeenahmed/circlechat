@@ -173,3 +173,18 @@ test("app catalog: the Test button reads each API's answer", async () => {
   const shop = preset("shopify")!;
   assert.match((await checkPreset(shop, presetConfig(shop, { shop: "nope" }, "x"), "x", fake(404, {}))).detail, /couldn't find that store/);
 });
+
+test("login limiter: per address and per account, sliding window", async () => {
+  const { FailureLimiter } = await import("../server/src/api.ts");
+  const l = new FailureLimiter({ ip: 3, acct: 2 }, 1000);
+  const k = (ip: string, a: string) => [`ip:${ip}`, `acct:${a}`];
+  l.fail(k("1.1.1.1", "a"), 0);
+  assert.equal(l.blocked(k("1.1.1.1", "a"), 10), 0);
+  l.fail(k("2.2.2.2", "a"), 10);
+  assert.ok(l.blocked(k("3.3.3.3", "a"), 20) > 0, "one account from many addresses is still limited");
+  assert.equal(l.blocked(k("3.3.3.3", "b"), 20), 0, "other accounts are fine");
+  assert.equal(l.blocked(k("3.3.3.3", "a"), 1011), 0, "the window slides");
+  l.clear("acct:a");
+  l.fail(k("9.9.9.9", "x"), 2000); l.fail(k("9.9.9.9", "y"), 2001); l.fail(k("9.9.9.9", "z"), 2002);
+  assert.ok(l.blocked(k("9.9.9.9", "new"), 2003) > 0, "one address guessing many accounts is limited");
+});

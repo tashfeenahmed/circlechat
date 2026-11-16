@@ -35,13 +35,16 @@ export function SearchScreen({ q: initial }: { q: string }) {
   const [tab, setTab] = useState<"all" | "agents" | "chats" | "messages" | "tasks">("all");
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => input.current?.focus(), []);
+  // only the newest search may show its results: a slow answer to an older query is dropped
+  const latest = useRef(0);
   useEffect(() => {
+    const n = ++latest.current;
     const t = setTimeout(() => {
       if (q.trim().length < 2) return setR(null);
       api
         .get(`/api/search?q=${encodeURIComponent(q.trim())}`)
-        .then(setR)
-        .catch(() => setR(null));
+        .then((res) => n === latest.current && setR(res))
+        .catch(() => n === latest.current && setR(null));
       history.replaceState(null, "", `/search?q=${encodeURIComponent(q)}`);
     }, 180);
     return () => clearTimeout(t);
