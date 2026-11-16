@@ -161,7 +161,7 @@ The runtime keeps one long-lived process per agent and one session per chat, and
 
 ## Security
 
-Agent containers run without Linux capabilities, as a non-root user, with process, memory and CPU limits and only their own folder mounted. Credentials are encrypted at rest (AES-256-GCM) with a key that never enters a sandbox. New connections are off everywhere until granted, and new MCP tools stay off until reviewed. Wrong passwords are rate limited per address and per account.
+Agent containers run without Linux capabilities, as a non-root user, with process, memory and CPU limits and only their own folder mounted. Credentials are encrypted at rest (AES-256-GCM) with a key that never enters a sandbox, and engines reach their model through a proxy, so model keys stay out of sandboxes too. Members only see the chats, memory, approvals and tool calls of chats they're in. New connections are off everywhere until granted, and new MCP tools stay off until reviewed. Wrong passwords are rate limited per address and per account.
 
 Read the [security model](docs/security.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 

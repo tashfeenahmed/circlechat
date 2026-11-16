@@ -49,12 +49,12 @@ These need no session.
 | POST | `/api/agents` | Builder | `{ name, handle?, roleTitle?, style?, colour?, engine?, model?, instructions?, autonomy?, sandbox?, budgetCents?, chats? }` | `engine` defaults to `hermes`, `autonomy` to `act`, `sandbox` to `docker`. `chats` is a list of chat ids to join. |
 | PATCH | `/api/agents/:id` | Builder | same fields | Changing `engine`, `model` or `sandbox` stops the process; it starts again on the next message. |
 | DELETE | `/api/agents/:id` | Admin | | Stops and archives the agent. Its handle is freed. |
-| POST | `/api/agents/:id/pause` | Any | | Stops the process. |
-| POST | `/api/agents/:id/wake` | Any | | Starts the process. |
-| POST | `/api/agents/:id/restart` | Any | | Stops and starts the process. |
-| POST | `/api/agents/:id/cancel` | Any | | Cancels the current turn. |
-| POST | `/api/agents/:id/new-session` | Any | `{ chatId? }` | Forgets the session for one chat, or all chats. Memory is kept. |
-| GET | `/api/agents/:id/activity` | Any | `?limit=300` | `{ status, activity, queued }`: the activity log and waiting deliveries. |
+| POST | `/api/agents/:id/pause` | Builder | | Stops the process. |
+| POST | `/api/agents/:id/wake` | Builder | | Starts the process. |
+| POST | `/api/agents/:id/restart` | Builder | | Stops and starts the process. |
+| POST | `/api/agents/:id/cancel` | Builder, or a member of the chat it is working in | | Cancels the current turn. |
+| POST | `/api/agents/:id/new-session` | Builder | `{ chatId? }` | Forgets the session for one chat, or all chats. Memory is kept. |
+| GET | `/api/agents/:id/activity` | Any | `?limit=300` | `{ status, activity, queued }`: the activity log and waiting deliveries, limited to chats you can see. Engine output with no chat is for builders. |
 | POST | `/api/agents/import/inspect` | Builder | `{ path }` | What an import of that server folder would bring. |
 | POST | `/api/agents/import` | Builder | `{ path, handle?, name?, roleTitle?, engine?, model?, sandbox? }` | Creates the agent. Returns `imported: { memories, skills }`. |
 
@@ -89,20 +89,20 @@ Agent fields:
 
 | Method | Path | Role | Body or query | Notes |
 |---|---|---|---|---|
-| GET | `/api/approvals` | Any | `?state=pending` | All approvals, or those in one state (`pending`, `approved`, `denied`, `expired`, `cancelled`). Without a state, the latest 200. |
+| GET | `/api/approvals` | Any | `?state=pending` | Approvals in chats you can see and ones you asked for (admins: all), or those in one state (`pending`, `approved`, `denied`, `expired`, `cancelled`). Without a state, the latest 200. |
 | POST | `/api/approvals/:id/decide` | See notes | `{ decision, reason? }` | `decision` is `allow_once`, `allow_always` or `deny`. Admins, the person who made the request, or members of the chat. 409 if already decided. |
 
 ## Memory and tasks
 
 | Method | Path | Role | Body or query | Notes |
 |---|---|---|---|---|
-| GET | `/api/memories` | Any | `?scope=team\|chat\|agent&scopeId=` | Up to 300 notes, newest first, and whether memory is paused. |
-| POST | `/api/memories` | Any | `{ text, scope?, scopeId? }` | `scope` defaults to `team`. Refused when paused or when the text looks like a secret. |
-| PATCH | `/api/memories/:id` | Any | `{ forget?, restore?, text? }` | Forget, restore or edit a note. |
+| GET | `/api/memories` | Any | `?scope=team\|chat\|agent&scopeId=` | Up to 300 notes, newest first, and whether memory is paused. Chat memory only for chats you can see (admins: all). |
+| POST | `/api/memories` | Any | `{ text, scope?, scopeId? }` | `scope` defaults to `team`. Chat memory needs you to see that chat; agent notes need a builder. Refused when paused or when the text looks like a secret. |
+| PATCH | `/api/memories/:id` | Any | `{ forget?, restore?, text? }` | Forget, restore or edit a note. Chat memory needs you to see that chat; agent notes need a builder. |
 | PUT | `/api/memories/paused` | Admin | `{ paused }` | Pauses or resumes memory. |
 | GET | `/api/tasks` | Any | `?chat=<id>` | Tasks in chats you can see. |
 | POST | `/api/tasks` | Member of the chat | `{ chatId, title, assigneeType?, assigneeId? }` | |
-| PATCH | `/api/tasks/:id` | Any | `{ status?, title?, assigneeType?, assigneeId? }` | `status`: `todo`, `working`, `needs_you`, `checking`, `done`. |
+| PATCH | `/api/tasks/:id` | Any | `{ status?, title?, assigneeType?, assigneeId? }` | `status`: `todo`, `working`, `needs_you`, `checking`, `done`. 404 unless you can see the task's chat. |
 
 ## Integrations
 
@@ -114,11 +114,11 @@ Agent fields:
 | PATCH | `/api/connections/:id` | Builder, or the owner of a personal connection | `{ name?, repos?, baseUrl?, secret?, enabled? }` | `enabled: false` turns it off. |
 | PUT | `/api/connections/:id/grants` | Builder | `{ grants: [{ type: "workspace" \| "chat" \| "agent", id? }] }` | Replaces all grants. `[]` is off everywhere. |
 | PUT | `/api/connections/:id/policies` | Builder | `{ policies: { "<tool>": "allow" \| "ask" \| "block" } }` | A key `"<tool>@chat:<chat id>"` sets the rule for one chat. |
-| POST | `/api/connections/:id/test` | Any | | `{ ok, detail }`. Runs the app's token check. |
+| POST | `/api/connections/:id/test` | Builder, or the owner of a personal connection | | `{ ok, detail }`. Runs the app's token check. |
 | DELETE | `/api/connections/:id` | Builder | | Also deletes its key, grants and policies. |
 | GET | `/api/mcp` | Any | | MCP servers with tools, grants and policies. |
 | POST | `/api/mcp` | Builder | `{ name, transport: "http" \| "stdio", url?, command?, args?, secrets? }` | Connects and lists tools, all off. Returns `{ server, refresh }`. |
-| POST | `/api/mcp/:id/refresh` | Any | | Lists tools again. New tools arrive off. Returns `{ tools, added, server }`. |
+| POST | `/api/mcp/:id/refresh` | Builder | | Lists tools again. New tools arrive off. Returns `{ tools, added, server }`. |
 | PUT | `/api/mcp/:id/grants` | Builder | as for connections | |
 | PUT | `/api/mcp/:id/policies` | Builder | `{ policies: { "<server>__<tool>": "allow" \| "ask" \| "block" \| "off" } }` | |
 | DELETE | `/api/mcp/:id` | Builder | | Also deletes its secrets, grants and policies. |
@@ -139,14 +139,14 @@ Bodies for `POST /api/connections`:
 | POST | `/api/triggers` | Builder | `{ kind: "webhook" \| "schedule", name, chatId, agentId, prompt, secret?, schedule?, filter?, enabled? }` | The agent must be in the chat. `schedule` is a 5-field cron. |
 | PATCH | `/api/triggers/:id` | Builder | any of the fields | |
 | DELETE | `/api/triggers/:id` | Builder | | |
-| GET | `/api/triggers/:id/runs` | Any | | The last 50 runs. |
-| POST | `/api/trigger-runs/:id/replay` | Any | | Fires the trigger again with that run's body. |
+| GET | `/api/triggers/:id/runs` | Builder | | The last 50 runs. |
+| POST | `/api/trigger-runs/:id/replay` | Builder | | Fires the trigger again with that run's body. |
 
 ## Tool log
 
 | Method | Path | Role | Body or query | Notes |
 |---|---|---|---|---|
-| GET | `/api/toollog` | Any | `?agent=<id>&only=approval\|failed` | The latest 300 calls. |
+| GET | `/api/toollog` | Any | `?agent=<id>&only=approval\|failed` | The latest 300 calls in chats you can see (admins: all). |
 | GET | `/api/toollog/verify` | Any | | `{ ok, count, brokenAt? }` |
 
 ## Engines, models and settings
@@ -158,7 +158,7 @@ Bodies for `POST /api/connections`:
 | GET | `/api/providers` | Any | | Model providers, with `hasKey` instead of the key. |
 | PUT | `/api/providers/:id` | Admin | `{ kind, baseUrl?, apiKey?, models?, label? }` | Creates or updates. `kind`: `openai-compatible`, `anthropic`, `openai`. Leaving out `apiKey` keeps the stored key. |
 | DELETE | `/api/providers/:id` | Admin | | Also deletes its key. |
-| POST | `/api/providers/:id/test` | Any | | Lists the provider's models. `{ ok, detail, models? }` |
+| POST | `/api/providers/:id/test` | Admin | | Lists the provider's models. `{ ok, detail, models? }` |
 | GET | `/api/usage` | Any | | This month's total, the limit and cost per agent. |
 | GET | `/api/settings` | Any | | `{ workspace, monthlyLimitCents, memoryPaused, sandboxMemory }` |
 | PUT | `/api/settings` | Admin | `{ workspace?, monthlyLimitCents?, sandboxMemory? }` | `sandboxMemory` like `2g` or `512m`. |
@@ -167,7 +167,7 @@ Bodies for `POST /api/connections`:
 
 | Method | Path | Role | Body or query | Notes |
 |---|---|---|---|---|
-| GET | `/api/bridges` | Any | | Bridges with `status` and `error`. |
+| GET | `/api/bridges` | Admin | | Bridges with `status` and `error`. |
 | POST | `/api/bridges` | Admin | `{ chatId, channel, botToken, appToken }` | Stores both tokens in the vault and starts the bridge. Returns `{ id, started, error? }`. |
 | PATCH | `/api/bridges/:id` | Admin | `{ enabled }` | |
 | DELETE | `/api/bridges/:id` | Admin | | |

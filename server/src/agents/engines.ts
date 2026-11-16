@@ -13,7 +13,7 @@ export interface ModelProvider {
   id: string; // "local" | "anthropic" | "openai" | "openrouter" | custom
   kind: "openai-compatible" | "anthropic" | "openai";
   baseUrl: string;
-  apiKey: string; // already decrypted, only ever passed into the engine's own env/config
+  apiKey: string; // engines get CircleChat's model proxy token here, not the provider's key (see modelproxy.ts)
   models: string[];
 }
 
@@ -49,6 +49,8 @@ export interface EngineDef {
   defaultModel: string;
   /** false: the engine rejects per-session MCP servers, so tools are wired into its config at launch */
   sessionMcp?: boolean;
+  /** false: the engine can only call its vendor directly, so it gets the real key instead of the model proxy */
+  modelProxy?: boolean;
   /** Smallest container memory the engine runs in, e.g. "4g". The sandbox_memory setting can raise it, not lower it. */
   minMemory?: string;
   /** Write any engine config into the agent home, then say how to start it. */
@@ -101,7 +103,7 @@ export const ENGINES: EngineDef[] = [
           "model:",
           `  default: ${JSON.stringify(model)}`,
           `  provider: ${p?.kind === "anthropic" ? "anthropic" : "custom"}`,
-          p && p.kind !== "anthropic" ? `  base_url: ${JSON.stringify(openaiBase(p))}` : "",
+          p && (p.kind !== "anthropic" || p.baseUrl) ? `  base_url: ${JSON.stringify(openaiBase(p))}` : "",
           p && p.kind !== "anthropic" ? `  api_key: ${JSON.stringify(p.apiKey || "none")}` : "",
           "terminal:",
           "  backend: local",
@@ -115,7 +117,11 @@ export const ENGINES: EngineDef[] = [
       );
       writeFileSync(
         join(hh, ".env"),
-        p?.apiKey ? (p.kind === "anthropic" ? `ANTHROPIC_API_KEY=${p.apiKey}\n` : `OPENAI_API_KEY=${p.apiKey}\n`) : "OPENAI_API_KEY=none\n",
+        p?.apiKey
+          ? p.kind === "anthropic"
+            ? `ANTHROPIC_API_KEY=${p.apiKey}\n${p.baseUrl ? `ANTHROPIC_BASE_URL=${p.baseUrl}\n` : ""}`
+            : `OPENAI_API_KEY=${p.apiKey}\n`
+          : "OPENAI_API_KEY=none\n",
       );
       if (ctx.sandbox === "docker") return { command: "cc-hermes-acp", args: [], env: { HERMES_HOME: "/var/lib/hermes/home" }, cwd: workFor(ctx), volumes: [{ name: "hermes", target: "/var/lib/hermes" }] };
       return { command: "hermes-acp", args: [], env: { HERMES_HOME: join(homeFor(ctx), ".hermes") }, cwd: workFor(ctx) };
@@ -152,7 +158,10 @@ export const ENGINES: EngineDef[] = [
       return {
         command: "cc-openclaw-acp",
         args: [],
-        env: { OPENCLAW_STATE_DIR: join(homeFor(ctx), ".openclaw"), ...(p?.kind === "anthropic" ? { ANTHROPIC_API_KEY: p.apiKey } : {}) },
+        env: {
+          OPENCLAW_STATE_DIR: join(homeFor(ctx), ".openclaw"),
+          ...(p?.kind === "anthropic" ? { ANTHROPIC_API_KEY: p.apiKey, ...(p.baseUrl ? { ANTHROPIC_BASE_URL: p.baseUrl } : {}) } : {}),
+        },
         cwd: workFor(ctx),
       };
     },
@@ -169,6 +178,7 @@ export const ENGINES: EngineDef[] = [
     launch(ctx) {
       const env: Record<string, string> = {};
       if (ctx.provider?.apiKey) env.ANTHROPIC_API_KEY = ctx.provider.apiKey;
+      if (ctx.provider?.baseUrl) env.ANTHROPIC_BASE_URL = ctx.provider.baseUrl;
       if (ctx.model) env.ANTHROPIC_MODEL = ctx.model;
       if (ctx.sandbox === "local") {
         // Dev mode: run the ACP adapter on this machine with the user's own Claude Code login.
@@ -205,8 +215,10 @@ export const ENGINES: EngineDef[] = [
         cfg.model = `circlechat/${model}`;
       } else if (p?.kind === "anthropic") {
         cfg.model = `anthropic/${model}`;
+        if (p.baseUrl) cfg.provider = { anthropic: { options: { baseURL: `${openaiBase(p)}/v1`, apiKey: p.apiKey } } };
       } else if (p?.kind === "openai") {
         cfg.model = `openai/${model}`;
+        if (p.baseUrl) cfg.provider = { openai: { options: { baseURL: openaiBase(p), apiKey: p.apiKey } } };
       }
       writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
       const env: Record<string, string> = { OPENCODE_CONFIG: ctx.sandbox === "docker" ? "/home/agent/.config/opencode/opencode.json" : cfgPath };
@@ -227,6 +239,7 @@ export const ENGINES: EngineDef[] = [
     launch(ctx) {
       const env: Record<string, string> = { CODEX_HOME: join(homeFor(ctx), ".codex") };
       if (ctx.provider?.apiKey) env.OPENAI_API_KEY = ctx.provider.apiKey;
+      if (ctx.provider?.baseUrl) env.OPENAI_BASE_URL = openaiBase(ctx.provider);
       return { command: "codex-acp", args: [], env, cwd: workFor(ctx) };
     },
   },
@@ -239,6 +252,7 @@ export const ENGINES: EngineDef[] = [
     protocol: "acp",
     providerKinds: ["openai-compatible"],
     defaultModel: "gemini-2.5-pro",
+    modelProxy: false, // Gemini CLI only calls Google; it gets the key itself
     launch(ctx) {
       const env: Record<string, string> = {};
       if (ctx.provider?.apiKey) env.GEMINI_API_KEY = ctx.provider.apiKey;
@@ -264,7 +278,8 @@ export const ENGINES: EngineDef[] = [
           OPENAI_API_KEY: p.apiKey || "none",
           GOOSE_MODEL: ctx.model || p.models[0] || "",
         });
-      if (p?.kind === "anthropic") Object.assign(env, { GOOSE_PROVIDER: "anthropic", ANTHROPIC_API_KEY: p.apiKey, GOOSE_MODEL: ctx.model });
+      if (p?.kind === "anthropic")
+        Object.assign(env, { GOOSE_PROVIDER: "anthropic", ANTHROPIC_API_KEY: p.apiKey, GOOSE_MODEL: ctx.model, ...(p.baseUrl ? { ANTHROPIC_HOST: p.baseUrl } : {}) });
       return { command: "goose", args: ["acp"], env, cwd: workFor(ctx) };
     },
   },

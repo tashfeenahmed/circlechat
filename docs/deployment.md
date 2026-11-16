@@ -154,7 +154,7 @@ Keep in mind:
 
 - **Store the vault key separately.** Neither backup nor export contains it. Without it, the stored keys in a backup can't be read.
 - **Docker named volumes are not included.** Engine state kept on a volume (such as `cc-<agent id>-hermes`) is not in the backup. Engine config in those volumes is copied in again from the agent's home at each start.
-- **Agent homes can hold model keys in plain text** (engine config files). Protect backups like the data folder itself.
+- **Agent homes hold engine config** with stand-in model tokens, not keys (Gemini CLI is the exception). Protect backups like the data folder itself.
 
 ### Restoring a backup
 

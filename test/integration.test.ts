@@ -517,3 +517,33 @@ test("a stored token can't be moved to another host without typing it again", as
   await c.del(`/api/connections/${slack.id}`);
   await c.del(`/api/connections/${api.id}`);
 });
+
+test("members only see and change what's in their chats; builders run agents", async () => {
+  await c.post("/api/users", { email: "mo@lumen.test", name: "Mo", role: "member", password: "member password 1" });
+  const mo = new Client(h.url);
+  assert.equal((await mo.post("/api/login", { email: "mo@lumen.test", password: "member password 1" })).status, 200);
+  // a private chat between the owner and pip, with a chat memory, a task and a tool call
+  const priv = (await c.post("/api/chats", { name: "Private", agents: [pip.id] })).json.chat;
+  const m = await say(priv.id, '@pip\n!tool remember {"text":"private plan: acquire Acme","scope":"chat"}\n!tool task_update {"title":"secret task"}');
+  await agentReply(c, priv.id, pip.id, m.ts);
+  const task = (await c.post("/api/tasks", { chatId: priv.id, title: "owner's private task" })).json.task;
+  // what the member can read
+  const mems = (await mo.get("/api/memories")).json.memories;
+  assert.ok(!mems.some((x: any) => x.text.includes("acquire Acme")), "chat memory hidden");
+  assert.ok((await c.get("/api/memories")).json.memories.some((x: any) => x.text.includes("acquire Acme")), "owner still sees it");
+  assert.ok(!(await mo.get("/api/toollog")).json.calls.some((x: any) => x.chatId === priv.id), "tool log filtered");
+  assert.ok(!(await mo.get(`/api/agents/${pip.id}`)).json.chats.some((x: any) => x.id === priv.id), "agent's private chats hidden");
+  assert.ok(!(await mo.get(`/api/agents/${pip.id}/activity`)).json.activity.some((e: any) => e.chatId === priv.id), "activity filtered");
+  // what the member can change
+  assert.equal((await mo.patch(`/api/tasks/${task.id}`, { status: "done" })).status, 404, "can't touch a task in a chat they can't see");
+  const memId = (await c.get("/api/memories")).json.memories.find((x: any) => x.text.includes("acquire Acme")).id;
+  assert.equal((await mo.patch(`/api/memories/${memId}`, { forget: true })).status, 404);
+  assert.equal((await mo.post("/api/memories", { scope: "chat", scopeId: priv.id, text: "planted" })).status, 403);
+  // agent controls need a builder
+  for (const act of ["pause", "restart", "wake"]) assert.equal((await mo.post(`/api/agents/${pip.id}/${act}`)).status, 403, act);
+  assert.equal((await mo.post(`/api/agents/${pip.id}/new-session`, {})).status, 403);
+  // using stored tokens needs a builder too
+  const conn = (await c.post("/api/connections", { app: "http", name: "Internal", baseUrl: "https://internal.example.com", secret: "t" })).json.connection;
+  assert.equal((await mo.post(`/api/connections/${conn.id}/test`)).status, 403);
+  await c.del(`/api/connections/${conn.id}`);
+});

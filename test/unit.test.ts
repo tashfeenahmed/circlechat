@@ -188,3 +188,65 @@ test("login limiter: per address and per account, sliding window", async () => {
   l.fail(k("9.9.9.9", "x"), 2000); l.fail(k("9.9.9.9", "y"), 2001); l.fail(k("9.9.9.9", "z"), 2002);
   assert.ok(l.blocked(k("9.9.9.9", "new"), 2003) > 0, "one address guessing many accounts is limited");
 });
+
+test("model proxy: engines get a stand-in token, the proxy adds the real key and stays on the provider", async () => {
+  const { ModelProxy } = await import("../server/src/agents/modelproxy.ts");
+  const { ENGINES } = await import("../server/src/agents/engines.ts");
+  const { createServer } = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const seen: any[] = [];
+  const upstream = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      seen.push({ url: req.url, auth: req.headers.authorization, xkey: req.headers["x-api-key"], body });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write("data: one\n\n");
+      res.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  const up = `http://127.0.0.1:${(upstream.address() as any).port}`;
+  const proxy = new ModelProxy();
+  const front = createServer(async (req, res) => {
+    if (!(await proxy.handle(req, res))) res.writeHead(404).end();
+  });
+  await new Promise<void>((r) => front.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(front.address() as any).port}`;
+  try {
+    const real = { id: "or", kind: "openai-compatible" as const, baseUrl: `${up}/api/v1`, apiKey: "sk-real-secret", models: ["m"] };
+    const w = proxy.wrap("a_1", real, base);
+    assert.notEqual(w.provider.apiKey, real.apiKey);
+    assert.equal(w.provider.baseUrl, `${base}/llm/${w.token}/v1`);
+    // a streamed chat call goes through with the real key and back unchanged
+    const r = await fetch(`${w.provider.baseUrl}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${w.provider.apiKey}`, "content-type": "application/json" }, body: '{"model":"m"}' });
+    assert.equal(r.status, 200);
+    assert.equal(await r.text(), "data: one\n\ndata: [DONE]\n\n");
+    assert.deepEqual(seen.at(-1), { url: "/api/v1/chat/completions", auth: "Bearer sk-real-secret", xkey: undefined, body: '{"model":"m"}' });
+    // Anthropic: x-api-key, and the SDK's own /v1 prefix is kept
+    const an = proxy.wrap("a_1", { id: "an", kind: "anthropic", baseUrl: up, apiKey: "sk-ant-real", models: [] }, base);
+    await fetch(`${an.provider.baseUrl}/v1/messages`, { method: "POST", headers: { "x-api-key": an.provider.apiKey }, body: "{}" });
+    assert.equal(seen.at(-1).url, "/v1/messages");
+    assert.equal(seen.at(-1).xkey, "sk-ant-real");
+    // the path can't leave the provider
+    assert.throws(() => proxy.upstream(real, "v1", "/../../etc"), /bad path/);
+    assert.equal(new URL(proxy.upstream(real, "v1", "/@evil.example.com/x")).host, new URL(up).host, "an @ in the path stays on the provider");
+    // a revoked or unknown token gets nothing
+    proxy.revokeAgent("a_1");
+    assert.equal((await fetch(`${w.provider.baseUrl}/chat/completions`, { method: "POST", body: "{}" })).status, 401);
+    // engine config written to the agent's home holds the stand-in token, never the key
+    const home = mkdtempSync(join(tmpdir(), "cc-eng-"));
+    const w2 = proxy.wrap("a_2", real, base);
+    for (const id of ["hermes", "openclaw", "opencode", "goose", "codex"]) {
+      const e = ENGINES.find((x) => x.id === id)!;
+      const spec = e.launch({ agentId: "a_2", handle: "pip", home, work: join(home, "work"), model: "m", provider: w2.provider, sandbox: "docker" });
+      assert.ok(!JSON.stringify(spec.env).includes("sk-real-secret"), `${id} env`);
+    }
+    for (const f of [".hermes/config.yaml", ".hermes/.env", ".openclaw/openclaw.json", ".config/opencode/opencode.json"])
+      assert.ok(!readFileSync(join(home, f), "utf8").includes("sk-real-secret"), f);
+    assert.match(readFileSync(join(home, ".hermes/config.yaml"), "utf8"), /\/llm\/ccm_/);
+  } finally {
+    front.close();
+    upstream.close();
+  }
+});

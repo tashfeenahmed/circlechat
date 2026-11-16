@@ -25,7 +25,7 @@ Things we treat as security bugs:
 - forging webhook deliveries when a secret is set
 - breaking the tool-log hash chain without detection
 
-Model provider keys are given to the engine by design, because the engine calls the model itself. [docs/security.md](docs/security.md#what-is-not-protected) lists this and the other known limits.
+Engines reach their model through CircleChat's model proxy and never get the provider's key, except Gemini CLI, which only talks to Google. [docs/security.md](docs/security.md#what-is-not-protected) lists this and the other known limits.
 
 ## How CircleChat is protected
 

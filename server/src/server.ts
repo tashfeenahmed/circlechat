@@ -42,14 +42,15 @@ async function handleMcpRoute(app: App, req: IncomingMessage, res: ServerRespons
 }
 
 /**
- * A second, narrow server for agent containers: only /mcp/* (each url carries a
- * per-session token) and /healthz. Bound to the docker bridge address so
+ * A second, narrow server for agent containers: only /mcp/* and /llm/* (each url
+ * carries a per-agent token) and /healthz. Bound to the docker bridge address so
  * containers on Linux can reach it while the full API stays on loopback.
  */
 export function createAgentServer(app: App): HttpServer {
   return createServer(async (req, res) => {
     try {
       if (await handleMcpRoute(app, req, res)) return;
+      if (await app.runtime.modelProxy.handle(req, res)) return;
       if (req.url === "/healthz") return void res.writeHead(200, { "content-type": "text/plain" }).end("ok");
       res.writeHead(404, { "content-type": "text/plain" }).end("not found");
     } catch (e) {
@@ -67,8 +68,9 @@ export function createHttpServer(app: App): HttpServer {
   const server = createServer(async (req, res) => {
     const url = req.url ?? "/";
     try {
-      // agents' tool endpoint
+      // agents' tool endpoint and model proxy
       if (await handleMcpRoute(app, req, res)) return;
+      if (await app.runtime.modelProxy.handle(req, res)) return;
       // incoming webhooks
       const hook = url.match(/^\/hooks\/([A-Za-z0-9_-]+)\/?$/);
       if (hook) {

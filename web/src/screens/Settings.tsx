@@ -639,11 +639,13 @@ function Slack() {
   const [busy, setBusy] = useState(false);
   const load = useCallback(
     () =>
-      api
-        .get("/api/bridges")
-        .then((r) => setList(r.bridges))
-        .catch(fail),
-    [fail],
+      isAdmin
+        ? api
+            .get("/api/bridges")
+            .then((r) => setList(r.bridges))
+            .catch(fail)
+        : Promise.resolve(),
+    [fail, isAdmin],
   );
   useEffect(() => {
     load();

@@ -102,7 +102,7 @@ data/
 
 Some engines keep state that needs a real Linux filesystem on a Docker named volume instead, for example `cc-<agent id>-hermes` for Hermes. Those volumes are not in the data folder.
 
-The engine config files in an agent's home can hold that agent's model provider key in plain text. Treat the data folder as secret. See [Security](security.md#what-is-not-protected).
+Engine config files in an agent's home hold a stand-in token for CircleChat's model proxy, not the provider's key (Gemini CLI is the exception). Treat the data folder as secret anyway: it holds the database and the vault key. See [Security](security.md#model-keys).
 
 ## The vault key
 
