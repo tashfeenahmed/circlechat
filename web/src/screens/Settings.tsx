@@ -314,7 +314,7 @@ function Engines() {
               ) : e.installed ? (
                 <span className="status done">Installed</span>
               ) : (
-                <span className="status sleeping">Not installed</span>
+                <span className="status off">Not installed</span>
               )}
               {isAdmin && e.dockerfile && e.job?.state !== "running" && (
                 <button className="btn sm" onClick={() => install(e)}>

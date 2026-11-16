@@ -41,7 +41,42 @@ const need = (v: any, name: string) => {
   return typeof v === "string" ? v.trim() : v;
 };
 
+/** Counts wrong passwords in a sliding window. In memory: a restart forgives, which is fine. */
+export class FailureLimiter {
+  private hits = new Map<string, number[]>();
+  private limits: Record<string, number>; // key prefix -> failures allowed per window
+  private windowMs: number;
+  constructor(limits: Record<string, number>, windowMs = 15 * 60_000) {
+    this.limits = limits;
+    this.windowMs = windowMs;
+  }
+  private recent(k: string, now: number): number[] {
+    const l = (this.hits.get(k) ?? []).filter((t) => now - t < this.windowMs);
+    if (l.length) this.hits.set(k, l);
+    else this.hits.delete(k);
+    return l;
+  }
+  /** ms until the caller may try again, or 0 */
+  blocked(keys: string[], now = Date.now()): number {
+    let wait = 0;
+    for (const k of keys) {
+      const max = this.limits[k.split(":")[0]] ?? Infinity;
+      const l = this.recent(k, now);
+      if (l.length >= max) wait = Math.max(wait, l[l.length - max] + this.windowMs - now);
+    }
+    return wait;
+  }
+  fail(keys: string[], now = Date.now()): void {
+    for (const k of keys) this.hits.set(k, [...this.recent(k, now), now]);
+    if (this.hits.size > 50_000) this.hits.clear(); // never grow without bound
+  }
+  clear(k: string): void {
+    this.hits.delete(k);
+  }
+}
+
 export function buildApi(app: App): Hono<Env> {
+  const loginLimiter = new FailureLimiter({ ip: 20, acct: 10 });
   const { db, svc, gateway } = app;
   const api = new Hono<Env>();
 
@@ -79,7 +114,7 @@ export function buildApi(app: App): Hono<Env> {
       setupNeeded: users === 0,
       workspace: getSetting(db, "workspace_name") ?? "",
       user: u ?? null,
-      version: "2.0.0-dev",
+      version: "2.0.0",
       // hosted installs: where to sign in (the control plane), never the secret
       hosted: h ? { signInUrl: `${h.consoleUrl}/login` } : null,
     });
@@ -115,10 +150,27 @@ export function buildApi(app: App): Hono<Env> {
     return c.redirect("/", 302);
   });
 
+  // Wrong passwords are limited per address and per account, so nobody can guess at speed.
+  // A spread-out attack on one account trips the account limit even from many addresses.
+  const clientIp = (c: Context): string => {
+    if (app.cfg.trustProxy) {
+      const f = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
+      if (f) return f;
+    }
+    return (c.env as any)?.incoming?.socket?.remoteAddress ?? "unknown";
+  };
   api.post("/api/login", async (c) => {
     const b = await c.req.json();
-    const r = db.prepare("SELECT * FROM users WHERE email = ?").get(String(b.email ?? "").toLowerCase()) as any;
-    if (!r || !verifyPassword(String(b.password ?? ""), r.pass_hash)) throw new HttpError(401, "Wrong email or password");
+    const email = String(b.email ?? "").toLowerCase();
+    const keys = [`ip:${clientIp(c)}`, `acct:${email}`];
+    const wait = loginLimiter.blocked(keys);
+    if (wait) throw new HttpError(429, `Too many wrong tries. Wait ${Math.ceil(wait / 60_000)} minutes and try again.`);
+    const r = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+    if (!r || !verifyPassword(String(b.password ?? ""), r.pass_hash)) {
+      loginLimiter.fail(keys);
+      throw new HttpError(401, "Wrong email or password");
+    }
+    loginLimiter.clear(`acct:${email}`);
     login(c, r.id);
     return c.json({ user: userById(r.id) });
   });
@@ -662,9 +714,14 @@ export function buildApi(app: App): Hono<Env> {
     if (b.name) db.prepare("UPDATE connections SET name = ? WHERE id = ?").run(String(b.name).slice(0, 60), r.id);
     if (r.app === "github" && Array.isArray(b.repos)) cfg.repos = b.repos.map(String);
     if (r.app === "http" && b.baseUrl) {
+      // a catalog app's address is fixed: its token only ever goes to that service
+      if (cfg.preset) throw bad("The address of a catalog app can't be changed. Remove it and connect again.");
       let url: URL;
       try { url = new URL(String(b.baseUrl)); } catch { throw bad("baseUrl must be a full URL"); }
       if (!["https:", "http:"].includes(url.protocol)) throw bad("only http and https");
+      // moving a stored token to another host needs the token typed again
+      const oldHost = (() => { try { return new URL(cfg.baseUrl).host; } catch { return ""; } })();
+      if (url.host !== oldHost && r.secret_id && !(typeof b.secret === "string" && b.secret)) throw bad("Enter the token again when you change the address to another host.");
       cfg.baseUrl = String(b.baseUrl).replace(/\/+$/, "");
     }
     db.prepare("UPDATE connections SET config = ? WHERE id = ?").run(JSON.stringify(cfg), r.id);

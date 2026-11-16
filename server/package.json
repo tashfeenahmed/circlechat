@@ -4,7 +4,7 @@
   "type": "module",
   "license": "AGPL-3.0-only",
   "scripts": {
-    "dev": "node --watch src/index.ts",
+    "dev": "CIRCLECHAT_PORT=${CIRCLECHAT_PORT:-3150} node --watch src/index.ts",
     "start": "node src/index.ts"
   },
   "dependencies": {
