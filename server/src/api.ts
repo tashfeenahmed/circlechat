@@ -104,7 +104,11 @@ export function buildApi(app: App): Hono<Env> {
   };
   const requireRole = (u: User, role: Role) => {
     if (RANK[u.role] < RANK[role]) throw new HttpError(403, `Only ${role}s and above can do that`);
-  };
+  };  // What a person may see: chats they're in, plus the visible agents-only chats. Admins see everything.
+  const isAdmin = (u: User) => RANK[u.role] >= RANK.admin;
+  const chatIdsFor = (u: User): Set<string> => new Set(svc.chatsForUser(u.id).map((x: any) => x.id));
+  const seesChat = (u: User, cid: string, ids?: Set<string>) => isAdmin(u) || (!!cid && (ids ?? chatIdsFor(u)).has(cid));
+
 
   api.get("/api/state", (c) => {
     const users = (db.prepare("SELECT COUNT(*) AS n FROM users").get() as any).n;
@@ -245,15 +249,19 @@ export function buildApi(app: App): Hono<Env> {
   api.get("/api/agents/:id", (c) => {
     const a = svc.agent(c.req.param("id"));
     if (!a) throw new HttpError(404, "no such agent");
-    const chats = (db.prepare("SELECT chat_id FROM chat_members WHERE member_type = 'agent' AND member_id = ?").all(a.id) as any[]).map((r) =>
-      svc.chat(r.chat_id),
-    );
+    const u = c.get("user");
+    const ids = chatIdsFor(u);
+    // only the chats this person can see, and none of the memories from other chats
+    const chats = (db.prepare("SELECT chat_id FROM chat_members WHERE member_type = 'agent' AND member_id = ?").all(a.id) as any[])
+      .filter((r) => seesChat(u, r.chat_id, ids))
+      .map((r) => svc.chat(r.chat_id));
     return c.json({
       agent: agentOut(a),
       chats,
       memories: svc
         .memoriesFor(a.id, "")
         .filter((m: any) => m.scope === "agent" || m.byId === a.id)
+        .filter((m: any) => m.scope !== "chat" || seesChat(u, m.scopeId, ids))
         .slice(0, 50),
     });
   });
@@ -353,6 +361,10 @@ export function buildApi(app: App): Hono<Env> {
     if (!a) throw new HttpError(404, "no such agent");
     const w = app.runtime.worker(a.id);
     const action = c.req.param("action");
+    // builders run agents; anyone in the chat an agent is working in may stop that turn
+    const u = c.get("user");
+    const inThatChat = action === "cancel" && !!w.currentChat && svc.isMember(w.currentChat, "user", u.id);
+    if (!inThatChat) requireRole(u, "builder");
     if (action === "pause") await w.stop();
     if (action === "cancel") w.cancelTurn();
     if (action === "wake") await w.ensureStarted();
@@ -363,6 +375,7 @@ export function buildApi(app: App): Hono<Env> {
     return c.json({ status: app.runtime.statusOf(a.id) });
   });
   api.post("/api/agents/:id/new-session", async (c) => {
+    requireRole(c.get("user"), "builder");
     const a = svc.agent(c.req.param("id"));
     if (!a) throw new HttpError(404, "no such agent");
     const chatId = (await c.req.json()).chatId;
@@ -373,10 +386,18 @@ export function buildApi(app: App): Hono<Env> {
   api.get("/api/agents/:id/activity", (c) => {
     const a = svc.agent(c.req.param("id"));
     if (!a) throw new HttpError(404, "no such agent");
+    // entries from chats this person can't see are left out; engine output with no chat is for builders
+    const u = c.get("user");
+    const ids = chatIdsFor(u);
+    const builder = RANK[u.role] >= RANK.builder;
+    const ok = (cid: string | undefined) => (cid ? seesChat(u, cid, ids) : builder);
     return c.json({
       status: app.runtime.statusOf(a.id),
-      activity: app.runtime.worker(a.id).recentActivity(Number(c.req.query("limit") ?? 300)),
-      queued: svc.queued(a.id),
+      activity: app.runtime
+        .worker(a.id)
+        .recentActivity(Number(c.req.query("limit") ?? 300))
+        .filter((e: any) => ok(e.chatId)),
+      queued: svc.queued(a.id).filter((d: any) => ok(d.chatId)),
     });
   });
   api.post("/api/agents/import/inspect", async (c) => {
@@ -502,13 +523,18 @@ export function buildApi(app: App): Hono<Env> {
   });
 
   // ---------------------------------------------------------------- approvals ("Needs you")
-  api.get("/api/approvals", (c) => c.json({ approvals: svc.approvals(c.req.query("state") ?? undefined) }));
+  api.get("/api/approvals", (c) => {
+    const u = c.get("user");
+    const ids = chatIdsFor(u);
+    const mine = (ap: any) => ap.detail?.requester?.type === "user" && ap.detail.requester.id === u.id;
+    return c.json({ approvals: svc.approvals(c.req.query("state") ?? undefined).filter((ap: any) => seesChat(u, ap.chatId, ids) || mine(ap)) });
+  });
   api.post("/api/approvals/:id/decide", async (c) => {
     const u = c.get("user");
     const ap = svc.approval(c.req.param("id"));
     if (!ap) throw new HttpError(404, "no such approval");
     if (ap.state !== "pending") throw new HttpError(409, `already ${ap.state}`);
-    // who may answer: admins, or the person whose request led to this
+    // who may answer: admins, the person whose request led to this, or anyone in the chat it was asked in
     const requester = ap.detail?.requester;
     if (RANK[u.role] < RANK.admin && !(requester?.type === "user" && requester.id === u.id) && !(ap.chatId && svc.isMember(ap.chatId, "user", u.id)))
       throw new HttpError(403, "You can't answer this one");
@@ -529,11 +555,17 @@ export function buildApi(app: App): Hono<Env> {
     const rows = scope
       ? db.prepare("SELECT id FROM memories WHERE scope = ? AND (? = '' OR scope_id = ?) ORDER BY created_at DESC LIMIT 300").all(scope, scopeId, scopeId)
       : db.prepare("SELECT id FROM memories ORDER BY created_at DESC LIMIT 300").all();
-    return c.json({ memories: (rows as any[]).map((r) => svc.memory(r.id)), paused: svc.memoryPaused() });
+    // a chat's memories stay with the people in that chat
+    const u = c.get("user");
+    const ids = chatIdsFor(u);
+    const memories = (rows as any[]).map((r) => svc.memory(r.id)).filter((m: any) => m && (m.scope !== "chat" || seesChat(u, m.scopeId, ids)));
+    return c.json({ memories, paused: svc.memoryPaused() });
   });
   api.post("/api/memories", async (c) => {
     const u = c.get("user");
     const b = await c.req.json();
+    if (b.scope === "chat" && !seesChat(u, String(b.scopeId ?? ""))) throw new HttpError(403, "You're not in that chat");
+    if (b.scope === "agent") requireRole(u, "builder");
     try {
       return c.json({
         memory: svc.remember({
@@ -553,6 +585,9 @@ export function buildApi(app: App): Hono<Env> {
     const b = await c.req.json();
     const m = svc.memory(c.req.param("id"));
     if (!m) throw new HttpError(404, "not found");
+    const u = c.get("user");
+    if (m.scope === "chat" && !seesChat(u, m.scopeId)) throw new HttpError(404, "not found");
+    if (m.scope === "agent") requireRole(u, "builder");
     if (b.forget) svc.forget(m.id, c.get("user").id);
     if (b.restore) svc.restore(m.id);
     if (typeof b.text === "string" && b.text.trim()) db.prepare("UPDATE memories SET text = ? WHERE id = ?").run(b.text.trim().slice(0, 2000), m.id);
@@ -588,8 +623,10 @@ export function buildApi(app: App): Hono<Env> {
   api.patch("/api/tasks/:id", async (c) => {
     const b = await c.req.json();
     if (b.status && !["todo", "working", "needs_you", "checking", "done"].includes(b.status)) throw bad("bad status");
+    const t = svc.task(c.req.param("id"));
+    if (!t || !seesChat(c.get("user"), t.chatId)) throw new HttpError(404, "no such task");
     try {
-      return c.json({ task: svc.updateTask(c.req.param("id"), b) });
+      return c.json({ task: svc.updateTask(t.id, b) });
     } catch (e) {
       throw new HttpError(404, (e as Error).message);
     }
@@ -733,8 +770,11 @@ export function buildApi(app: App): Hono<Env> {
     return c.json({ connection: connOut(db.prepare("SELECT * FROM connections WHERE id = ?").get(r.id)) });
   });
   api.post("/api/connections/:id/test", async (c) => {
+    const tu = c.get("user");
     const r = db.prepare("SELECT * FROM connections WHERE id = ?").get(c.req.param("id")) as any;
     if (!r) throw new HttpError(404, "not found");
+    // a test uses the stored token: builders, or the owner of a personal connection
+    if (!(r.identity === "user" && r.owner_user_id === tu.id)) requireRole(tu, "builder");
     const cfg = json<any>(r.config, {});
     try {
       if (r.app === "github") {
@@ -811,6 +851,7 @@ export function buildApi(app: App): Hono<Env> {
     return c.json({ server: mcpOut(db.prepare("SELECT * FROM mcp_servers WHERE id = ?").get(sid)), refresh });
   });
   api.post("/api/mcp/:id/refresh", async (c) => {
+    requireRole(c.get("user"), "builder");
     try {
       const r = await gateway.refreshMcp(c.req.param("id"));
       return c.json({ ...r, server: mcpOut(db.prepare("SELECT * FROM mcp_servers WHERE id = ?").get(c.req.param("id"))) });
@@ -885,8 +926,12 @@ export function buildApi(app: App): Hono<Env> {
     app.triggers.remove(c.req.param("id"));
     return c.json({ ok: true });
   });
-  api.get("/api/triggers/:id/runs", (c) => c.json({ runs: app.triggers.runs(c.req.param("id"), 50) }));
+  api.get("/api/triggers/:id/runs", (c) => {
+    requireRole(c.get("user"), "builder");
+    return c.json({ runs: app.triggers.runs(c.req.param("id"), 50) });
+  });
   api.post("/api/trigger-runs/:id/replay", (c) => {
+    requireRole(c.get("user"), "builder");
     try {
       app.triggers.replay(c.req.param("id"));
       return c.json({ ok: true });
@@ -908,7 +953,10 @@ export function buildApi(app: App): Hono<Env> {
     if (only === "approval") sql += " AND (approval LIKE '%approved%' OR status = 'denied')";
     if (only === "failed") sql += " AND status IN ('error','blocked','denied')";
     sql += " ORDER BY seq DESC LIMIT 300";
-    const rows = (db.prepare(sql).all(...args) as any[]).map((r) => ({
+    // admins see every call; others see the calls made in chats they can see
+    const u = c.get("user");
+    const ids = chatIdsFor(u);
+    const rows = (db.prepare(sql).all(...args) as any[]).filter((r) => seesChat(u, r.chat_id, ids)).map((r) => ({
       id: r.id,
       agentId: r.agent_id,
       chatId: r.chat_id,
@@ -965,6 +1013,7 @@ export function buildApi(app: App): Hono<Env> {
     return c.json({ providers: providersOut() });
   });
   api.post("/api/providers/:id/test", async (c) => {
+    requireRole(c.get("user"), "admin");
     const p = (app.providers(true) as any[]).find((x) => x.id === c.req.param("id"));
     if (!p) throw new HttpError(404, "not found");
     try {
@@ -1008,15 +1057,16 @@ export function buildApi(app: App): Hono<Env> {
   });
 
   // ---------------------------------------------------------------- bridges
-  api.get("/api/bridges", (c) =>
-    c.json({
+  api.get("/api/bridges", (c) => {
+    requireRole(c.get("user"), "admin");
+    return c.json({
       bridges: (db.prepare("SELECT id, kind, chat_id AS chatId, external_id AS channel, enabled FROM bridges").all() as any[]).map((b) => ({
         ...b,
         status: app.bridges.get(b.id)?.status ?? "stopped",
         error: app.bridges.get(b.id)?.lastError ?? "",
       })),
-    }),
-  );
+    });
+  });
   api.post("/api/bridges", async (c) => {
     requireRole(c.get("user"), "admin");
     const b = await c.req.json();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Real engine smoke test (not part of `npm test`: costs real model calls).
 //   node test/real/real-engines.ts claude opencode hermes openclaw
-// Env: LOCAL_MODEL_URL (any OpenAI-compatible server, e.g. Ollama or LM Studio), LOCAL_MODEL, SANDBOX=docker|local
+// Env: LOCAL_MODEL_URL (any OpenAI-compatible server, e.g. Ollama or LM Studio), LOCAL_MODEL, LOCAL_MODEL_KEY, SANDBOX=docker|local
 import { startApp, setupOwner, agentReply, waitFor } from "../helpers.ts";
 
 const which = process.argv.slice(2);
@@ -12,7 +12,7 @@ const results: { engine: string; check: string; ok: boolean; detail: string; ms:
 const docker = process.env.SANDBOX === "docker" || which.some((e) => e === "hermes" || e === "openclaw");
 const h = await startApp({ turnTimeoutMs: 600_000, baseDir: docker ? new URL("../../.test-data", import.meta.url).pathname : undefined });
 const c = await setupOwner(h);
-h.app.upsertProvider({ id: "local", kind: "openai-compatible", baseUrl: url, apiKey: "", models: [model], label: "Local model" });
+h.app.upsertProvider({ id: "local", kind: "openai-compatible", baseUrl: url, apiKey: process.env.LOCAL_MODEL_KEY ?? "", models: [model], label: "Local model" });
 h.app.gateway.agentReachableUrl = h.url.replace("127.0.0.1", "host.docker.internal");
 
 async function check(engine: string, name: string, fn: () => Promise<string>) {
@@ -45,9 +45,10 @@ for (const engine of which) {
     return reply.body.slice(0, 80);
   });
   await check(engine, "uses CircleChat tools (MCP gateway)", async () => {
-    const fact = `The ${engine} test code is ${Math.random().toString(36).slice(2, 8)}`;
+    // worded so no model mistakes it for a password (they rightly refuse to store those)
+    const fact = `The ${engine} team picnic is in the park called ${["Elm", "Oak", "Ash", "Birch"][Math.floor(Math.random() * 4)]}${Math.random().toString(36).slice(2, 6)}`;
     const reply = await ask(`Use the circlechat "remember" tool to save this exact sentence to team memory: "${fact}". Then reply with the word done.`);
-    await waitFor(async () => (await c.get("/api/memories")).json.memories.some((m: any) => m.text.includes(fact.split(" is ")[1])), "memory saved", 30_000);
+    await waitFor(async () => (await c.get("/api/memories")).json.memories.some((m: any) => m.text.includes(fact.split(" called ")[1])), "memory saved", 30_000);
     return `memory saved; reply: ${reply.body.slice(0, 60)}`;
   });
   await check(engine, "remembers within the session", async () => {

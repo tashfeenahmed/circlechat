@@ -15,6 +15,7 @@ import { MENTION_ALL, mentions } from "../services.ts";
 import type { Gateway } from "../gateway.ts";
 import type { Bus, AgentStatus, ActivityEntry, AgentState } from "../bus.ts";
 import { appendToolCall } from "../toollog.ts";
+import { ModelProxy } from "./modelproxy.ts";
 
 const execFileP = promisify(execFile);
 
@@ -53,6 +54,7 @@ export class AgentWorker {
   private restarts = 0;
   private containerName = "";
   private agentToken = "";
+  private modelToken = "";
   currentRequester?: { type: string; id: string };
   get currentChat(): string | undefined {
     return this.activeChat;
@@ -165,7 +167,18 @@ export class AgentWorker {
       this.agentToken = this.rt.gateway.issueAgentToken(a.id);
       agentMcpUrl = this.rt.gateway.agentMcpUrl(this.agentToken, a.sandbox === "docker");
     }
-    const spec = engine.launch({ agentId: a.id, handle: a.handle, home, work, model: modelName, provider, sandbox: a.sandbox, agentMcpUrl });
+    // The engine gets CircleChat's model proxy and a stand-in token, never the provider's key.
+    // Engines that can only talk to their vendor directly (engine.modelProxy === false) keep the key.
+    this.rt.modelProxy.revoke(this.modelToken);
+    this.modelToken = "";
+    let engineProvider = provider;
+    if (provider && engine.modelProxy !== false) {
+      const base = a.sandbox === "docker" && this.rt.gateway.agentReachableUrl ? this.rt.gateway.agentReachableUrl : this.rt.gateway.publicUrl;
+      const w = this.rt.modelProxy.wrap(a.id, provider, base);
+      engineProvider = w.provider;
+      this.modelToken = w.token;
+    }
+    const spec = engine.launch({ agentId: a.id, handle: a.handle, home, work, model: modelName, provider: engineProvider, sandbox: a.sandbox, agentMcpUrl });
     let proc: ChildProcessWithoutNullStreams;
     if (a.sandbox === "docker" && engine.image) {
       this.containerName = `cc-${a.handle}-${Math.random().toString(36).slice(2, 7)}`;
@@ -242,6 +255,8 @@ export class AgentWorker {
     this.proc = undefined;
     this.sessions.forEach((s) => this.rt.gateway.revoke(s.token));
     this.sessions.clear(); // engine session ids are kept in the db and re-loaded on restart
+    this.rt.modelProxy.revoke(this.modelToken);
+    this.modelToken = "";
     if (this.stopping) {
       this.setState(this.status.state === "sleeping" ? "sleeping" : "stopped");
       return;
@@ -278,6 +293,8 @@ export class AgentWorker {
     this.proc = undefined;
     this.sessions.forEach((s) => this.rt.gateway.revoke(s.token));
     this.sessions.clear();
+    this.rt.modelProxy.revoke(this.modelToken);
+    this.modelToken = "";
     if (proc) this.kill(proc);
     this.setState(reason);
   }
@@ -651,6 +668,8 @@ export class AgentRuntime {
   bus: Bus;
 
   opts: RuntimeOptions;
+
+  modelProxy = new ModelProxy();
 
   constructor(db: DB, svc: Services, gateway: Gateway, bus: Bus, opts: RuntimeOptions) {
     this.db = db;

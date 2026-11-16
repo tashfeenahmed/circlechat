@@ -144,6 +144,10 @@ Lifecycle rules:
 - **Server restart**: deliveries that were `injected` become `failed` ("server restarted mid-turn"). `queued` deliveries are picked up again.
 - **Never retried**: a turn that failed is not run again automatically, because it may already have had side effects.
 
+## Model calls
+
+Engines call their model through CircleChat's model proxy (`server/src/agents/modelproxy.ts`), not the provider directly. When the runtime starts an engine it creates a stand-in token for that agent and gives the engine `<base>/llm/<token>/v1` (OpenAI-compatible and OpenAI) or `<base>/llm/<token>/anthropic` (Anthropic) as its model address. The proxy adds the real key, forwards to the provider's own address only, and streams the answer back. The token is revoked when the engine stops. Gemini CLI is the exception: it only talks to Google, so it gets the key itself.
+
 ## The database
 
 SQLite through `node:sqlite`, one file in WAL mode with foreign keys on and a 5-second busy timeout. The schema is in `server/src/db.ts` and is created with `CREATE TABLE IF NOT EXISTS` at start.

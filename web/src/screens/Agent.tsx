@@ -224,7 +224,7 @@ export function ProfileScreen({ id }: { id: string }) {
               {bigBtn("chat", "Message", message)}
               {bigBtn("monitor", "Watch", () => go(`/agents/${a.id}/watch`))}
               {bigBtn("memory", "Memory", () => go(`/memory?f=agent&id=${a.id}`))}
-              {paused ? bigBtn("play", "Wake", () => action("wake")) : bigBtn("pause", "Pause", () => action("pause"))}
+              {isBuilder && (paused ? bigBtn("play", "Wake", () => action("wake")) : bigBtn("pause", "Pause", () => action("pause")))}
             </div>
           </div>
 
@@ -567,7 +567,7 @@ function TermLine({ l }: { l: Line }) {
 }
 
 export function WatchScreen({ id }: { id: string }) {
-  const { agent, chat, go, fail, toast, upsertAgent, user } = useStore();
+  const { agent, chat, go, fail, toast, upsertAgent, user, isBuilder } = useStore();
   const a = agent(id);
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [status, setStatus] = useState<AgentStatus | null>(null);
@@ -653,25 +653,28 @@ export function WatchScreen({ id }: { id: string }) {
                 Live
               </span>
             )}
-            {paused ? (
-              <button className="btn sm" onClick={() => action("wake")}>
-                <Icon n="play" size="sm" />
-                Wake
-              </button>
-            ) : (
-              <button className="btn sm" onClick={() => action("pause")}>
-                <Icon n="pause" size="sm" />
-                Pause
-              </button>
-            )}
+            {isBuilder &&
+              (paused ? (
+                <button className="btn sm" onClick={() => action("wake")}>
+                  <Icon n="play" size="sm" />
+                  Wake
+                </button>
+              ) : (
+                <button className="btn sm" onClick={() => action("pause")}>
+                  <Icon n="pause" size="sm" />
+                  Pause
+                </button>
+              ))}
             <button className="btn sm" onClick={() => action("cancel")} disabled={vis(s) !== "working" && vis(s) !== "waiting"}>
               <Icon n="x" size="sm" />
               Cancel turn
             </button>
-            <button className="btn sm" onClick={() => action("restart")}>
-              <Icon n="refresh" size="sm" />
-              Restart
-            </button>
+            {isBuilder && (
+              <button className="btn sm" onClick={() => action("restart")}>
+                <Icon n="refresh" size="sm" />
+                Restart
+              </button>
+            )}
           </div>
         </div>
         <div className="term-wrap">

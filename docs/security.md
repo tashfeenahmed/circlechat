@@ -100,17 +100,33 @@ When a webhook trigger has a secret, each call must carry `X-Hub-Signature-256: 
 
 Every tool call is recorded with the agent, chat, tool, arguments, identity, approval, status, result and cost. Each entry's hash covers the previous entry's hash and its own fields, starting from a hash of zeros. Settings, Tool log, **Verify** recomputes the chain and names the first entry that doesn't match.
 
+## Model keys
+
+Engines never receive a model provider's key. When an agent starts, CircleChat gives its engine the address of CircleChat's model proxy (`/llm/<token>/v1` for OpenAI-compatible and OpenAI providers, `/llm/<token>/anthropic` for Anthropic) and a stand-in token made for that agent (`server/src/agents/modelproxy.ts`). The proxy swaps the token for the real key and forwards the request to the provider's own address only. The token stops working when the agent stops, so engine config files in an agent's home hold nothing worth stealing. The one exception is Gemini CLI, listed below.
+
+On a Linux server the proxy is served on the same narrow agent listener as the tool gateway (`CIRCLECHAT_AGENT_LISTEN`).
+
+## Who can see and do what
+
+| | Member | Builder | Admin |
+|---|---|---|---|
+| Chats, their memory, tasks, approvals, tool calls and agent activity | Chats they're in | Chats they're in | Everything |
+| Pause, wake, restart an agent, start a new session | No | Yes | Yes |
+| Cancel an agent's current turn | In a chat they're in | Yes | Yes |
+| Test a connection, refresh an MCP server, see or replay trigger runs | Their own personal connections | Yes | Yes |
+| Test a model provider, see Slack bridges | No | No | Yes |
+
 ## What is not protected
 
 Be aware of these limits when you decide what to give an agent.
 
-- **Model provider keys reach the sandbox.** The engine calls the model itself, so CircleChat writes the provider key into the engine's config in the agent's home folder (for example `.hermes/.env` or `openclaw.json`) or passes it as an environment variable. An agent can read its own model key. Use a separate key with a spending limit for CircleChat, or a local model.
-- **Agent home folders are plain files.** Because of the point above, a backup or export that includes `agents/` can contain model keys in plain text. Protect them like the data folder.
+- **Gemini CLI gets its model key.** Every other engine calls its model through CircleChat's model proxy (see [Model keys](#model-keys)), but Gemini CLI only talks to Google, so it receives the key itself. Use a separate key with a spending limit for it.
+- **An agent can spend through its model.** The proxy keeps the key out of the sandbox, not the model calls: while an agent runs, its stand-in token can make model calls. Per-agent budgets and the workspace limit cap that.
 - **Agents have network access.** Containers use Docker's default bridge network. They can reach the internet and any service on the host or local network that listens on an address they can route to. The sandbox limits the host's files and privileges, not the network. Bind other host services to loopback, or add your own Docker network rules.
 - **The `local` sandbox is not a sandbox.** The agent runs as the server's user with the server's access. Use it for development only.
 - **stdio MCP servers run on the host.** A builder who adds one runs that command on the server as the server's user. Only give the builder role to people you trust with the server.
 - **Import reads server folders.** The import path is a folder on the server. A builder can read the agent files (`SOUL.md`, `MEMORY.md` and so on) from any folder the server can read.
-- **The workspace is shared.** Agents chats, the tool log, the approvals list and the memory list are visible to every signed-in member. Chats are private to their members, but CircleChat is designed for one team, not for people who must be kept apart.
+- **The workspace is shared.** Agents-only chats, team memory and every agent's own notes are visible to every signed-in member. Chats, their memory, their tasks, their approvals, their tool calls and an agent's activity in them are limited to the chat's members (admins see everything). CircleChat is designed for one team, not for people who must be kept apart.
 - **The tool log is tamper-evident, not tamper-proof.** The chain has no outside anchor or key. Someone who can write to the database can rewrite the whole chain so that it verifies. It also records gateway calls and permission decisions only; what an engine does inside its sandbox without asking appears in the agent's activity log, not the tool log.
 - **Redaction is pattern-based.** A credential in an unusual format can get through. Chat messages are not scanned.
 - **Webhook secrets** are stored in the database, not the vault. A webhook without a secret can be called by anyone who knows its address.
