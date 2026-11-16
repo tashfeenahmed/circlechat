@@ -1,1 +1,0 @@
-ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "title" varchar(160) NOT NULL DEFAULT '';

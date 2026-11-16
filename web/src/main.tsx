@@ -1,15 +1,6 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
+// SPDX-License-Identifier: AGPL-3.0-only
+import { createRoot } from "react-dom/client";
 import "./styles.css";
-import App from "./App";
-import { initTheme } from "./lib/theme";
+import { App } from "./App.tsx";
 
-// Apply the stored/preferred theme before React paints to avoid a flash, and
-// track OS appearance changes while in "system" mode.
-initTheme();
-
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+createRoot(document.getElementById("root")!).render(<App />);

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Hermes keeps a private control socket in HERMES_HOME (must be mode 600), so its
+# home lives on a Docker volume. CircleChat writes config into the agent folder;
+# copy it in on every start, then hand stdio to the ACP adapter.
+set -eu
+mkdir -p "$HERMES_HOME"
+chmod 700 "$HERMES_HOME"
+SEED=/home/agent/.hermes
+for f in config.yaml .env SOUL.md; do [ -f "$SEED/$f" ] && cp -f "$SEED/$f" "$HERMES_HOME/$f"; done
+if [ -d "$SEED/skills" ]; then mkdir -p "$HERMES_HOME/skills"; cp -rf "$SEED/skills/." "$HERMES_HOME/skills/"; fi
+exec hermes-acp
