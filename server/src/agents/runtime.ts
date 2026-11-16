@@ -16,6 +16,8 @@ import type { Gateway } from "../gateway.ts";
 import type { Bus, AgentStatus, ActivityEntry, AgentState } from "../bus.ts";
 import { appendToolCall } from "../toollog.ts";
 import { ModelProxy } from "./modelproxy.ts";
+import { egressDockerArgs, type Egress } from "./egress.ts";
+import { looksLikeTextToolCall, TOOL_CALL_REMINDER } from "./textcall.ts";
 
 const execFileP = promisify(execFile);
 
@@ -181,6 +183,9 @@ export class AgentWorker {
     const spec = engine.launch({ agentId: a.id, handle: a.handle, home, work, model: modelName, provider: engineProvider, sandbox: a.sandbox, agentMcpUrl });
     let proc: ChildProcessWithoutNullStreams;
     if (a.sandbox === "docker" && engine.image) {
+      if (this.rt.egressError) throw new Error(`agent network limits aren't working: ${this.rt.egressError}`);
+      for (let i = 0; this.rt.egressPending && i < 600; i++) await new Promise((r) => setTimeout(r, 1000));
+      if (this.rt.egressPending) throw new Error("agent network limits are still being set up");
       this.containerName = `cc-${a.handle}-${Math.random().toString(36).slice(2, 7)}`;
       const envArgs = Object.entries({ HOME: "/home/agent", ...spec.env }).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
       const args = [
@@ -213,6 +218,7 @@ export class AgentWorker {
         "-w",
         spec.cwd,
         ...envArgs,
+        ...egressDockerArgs(this.rt.egress),
         engine.image,
         spec.command,
         ...spec.args,
@@ -466,13 +472,31 @@ export class AgentWorker {
           rej(new Error("turn took too long and was stopped"));
         }, this.rt.opts.turnTimeoutMs);
       });
-      const r = await Promise.race([turn, timeout]);
-      const reply = (this.replyBuf.get(session.sessionId) ?? "").trim();
+      let r = await Promise.race([turn, timeout]);
+      let reply = (this.replyBuf.get(session.sessionId) ?? "").trim();
+      let textCall = false;
+      // A tool call written out as text: nothing ran. Ask once more in the same session.
+      if (r.stopReason !== "cancelled" && looksLikeTextToolCall(reply)) {
+        this.log({ kind: "lifecycle", text: "the reply was a tool call written as text; asked again" }, d.chatId);
+        this.replyBuf.set(session.sessionId, "");
+        r = await Promise.race([conn.prompt(session.sessionId, TOOL_CALL_REMINDER), timeout]);
+        reply = (this.replyBuf.get(session.sessionId) ?? "").trim();
+        textCall = looksLikeTextToolCall(reply);
+      }
       if (r.stopReason === "cancelled") {
         this.svc.setDeliveryState(d.id, "failed", "cancelled");
         this.log({ kind: "lifecycle", text: "turn cancelled" });
       } else {
-        if (reply)
+        if (textCall)
+          this.svc.insertMessage({
+            chatId: d.chatId,
+            authorType: "system",
+            authorId: "",
+            kind: "error",
+            body: `${a.name} tried to use a tool by writing it out instead of calling it, so nothing ran. Ask again, or switch ${a.name} to a model that supports tool calling.`,
+            meta: { agentId: a.id, deliveryId: d.id, reason: "text_tool_call" },
+          });
+        else if (reply)
           this.svc.post({
             chatId: d.chatId,
             authorType: "agent",
@@ -671,6 +695,11 @@ export class AgentRuntime {
 
   modelProxy = new ModelProxy();
 
+  /** network limits for agent containers (null: Docker's normal network) */
+  egress: Egress | null = null;
+  egressPending = false;
+  egressError = "";
+
   constructor(db: DB, svc: Services, gateway: Gateway, bus: Bus, opts: RuntimeOptions) {
     this.db = db;
 
@@ -723,6 +752,28 @@ export class AgentRuntime {
         Math.max(0, expiresAt - Date.now()),
       ).unref();
     });
+  }
+
+  /**
+   * On boot: remove containers this workspace's agents left behind when the server
+   * stopped without cleaning up (a crash, a kill). Only containers labelled with one of
+   * our own agent ids are touched, so other workspaces on the same host are safe.
+   */
+  async sweepContainers(): Promise<number> {
+    let out = "";
+    try {
+      out = (await execFileP("docker", ["ps", "-a", "--filter", "label=circlechat.agent", "--format", '{{.ID}} {{.Label "circlechat.agent"}}'], { timeout: 15_000 })).stdout;
+    } catch {
+      return 0; // no docker here
+    }
+    const ours = new Set((this.db.prepare("SELECT id FROM agents").all() as any[]).map((r) => r.id));
+    const ids = out
+      .split("\n")
+      .map((l) => l.trim().split(" "))
+      .filter(([cid, aid]) => cid && ours.has(aid))
+      .map(([cid]) => cid);
+    if (ids.length) await execFileP("docker", ["rm", "-f", ...ids], { timeout: 60_000 }).catch(() => {});
+    return ids.length;
   }
 
   /** On boot: pick up anything that was queued or in flight when the server stopped. */

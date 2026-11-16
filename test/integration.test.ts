@@ -495,6 +495,10 @@ test("a group with one agent answers without an @mention; with two, @all asks bo
   assert.equal(r5.body, "wren got: and one more thing");
   await new Promise((res) => setTimeout(res, 500));
   assert.equal((await replies(duo.id, m5.ts)).filter((x: any) => x.authorId === pip.id).length, 0, "pip stays quiet");
+  // a message for a person (@maya) wakes no agent, not even the last speaker
+  const m6 = (await c.post(`/api/chats/${duo.id}/messages`, { body: "@maya can you check this?" })).json.message;
+  await new Promise((res) => setTimeout(res, 800));
+  assert.equal((await replies(duo.id, m6.ts)).length, 0, "a person-only mention wakes nobody");
   // @all is not a handle anyone can take
   const taken = await c.post("/api/agents", { name: "All", handle: "all", engine: "mock" });
   assert.equal(taken.status, 400);
@@ -546,4 +550,13 @@ test("members only see and change what's in their chats; builders run agents", a
   const conn = (await c.post("/api/connections", { app: "http", name: "Internal", baseUrl: "https://internal.example.com", secret: "t" })).json.connection;
   assert.equal((await mo.post(`/api/connections/${conn.id}/test`)).status, 403);
   await c.del(`/api/connections/${conn.id}`);
+});
+
+test("a reply that writes a tool call as text is asked again, never posted as markup", async () => {
+  const chat = await dm(pip.id);
+  const m = await say(chat.id, '!say <tool_call>{"name": "remember", "arguments": {"text": "x"}}</tool_call>');
+  const r = await agentReply(c, chat.id, pip.id, m.ts);
+  assert.match(r.body, /^pip got: Your last reply wrote a tool call out as text/, "the agent got the reminder and answered it");
+  const msgs = (await c.get(`/api/chats/${chat.id}/messages`)).json.messages.filter((x: any) => x.ts > m.ts);
+  assert.ok(!msgs.some((x: any) => x.body.includes("<tool_call>")), "the markup never reached the chat");
 });

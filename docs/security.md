@@ -106,6 +106,18 @@ Engines never receive a model provider's key. When an agent starts, CircleChat g
 
 On a Linux server the proxy is served on the same narrow agent listener as the tool gateway (`CIRCLECHAT_AGENT_LISTEN`).
 
+## Agent network limits
+
+`CIRCLECHAT_AGENT_EGRESS=none` or `allowlist` closes the network around agent containers (`server/src/agents/egress.ts`):
+
+- Agent containers join a Docker network made with `--internal`, so they have no route out, and get `--dns 127.0.0.1`, so they can't look up outside names (nothing can leave inside a DNS query).
+- The only way out is a small filter container (`egress/proxy.mjs`) on both networks. It lets through CircleChat's own address (the tool gateway and the model proxy) and, in `allowlist` mode, the listed hosts on ports 80 and 443. Everything else gets a 403 and a line in the filter's log (`docker logs cc-egress-...`).
+- Agents get `HTTP_PROXY` and `HTTPS_PROXY` pointing at the filter. Software that ignores them can't connect at all, so the limit fails closed.
+- Because model calls go through CircleChat's model proxy, `none` is enough for agents to think and use their tools. Add hosts only for what agents fetch themselves, such as `github.com` for git or `pypi.org` for packages.
+- If the network can't be set up at start, agents in containers don't start. The log says why.
+
+The `local` sandbox (development only) is not covered.
+
 ## Who can see and do what
 
 | | Member | Builder | Admin |
@@ -122,7 +134,7 @@ Be aware of these limits when you decide what to give an agent.
 
 - **Gemini CLI gets its model key.** Every other engine calls its model through CircleChat's model proxy (see [Model keys](#model-keys)), but Gemini CLI only talks to Google, so it receives the key itself. Use a separate key with a spending limit for it.
 - **An agent can spend through its model.** The proxy keeps the key out of the sandbox, not the model calls: while an agent runs, its stand-in token can make model calls. Per-agent budgets and the workspace limit cap that.
-- **Agents have network access.** Containers use Docker's default bridge network. They can reach the internet and any service on the host or local network that listens on an address they can route to. The sandbox limits the host's files and privileges, not the network. Bind other host services to loopback, or add your own Docker network rules.
+- **Agents have network access by default.** With `CIRCLECHAT_AGENT_EGRESS` unset, containers use Docker's default bridge network and can reach the internet and any service on the host or local network they can route to. Set it to `none` or `allowlist` (see [Agent network limits](#agent-network-limits)). The filter covers HTTP and HTTPS by host name; it does not inspect what an allowed host is sent.
 - **The `local` sandbox is not a sandbox.** The agent runs as the server's user with the server's access. Use it for development only.
 - **stdio MCP servers run on the host.** A builder who adds one runs that command on the server as the server's user. Only give the builder role to people you trust with the server.
 - **Import reads server folders.** The import path is a folder on the server. A builder can read the agent files (`SOUL.md`, `MEMORY.md` and so on) from any folder the server can read.

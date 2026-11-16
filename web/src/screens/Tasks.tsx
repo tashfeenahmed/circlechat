@@ -3,7 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type Task } from "../api.ts";
 import { useBus, useStore } from "../store.tsx";
-import { AgentAv, Empty, Icon, UserAv } from "../ui/ui.tsx";
+import { AgentAv, Empty, Icon, UserAv, WorkingMark } from "../ui/ui.tsx";
 import { ChatAvatar, TaskBox, chatTitle } from "./Chats.tsx";
 
 const SECTIONS: [string, Task["status"][]][] = [
@@ -135,6 +135,7 @@ export function TasksScreen({ chatId }: { chatId?: string }) {
                             <option value="needs_you">Needs you</option>
                             <option value="done">Done</option>
                           </select>
+                          {t.assigneeType === "agent" && <WorkingMark a={agent(t.assigneeId)} chatId={t.chatId} done={t.status === "done"} />}
                           {t.assigneeType === "agent" && <AgentAv a={agent(t.assigneeId)} size={28} dot={false} />}
                           {t.assigneeType === "user" && <UserAv u={user(t.assigneeId)} size={28} />}
                         </span>

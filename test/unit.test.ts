@@ -250,3 +250,98 @@ test("model proxy: engines get a stand-in token, the proxy adds the real key and
     upstream.close();
   }
 });
+
+test("engine config is never written through a link the agent planted in its home", async () => {
+  const { ENGINES, agentDirs } = await import("../server/src/agents/engines.ts");
+  const { symlinkSync, writeFileSync, readFileSync, lstatSync, statSync } = await import("node:fs");
+  const data = mkdtempSync(join(tmpdir(), "cc-home-"));
+  const outside = join(data, "master.key");
+  writeFileSync(outside, "VAULT KEY\n");
+  const { home, work } = agentDirs(data, "a_x");
+  assert.equal(statSync(home).mode & 0o777, 0o700, "home is private");
+  const hermes = ENGINES.find((e) => e.id === "hermes")!;
+  const opencode = ENGINES.find((e) => e.id === "opencode")!;
+  const ctx = { agentId: "a_x", handle: "x", home, work, model: "m", sandbox: "docker" as const, provider: { id: "p", kind: "openai-compatible" as const, baseUrl: "http://x/v1", apiKey: "t", models: ["m"] } };
+  // a file swapped for a link
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  symlinkSync(outside, join(home, ".hermes", "config.yaml"));
+  hermes.launch(ctx);
+  assert.equal(readFileSync(outside, "utf8"), "VAULT KEY\n", "target untouched");
+  assert.ok(!lstatSync(join(home, ".hermes", "config.yaml")).isSymbolicLink(), "the link was replaced by a real file");
+  // a whole folder swapped for a link
+  const elsewhere = mkdtempSync(join(tmpdir(), "cc-elsewhere-"));
+  mkdirSync(join(home, ".config"), { recursive: true });
+  symlinkSync(elsewhere, join(home, ".config", "opencode"));
+  opencode.launch(ctx);
+  assert.throws(() => readFileSync(join(elsewhere, "opencode.json")), "nothing written through the folder link");
+  assert.ok(lstatSync(join(home, ".config", "opencode")).isDirectory());
+});
+
+test("agent network limits: settings, docker arguments, and the filter's allow rules", async () => {
+  const { egressConfigFromEnv, egressDockerArgs } = await import("../server/src/agents/egress.ts");
+  assert.deepEqual(egressConfigFromEnv({}), { mode: "open", allow: [] });
+  assert.deepEqual(egressConfigFromEnv({ CIRCLECHAT_AGENT_EGRESS: "none", CIRCLECHAT_AGENT_EGRESS_ALLOW: "github.com" }), { mode: "none", allow: [] });
+  assert.deepEqual(egressConfigFromEnv({ CIRCLECHAT_AGENT_EGRESS: "allowlist", CIRCLECHAT_AGENT_EGRESS_ALLOW: "GitHub.com, *.npmjs.org" }).allow, ["github.com", "*.npmjs.org"]);
+  assert.throws(() => egressConfigFromEnv({ CIRCLECHAT_AGENT_EGRESS: "allowlist" }), /needs CIRCLECHAT_AGENT_EGRESS_ALLOW/);
+  assert.throws(() => egressConfigFromEnv({ CIRCLECHAT_AGENT_EGRESS: "allowlist", CIRCLECHAT_AGENT_EGRESS_ALLOW: "evil.com/x" }), /isn't a host name/);
+  assert.deepEqual(egressDockerArgs(null), []);
+  const args = egressDockerArgs({ network: "cc-agents-x", proxyUrl: "http://egress:3128" }).join(" ");
+  assert.match(args, /--network cc-agents-x --dns 127\.0\.0\.1/);
+  assert.match(args, /HTTPS_PROXY=http:\/\/egress:3128/);
+
+  // the filter itself, run for real: CircleChat's own address always, listed hosts on 80/443 only
+  const { spawn } = await import("node:child_process");
+  const { createServer } = await import("node:http");
+  const target = createServer((_q, r) => r.end("hello from circlechat")).listen(0, "127.0.0.1");
+  await new Promise((r) => target.once("listening", r));
+  const tport = (target.address() as any).port;
+  const pport = 20000 + Math.floor(Math.random() * 20000);
+  const proc = spawn(process.execPath, [join(import.meta.dirname, "..", "egress", "proxy.mjs")], { env: { PORT: String(pport), ALWAYS: `127.0.0.1:${tport}`, ALLOW: "*.example.com" }, stdio: "pipe" });
+  await new Promise((r) => proc.stdout.once("data", r));
+  const viaProxy = (url: string) =>
+    new Promise<number>((resolve) => {
+      const u = new URL(url);
+      import("node:http").then(({ request }) =>
+        request({ host: "127.0.0.1", port: pport, path: url, headers: { host: u.host } }, (r) => (r.resume(), resolve(r.statusCode!))).on("error", () => resolve(0)).end(),
+      );
+    });
+  const connect = (hostport: string) =>
+    new Promise<number>((resolve) => {
+      import("node:http").then(({ request }) =>
+        request({ host: "127.0.0.1", port: pport, method: "CONNECT", path: hostport })
+          .on("connect", (r, sock) => (sock.destroy(), resolve(r.statusCode!)))
+          .on("response", (r) => resolve(r.statusCode!))
+          .on("error", () => resolve(0))
+          .end(),
+      );
+    });
+  try {
+    assert.equal(await viaProxy(`http://127.0.0.1:${tport}/mcp/x`), 200, "CircleChat itself");
+    assert.equal(await viaProxy(`http://127.0.0.1:${tport + 1}/`), 403, "another port on the same host");
+    assert.equal(await viaProxy("http://evil.test/"), 403, "a host not on the list");
+    assert.equal(await connect("evil.test:443"), 403);
+    assert.equal(await connect("www.example.com:22"), 403, "listed host, wrong port");
+    assert.equal(await connect("example.com.evil.test:443"), 403, "suffix trick");
+  } finally {
+    proc.kill();
+    target.close();
+  }
+});
+
+test("a tool call written as text is spotted; example code for a person is not", async () => {
+  const { looksLikeTextToolCall: t } = await import("../server/src/agents/textcall.ts");
+  // written-out calls
+  assert.ok(t('<tool_call>\n{"name": "remember", "arguments": {"text": "x"}}\n</tool_call>'));
+  assert.ok(t("Let me look.\n\n<actions>\n<function=mcp__docs__lookup>\n<parameter=slugs>\n[\"a\"]\n</parameter>"));
+  assert.ok(t('<function_calls><invoke name="search"><parameter name="q">x</parameter></invoke></function_calls>'));
+  assert.ok(t('[TOOL_CALLS] [{"name": "search", "arguments": {"q": "x"}}]'));
+  assert.ok(t('{"name": "remember", "arguments": {"text": "launch is Tuesday"}}'));
+  assert.ok(t('```json\n{"name": "github_list_issues", "parameters": {"repo": "a/b"}}\n```'));
+  assert.ok(t('I will save that now.\n\n{"name": "remember", "input": {"text": "x"}}'));
+  // real answers
+  assert.ok(!t("Done. I saved it to team memory."));
+  assert.ok(!t('Here is the payload format:\n\n```json\n{"name": "remember", "arguments": {"text": "x"}}\n```\n\nSend that to the API.'));
+  assert.ok(!t('Use `<tool_call>` tags in Hermes configs, inside code:\n\n```\n<tool_call>{}</tool_call>\n```'));
+  assert.ok(!t('{"plan": "launch", "owner": "maya"}'));
+  assert.ok(!t(""));
+});
