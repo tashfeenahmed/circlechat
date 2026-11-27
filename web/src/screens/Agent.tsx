@@ -909,8 +909,8 @@ export function AddAgentScreen() {
   const groups = chats.filter((c) => c.kind === "group");
   return (
     <div className="main solo">
-      <div className="convo pane" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 400px" }}>
-        <div style={{ padding: "34px 48px", maxWidth: 720 }} className="col">
+      <div className="convo pane add-agent" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 400px" }}>
+        <div style={{ padding: "34px 48px", maxWidth: 720 }} className="col add-agent-form">
           <div className="row">
             <h2 className="h2">Add an agent</h2>
             <button className="btn sm ghost" style={{ marginLeft: "auto" }} onClick={() => setImporting(true)}>
@@ -967,7 +967,7 @@ export function AddAgentScreen() {
               Shuffle
             </button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, marginTop: 10 }}>
+          <div className="stylepicks" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, marginTop: 10 }}>
             {STYLES.map((s) => (
               <span key={s} className={"stylepick" + (s === f.style ? " on" : "")} title={STYLE_NAMES[s]} onClick={() => set({ style: s })}>
                 <Blob style={s} colour={f.colour} size={58} />

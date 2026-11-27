@@ -5,6 +5,23 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api, type Agent, type Approval, type BusEvent, type Chat, type User } from "./api.ts";
 
 // ---------------------------------------------------------------- router
+// ---------------------------------------------------------------- phone layout
+// Under 760px the app shows one pane at a time: a list, or the thing picked
+// from it (with a back bar), and the rail becomes a tab bar at the bottom.
+export const PHONE_QUERY = "(max-width: 760px)";
+export const isPhone = (): boolean => typeof matchMedia === "function" && matchMedia(PHONE_QUERY).matches;
+export function usePhone(): boolean {
+  const [phone, setPhone] = useState(isPhone);
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const mq = matchMedia(PHONE_QUERY);
+    const on = () => setPhone(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return phone;
+}
+
 export function usePath(): [string, (to: string, replace?: boolean) => void] {
   const [path, setPath] = useState(location.pathname + location.search);
   useEffect(() => {

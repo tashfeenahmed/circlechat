@@ -451,3 +451,65 @@ mark { background: #FFF1B8; border-radius: 3px; color: inherit; }
 .working-mark i { width: 7px; height: 7px; border-radius: 50%; background: var(--working); animation: working-pulse 1.4s ease-in-out infinite; }
 @keyframes working-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .working-mark i { animation: none; } }
+
+/* ================= tablets: two panes, no forced 1000px ================= */
+@media (min-width: 761px) and (max-width: 999px) {
+  .app, .app-root { min-width: 0; }
+  .main { grid-template-columns: 260px minmax(0, 1fr); }
+  .main.drawer { grid-template-columns: 260px minmax(0, 1fr); }
+  .main.drawer > .convo { display: none; }
+  .convo.add-agent { grid-template-columns: minmax(0, 1fr) !important; }
+  .add-agent > :not(.add-agent-form) { display: none !important; }
+}
+
+/* ================= phones (one pane at a time) ================= */
+.phone-bar { display: none; }
+@media (max-width: 760px) {
+  .app, .app-root { min-width: 0; }
+  .app-root { height: 100dvh; flex-direction: column-reverse; }
+  /* the rail becomes a tab bar at the bottom */
+  .app-root > .rail-fixed { width: auto; height: auto; flex-direction: row; justify-content: space-around; align-items: center; gap: 0; padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-right: 0; }
+  .rail .logo-mark, .rail .me { display: none; }
+  .rail .bottom { margin: 0; flex-direction: row; gap: 0; }
+  .app-root.has-detail > .rail-fixed { display: none; }
+  /* back bar on top of a picked item (last child, so it sits on top) */
+  .app-root.has-detail > .phone-bar { display: flex; align-items: center; padding: 6px 8px; padding-top: calc(6px + env(safe-area-inset-top)); background: var(--bg); flex: none; }
+  .phone-bar .btn { gap: 4px; font-weight: 600; }
+  /* one column: the list, or what was picked from it */
+  .main, .main.drawer, .main.solo { grid-template-columns: minmax(0, 1fr); height: auto; flex: 1; min-height: 0; }
+  .app-root:not(.has-detail) .main:not(.solo) > :not(.list) { display: none; }
+  .app-root.has-detail .main:not(.solo) > .list { display: none; }
+  .main.drawer > .convo { display: none; }
+  .main > * { min-height: 0; }
+  .list { border-right: 0; }
+  .list-top { padding: 16px 16px 6px; }
+  .convo-head { padding: 8px 12px; min-height: 56px; gap: 10px; }
+  .convo-head h3 { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .convo-head .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .convo-head > div:not(.right) { min-width: 0; flex: 1; }
+  .convo-head .right { flex: none; }
+  .now { padding: 8px 12px; overflow-x: auto; }
+  .composer { margin: 6px 10px calc(10px + env(safe-area-inset-bottom)); }
+  .composer textarea, .search input, input, select, textarea { font-size: 16px; } /* no zoom on focus (iOS) */
+  .start-here { padding: 16px; margin: 12px 0 6px; border-radius: 18px; }
+  .page { padding: 20px 16px; }
+  .overlay { padding: 10px; }
+  .modal { max-height: calc(100dvh - 20px); }
+  .credit-note { top: auto; bottom: 76px; right: 10px; left: 10px; justify-content: space-between; }
+  .list-top kbd { display: none; }
+  /* add an agent: the form only, full width (the preview is for big screens) */
+  .convo.add-agent { display: block !important; overflow-y: auto; }
+  .add-agent > :not(.add-agent-form) { display: none !important; }
+  .add-agent-form { padding: 20px 16px 40px !important; max-width: none !important; }
+  .add-agent-form > .row:first-child { flex-wrap: wrap; gap: 6px; }
+  .add-agent-form > .row:first-child .btn { margin-left: 0 !important; }
+  .stylepicks { grid-template-columns: repeat(5, 1fr) !important; }
+  .eng-grid { grid-template-columns: minmax(0, 1fr); }
+  .seg { display: flex; flex-wrap: wrap; max-width: 100%; border-radius: 20px; }
+  .seg > * { flex: 1 1 auto; text-align: center; }
+}
+@media (max-width: 420px) {
+  /* the Watch button keeps its icon, drops its word */
+  .convo-head .right .btn.sm.soft { font-size: 0; gap: 0; padding: 0 10px; }
+}
+.filters { overflow-x: auto; scrollbar-width: none; } .filters > span { flex: none; }

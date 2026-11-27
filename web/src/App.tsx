@@ -2,7 +2,7 @@
 // Sign-in gate, app shell (icon rail) and routes.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, type User } from "./api.ts";
-import { StoreProvider, useStore, usePath } from "./store.tsx";
+import { StoreProvider, useStore, usePath, usePhone } from "./store.tsx";
 import { Icon, UserAv } from "./ui/ui.tsx";
 import { Sprite } from "./ui/Sprite.tsx";
 import { AuthScreen } from "./screens/Auth.tsx";
@@ -78,25 +78,32 @@ function Routes() {
   const [a, b, c] = parts;
   let rail = "chats";
   let body: ReactNode = null;
+  // phones: is a picked item open (list hidden), and where "Back" goes
+  let back: string | null = null;
   switch (a) {
     case "chats":
       body = <ChatsScreen chatId={b} info={params.get("info") === "1"} />;
+      if (b) back = params.get("info") === "1" ? `/chats/${b}` : "/chats";
       break;
     case "needs":
       rail = "needs";
       body = <NeedsScreen id={b} />;
+      if (b) back = "/needs";
       break;
     case "tasks":
       rail = "tasks";
       body = <TasksScreen chatId={b} />;
+      if (b) back = "/tasks";
       break;
     case "memory":
       rail = "memory";
       body = <MemoryScreen filter={params.get("f") ?? "team"} scopeId={params.get("id") ?? ""} />;
+      if (params.has("f")) back = "/memory";
       break;
     case "integrations": // old links: integrations now live in Settings
       rail = "settings";
       body = <SettingsScreen section={b ?? "apps"} id={c} />;
+      if (b) back = "/settings";
       break;
     case "people":
       rail = "people";
@@ -107,10 +114,12 @@ function Routes() {
       if (b === "new") body = <AddAgentScreen />;
       else if (c === "watch") body = <WatchScreen id={b} />;
       else body = <ProfileScreen id={b} />;
+      back = c === "watch" ? `/agents/${b}` : "/people";
       break;
     case "settings":
       rail = "settings";
       body = <SettingsScreen section={b ?? "server"} id={c} />;
+      if (b) back = c ? `/settings/${b}` : "/settings";
       break;
     case "search":
       body = <SearchScreen q={params.get("q") ?? ""} />;
@@ -118,11 +127,12 @@ function Routes() {
     default:
       body = <ChatsScreen />;
   }
-  return <Shell rail={rail}>{body}</Shell>;
+  return <Shell rail={rail} back={back}>{body}</Shell>;
 }
 
-function Shell({ rail, children }: { rail: string; children: ReactNode }) {
+function Shell({ rail, back, children }: { rail: string; back: string | null; children: ReactNode }) {
   const { go, pending, chats, me } = useStore();
+  const phone = usePhone();
   const lowCredits = useLowCredits();
   const [noteHidden, setNoteHidden] = useState(false);
   const unread = chats.filter((c) => c.unread && c.members.some((m) => m.type === "user" && m.id === me.id)).length;
@@ -152,7 +162,7 @@ function Shell({ rail, children }: { rail: string; children: ReactNode }) {
     </a>
   );
   return (
-    <div className="app-root">
+    <div className={"app-root" + (back ? " has-detail" : "")}>
       <RailFrame>
         <span className="logo-mark" style={{ cursor: "pointer" }} onClick={() => go("/chats")} />
         {item("chats", "chat", "Chats", "/chats", unread)}
@@ -161,13 +171,21 @@ function Shell({ rail, children }: { rail: string; children: ReactNode }) {
         {item("memory", "memory", "Memory", "/memory")}
         {item("people", "users", "People and agents", "/people")}
         <div className="bottom">
-          {item("settings", "gear", "Settings", lowCredits ? "/settings/credits" : "/settings/server", lowCredits ? 1 : 0)}
+          {item("settings", "gear", "Settings", lowCredits ? "/settings/credits" : phone ? "/settings" : "/settings/server", lowCredits ? 1 : 0)}
           <span className="me" title={`${me.name} (you)`} onClick={() => go("/settings/server")}>
             <UserAv u={me} size={40} dot />
           </span>
         </div>
       </RailFrame>
       {children}
+      {back && (
+        <div className="phone-bar">
+          <button className="btn ghost sm" onClick={() => go(back)}>
+            <Icon n="left" />
+            Back
+          </button>
+        </div>
+      )}
       {lowCredits && !noteHidden && (
         <div className="credit-note" role="status">
           <span>{lowCredits.empty ? "AI credits are used up." : `AI credits are running low: ${Math.round(lowCredits.usedPct)}% used.`}</span>
