@@ -2,7 +2,7 @@
 // Chat list, conversation, composer with @mentions, group info drawer, new chat.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as RKE, type ReactNode } from "react";
 import { api, type Agent, type Approval, type Chat, type Member, type Message, type Task } from "../api.ts";
-import { useBus, useStore } from "../store.tsx";
+import { useBus, useStore, isPhone } from "../store.tsx";
 import { Markdown } from "../ui/Markdown.tsx";
 import {
   AgentAv,
@@ -145,7 +145,7 @@ export function ChatList({ active }: { active?: string }) {
 export function ChatsScreen({ chatId, info }: { chatId?: string; info?: boolean }) {
   const { chats, go } = useStore();
   useEffect(() => {
-    if (!chatId && chats.length) go(`/chats/${chats[0].id}`, true);
+    if (!chatId && chats.length && !isPhone()) go(`/chats/${chats[0].id}`, true);
   }, [chatId, chats, go]);
   return (
     <div className={"main" + (info && chatId ? " drawer" : "")}>

@@ -2,7 +2,7 @@
 // Tasks: a shared checklist per chat.
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type Task } from "../api.ts";
-import { useBus, useStore } from "../store.tsx";
+import { useBus, useStore, isPhone } from "../store.tsx";
 import { AgentAv, Empty, Icon, UserAv, WorkingMark } from "../ui/ui.tsx";
 import { ChatAvatar, TaskBox, chatTitle } from "./Chats.tsx";
 
@@ -28,7 +28,7 @@ export function TasksScreen({ chatId }: { chatId?: string }) {
     if (e.type === "task") setTasks((l) => (l.some((t) => t.id === e.task.id) ? l.map((t) => (t.id === e.task.id ? e.task : t)) : [...l, e.task]));
   });
   useEffect(() => {
-    if (!chatId && chats.length) {
+    if (!chatId && chats.length && !isPhone()) {
       const withTasks = chats.find((c) => tasks.some((t) => t.chatId === c.id));
       go(`/tasks/${(withTasks ?? chats[0]).id}`, true);
     }

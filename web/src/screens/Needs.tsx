@@ -2,7 +2,7 @@
 // Needs you: approvals waiting on a person, plus the ones decided lately.
 import { useEffect, useState } from "react";
 import { api, type Approval } from "../api.ts";
-import { useBus, useStore } from "../store.tsx";
+import { useBus, useStore, isPhone } from "../store.tsx";
 import { AgentAv, Empty, Filters, Icon, shortWhen, hhmm, ago } from "../ui/ui.tsx";
 import { decide, decisionText, chatTitle } from "./Chats.tsx";
 
@@ -24,7 +24,7 @@ export function NeedsScreen({ id }: { id?: string }) {
   const decided = all.filter((a) => a.state !== "pending").slice(0, 30);
   const list = filter === "waiting" ? pending : decided;
   useEffect(() => {
-    if (!id && pending.length) go(`/needs/${pending[0].id}`, true);
+    if (!id && pending.length && !isPhone()) go(`/needs/${pending[0].id}`, true);
   }, [id, pending, go]);
   const current = all.find((a) => a.id === id) ?? pending.find((a) => a.id === id);
 
