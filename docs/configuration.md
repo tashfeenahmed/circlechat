@@ -20,6 +20,7 @@ The server reads these in `server/src/index.ts`. The operator commands in `serve
 | `CIRCLECHAT_AGENT_URL` | `http://host.docker.internal:<agent port>` | The base URL agent containers use to reach the tool gateway. Containers start with `--add-host host.docker.internal:host-gateway`. |
 | `CIRCLECHAT_WARM_ON_BOOT` | on | Set to `0` to stop the server from starting the most recently used agents at boot. |
 | `CIRCLECHAT_SEED` | none | Path to a seed file applied once on first boot, while there are no users. The file is deleted afterwards. See [Deployment](deployment.md#seed-file). |
+| `CIRCLECHAT_HEAD_SCRIPT` | none | Path to a JavaScript file of your own, such as your analytics. The server serves it at `/head.js` and every page loads it. CircleChat itself sends no usage data or error reports anywhere. |
 | `CIRCLECHAT_LOCAL_MODEL_URL` | none | Registers an OpenAI-compatible provider with the id `local` on first run, while no providers are saved yet. |
 | `CIRCLECHAT_LOCAL_MODELS` | none | Comma-separated model names for the `local` provider above. |
 

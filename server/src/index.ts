@@ -11,6 +11,7 @@
 //                         containers on Linux, where host.docker.internal is the bridge IP, not loopback
 //   CIRCLECHAT_TRUST_PROXY 1 = behind a TLS reverse proxy: honour X-Forwarded-Proto/Host (Secure cookies)
 //   CIRCLECHAT_SEED       path to a seed file applied once on first boot, then deleted (see hosting.ts)
+//   CIRCLECHAT_HEAD_SCRIPT  optional path to an operator script served at /head.js and loaded by every page
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { App, newMasterKey } from "./app.ts";
