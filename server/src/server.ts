@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server as
 import { getRequestListener } from "@hono/node-server";
 import { WebSocketServer, WebSocket } from "ws";
 import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import type { App } from "./app.ts";
 import { buildApi, staticHandler } from "./api.ts";
 import { REPO_ROOT } from "./agents/engines.ts";
@@ -60,10 +61,29 @@ export function createAgentServer(app: App): HttpServer {
   });
 }
 
+/**
+ * CIRCLECHAT_HEAD_SCRIPT: an operator's own script file (for example their
+ * analytics), served at /head.js and loaded by every page. Unset by default:
+ * CircleChat itself sends nothing anywhere.
+ */
+export function loadHeadScript(path: string | undefined): Buffer | null {
+  if (!path) return null;
+  if (!existsSync(path)) {
+    console.warn(`CIRCLECHAT_HEAD_SCRIPT ${path} not found; no head script`);
+    return null;
+  }
+  return readFileSync(path);
+}
+
+export function withHeadScript(html: Buffer): Buffer {
+  return Buffer.from(html.toString("utf8").replace("</head>", '<script defer src="/head.js"></script>\n</head>'));
+}
+
 export function createHttpServer(app: App): HttpServer {
   const api = buildApi(app);
   const apiListener = getRequestListener(api.fetch);
   const serveStatic = staticHandler(join(REPO_ROOT, "web", "dist"));
+  const headScript = loadHeadScript(process.env.CIRCLECHAT_HEAD_SCRIPT);
 
   const server = createServer(async (req, res) => {
     const url = req.url ?? "/";
@@ -84,11 +104,14 @@ export function createHttpServer(app: App): HttpServer {
       }
       if (url.startsWith("/api/") || url === "/sso" || url.startsWith("/sso?")) return apiListener(req, res);
       if (url === "/healthz") return void res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+      if (headScript && url.split("?")[0] === "/head.js") {
+        return void res.writeHead(200, { "content-type": "text/javascript", "cache-control": "no-cache" }).end(headScript);
+      }
       const f = serveStatic(url);
       if (!f) return void res.writeHead(404, { "content-type": "text/plain" }).end("Web app not built. Run: npm run build");
       res
         .writeHead(200, { "content-type": f.type, "cache-control": url.includes("/assets/") ? "public, max-age=31536000, immutable" : "no-cache" })
-        .end(f.body);
+        .end(headScript && f.type.startsWith("text/html") ? withHeadScript(f.body) : f.body);
     } catch (e) {
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: (e as Error).message }));

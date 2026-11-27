@@ -345,3 +345,23 @@ test("a tool call written as text is spotted; example code for a person is not",
   assert.ok(!t('{"plan": "launch", "owner": "maya"}'));
   assert.ok(!t(""));
 });
+
+test("head script: off by default, injected only when the operator sets one", async () => {
+  const { loadHeadScript, withHeadScript } = await import("../server/src/server.ts");
+  assert.equal(loadHeadScript(undefined), null);
+  assert.equal(loadHeadScript(join(tmpdir(), "no-such-head-script.js")), null);
+  const dir = mkdtempSync(join(tmpdir(), "cc-head-"));
+  writeFileSync(join(dir, "head.js"), "window.x = 1;");
+  assert.equal(String(loadHeadScript(join(dir, "head.js"))), "window.x = 1;");
+  const html = String(withHeadScript(Buffer.from("<html><head><title>t</title></head><body></body></html>")));
+  assert.match(html, /<script defer src="\/head\.js"><\/script>\n<\/head>/);
+});
+
+test("the open-source app ships no telemetry", async () => {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const root = join(import.meta.dirname, "..");
+  for (const f of ["web/index.html", "desktop/main.cjs"]) {
+    assert.doesNotMatch(readFileSync(join(root, f), "utf8"), /neu\.so|openpanel|glitchtip|sentry_key/i, f);
+  }
+  assert.equal(existsSync(join(root, "web/public/monitoring.js")), false);
+});
